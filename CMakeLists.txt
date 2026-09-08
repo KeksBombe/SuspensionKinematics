@@ -50,6 +50,30 @@ if(SUSPKIN_WITH_STEP)
     endif()
 endif()
 
+# An .xlsx workbook is a ZIP of XML parts, so reading hardpoints means DEFLATE.
+# zlib is the obvious answer and is already present on every Linux this builds
+# on; a Windows Qt kit ships none, so the build falls back to compiling the
+# release from source rather than making the developer install one by hand.
+find_package(ZLIB QUIET)
+if(TARGET ZLIB::ZLIB)
+    set(SUSPKIN_ZLIB ZLIB::ZLIB)
+    message(STATUS "zlib: system (${ZLIB_VERSION_STRING})")
+else()
+    include(FetchContent)
+    # zlib's own install rules would otherwise land in our install tree.
+    set(SKIP_INSTALL_ALL ON)
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(zlib
+        URL      https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+        URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23)
+    FetchContent_MakeAvailable(zlib)
+    # Stated explicitly because zlib's own CMakeLists has not always exported
+    # them, and a duplicate include directory costs nothing.
+    target_include_directories(zlibstatic PUBLIC "${zlib_SOURCE_DIR}" "${zlib_BINARY_DIR}")
+    set(SUSPKIN_ZLIB zlibstatic)
+    message(STATUS "zlib: built from source (no system zlib found)")
+endif()
+
 # ---------------------------------------------------------------------------
 # suspkin_core -- mesh IO and geometry. No OpenGL, no widgets, so it can be
 # unit tested without a graphics context.
@@ -64,6 +88,11 @@ add_library(suspkin_core STATIC
     src/io/MeshImport.cpp
     src/io/StlReader.h
     src/io/StlReader.cpp
+    src/io/Zip.h
+    src/io/Zip.cpp
+    src/model/Hardpoint.h
+    src/io/XlsxHardpoints.h
+    src/io/XlsxHardpoints.cpp
     # Camera is pure math with no GL dependency, so it lives here where the
     # tests can reach it.
     src/render/Camera.h
@@ -74,7 +103,7 @@ target_link_libraries(suspkin_core PUBLIC Qt6::Core Qt6::Gui)
 
 # MSVC needs both of these; setting them now costs nothing and saves a confusing
 # first Windows build later.
-target_link_libraries(suspkin_core PRIVATE suspkin_warnings)
+target_link_libraries(suspkin_core PRIVATE suspkin_warnings ${SUSPKIN_ZLIB})
 
 if(SUSPKIN_STEP_ENABLED)
     target_sources(suspkin_core PRIVATE src/io/StepReader.h src/io/StepReader.cpp)
@@ -93,9 +122,15 @@ qt_add_executable(suspkin
     src/main.cpp
     src/app/MainWindow.h
     src/app/MainWindow.cpp
+    src/app/HardpointModel.h
+    src/app/HardpointModel.cpp
+    src/app/HardpointPanel.h
+    src/app/HardpointPanel.cpp
     src/render/DisplayMode.h
     src/render/GpuMesh.h
     src/render/GpuMesh.cpp
+    src/render/GpuPoints.h
+    src/render/GpuPoints.cpp
     src/render/NavGizmo.h
     src/render/NavGizmo.cpp
     src/render/ModeSelector.h
@@ -122,6 +157,8 @@ qt_add_resources(suspkin "shaders"
         resources/shaders/solid.frag
         resources/shaders/line.vert
         resources/shaders/line.frag
+        resources/shaders/point.vert
+        resources/shaders/point.frag
 )
 
 set_target_properties(suspkin PROPERTIES WIN32_EXECUTABLE ON)

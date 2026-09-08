@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
+#include <QFileInfo>
 #include <QImage>
 #include <QSurfaceFormat>
 #include <QTimer>
@@ -29,8 +30,11 @@ int main(int argc, char* argv[])
         QStringLiteral("Suspension kinematics tool - 3D viewport for STL and STEP geometry"));
     parser.addHelpOption();
     parser.addVersionOption();
-    parser.addPositionalArgument(QStringLiteral("file"),
-                                 QStringLiteral("STL or STEP file to open on startup."));
+    parser.addPositionalArgument(
+        QStringLiteral("files"),
+        QStringLiteral("Files to open on startup: STL or STEP geometry, and/or an .xlsx "
+                       "hardpoint workbook."),
+        QStringLiteral("[files...]"));
 
     const QCommandLineOption modeOption(
         QStringLiteral("mode"),
@@ -57,8 +61,14 @@ int main(int argc, char* argv[])
             qWarning("Unknown --mode '%s'; keeping the default.", qPrintable(mode));
     }
 
-    const QStringList args = parser.positionalArguments();
-    if (!args.isEmpty()) window.loadFile(args.first());
+    // Dispatch on the extension rather than on argument order, so geometry and
+    // hardpoints can be given in either order, or one without the other.
+    for (const QString& file : parser.positionalArguments()) {
+        if (QFileInfo(file).suffix().compare(QLatin1String("xlsx"), Qt::CaseInsensitive) == 0)
+            window.loadHardpointFile(file);
+        else
+            window.loadFile(file);
+    }
 
     if (parser.isSet(screenshotOption)) {
         const QString path = parser.value(screenshotOption);
