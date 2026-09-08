@@ -1,0 +1,15 @@
+* text=auto eol=lf
+
+# Critical: a binary STL is full of 0x0A bytes inside float mantissas. Without
+# this, a Windows checkout with core.autocrlf=true inserts 0x0D before each one
+# and silently corrupts the file.
+*.stl  binary
+*.STL  binary
+
+# A UTF-8 BOM or CRLF ahead of "#version 330 core" produces a cryptic GLSL
+# line-1 error, so pin shader line endings explicitly.
+*.vert text eol=lf
+*.frag text eol=lf
+
+*.step text eol=lf
+*.stp  text eol=lf

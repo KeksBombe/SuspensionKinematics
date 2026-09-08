@@ -1,0 +1,13 @@
+# Build output
+build/
+out/
+*.user
+
+# Tooling
+.cache/
+compile_commands.json
+.vscode/ipch/
+
+# Generated test fixtures
+tests/data/
+.nix/
