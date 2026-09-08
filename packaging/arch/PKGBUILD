@@ -29,8 +29,11 @@ build() {
 }
 
 check() {
-    # Every suite is QTEST_APPLESS_MAIN, so no display is needed.
-    ctest --test-dir build --output-on-failure
+    # Most suites are QTEST_APPLESS_MAIN, but test_xlsx_hardpoints is
+    # QTEST_MAIN, so it builds a QGuiApplication -- which calls qFatal() when it
+    # cannot reach a display, and a build chroot never has one. The offscreen
+    # platform plugin is part of qt6-base and needs no server.
+    QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
 }
 
 package() {

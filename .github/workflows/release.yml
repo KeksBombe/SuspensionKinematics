@@ -18,7 +18,10 @@ permissions:
   contents: read
 
 env:
-  QT_VERSION: 6.8.2
+  # Must track the Qt developers build against: 6.9 onwards exports
+  # QT_USE_QSTRINGBUILDER from its CMake targets, and the XLSX reader
+  # concatenates u"" literals, which only compiles with that operator+ present.
+  QT_VERSION: 6.11.1
   # Open CASCADE 7.8 renamed the STEP libraries to TKDESTEP, which is what
   # CMakeLists.txt links against, so 7.9.x is the floor here as well.
   OCCT_TAG: V7_9_3
@@ -92,9 +95,9 @@ jobs:
 
       # OCCT is a ~30 minute build, so it is cached on its tag and the compiler.
       # Only the first run on a new tag pays for it.
-      - name: Cache Open CASCADE
+      - name: Restore Open CASCADE
         id: occt-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/occt-install
           key: occt-${{ env.OCCT_TAG }}-windows-ninja-x64-v2
@@ -125,6 +128,16 @@ jobs:
             -DUSE_FFMPEG=OFF
           cmake --build occt-build --parallel
           cmake --install occt-build
+
+      # Saved here rather than left to actions/cache's post step, which is
+      # skipped when the job fails -- a compile error in the app below would
+      # otherwise discard the whole dependency build and rerun it next time.
+      - name: Save Open CASCADE
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/occt-install
+          key: occt-${{ env.OCCT_TAG }}-windows-ninja-x64-v2
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
