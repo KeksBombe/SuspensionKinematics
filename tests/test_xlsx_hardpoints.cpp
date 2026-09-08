@@ -50,6 +50,8 @@ private slots:
     void saveKeepsPartsItWasNotAskedToChange();
     void saveAsLeavesTheOriginalUntouched();
     void roundTripsThroughItsOwnOutput();
+    void savingAddsRowsForPointsTheWorkbookDoesNotHave();
+    void reReadingPicksUpAppendedRowsSoTheyAreNotAddedTwice();
 };
 
 void TestXlsxHardpoints::readsNamedTriples()
@@ -75,8 +77,8 @@ void TestXlsxHardpoints::readsNamedTriples()
     QCOMPARE(damper->coord[0], -343.80632000000003);
 
     // The cells each coordinate came from are what makes writing back possible.
-    QCOMPARE(result.source.cells.front()[0], QStringLiteral("B2"));
-    QCOMPARE(result.source.cells.front()[2], QStringLiteral("B4"));
+    QCOMPARE(result.source.rows.front().ref[0], QStringLiteral("B2"));
+    QCOMPARE(result.source.rows.front().ref[2], QStringLiteral("B4"));
 }
 
 void TestXlsxHardpoints::warnsAboutRowsItCannotUse()
@@ -110,7 +112,7 @@ void TestXlsxHardpoints::findsTheTableWithoutAHeaderOrConventionalColumns()
     const Hardpoint* point = findPoint(*result.table, "F_UCA_O");
     QVERIFY(point);
     QCOMPARE(point->coord[2], 318.38799999999998);
-    QCOMPARE(result.source.cells.front()[0], QStringLiteral("D2"));
+    QCOMPARE(result.source.rows.front().ref[0], QStringLiteral("D2"));
 }
 
 void TestXlsxHardpoints::readsAndWritesCellsThatCarryNoReference()
@@ -121,7 +123,7 @@ void TestXlsxHardpoints::readsAndWritesCellsThatCarryNoReference()
     const HardpointLoadResult result = readHardpointsXlsx(dataPath("no_cell_refs.xlsx"));
     QVERIFY2(result.ok(), qPrintable(result.error));
     QCOMPARE(result.table->size(), std::size_t(4));
-    QCOMPARE(result.source.cells.front()[0], QStringLiteral("B2"));
+    QCOMPARE(result.source.rows.front().ref[0], QStringLiteral("B2"));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -282,6 +284,78 @@ void TestXlsxHardpoints::roundTripsThroughItsOwnOutput()
     const HardpointLoadResult final = readHardpointsXlsx(current);
     QVERIFY(final.ok());
     QCOMPARE(findPoint(*final.table, "F_LCA_O")->coord[2], 138.408 + 3.0);
+}
+
+void TestXlsxHardpoints::savingAddsRowsForPointsTheWorkbookDoesNotHave()
+{
+    const HardpointLoadResult result = readHardpointsXlsx(dataPath("hardpoints.xlsx"));
+    QVERIFY2(result.ok(), qPrintable(result.error));
+    const int before = int(result.table->size());
+
+    // What mirroring produces: a point with no cells anywhere in the file.
+    HardpointTable table = *result.table;
+    Hardpoint mirrored;
+    mirrored.name = QStringLiteral("F_LCA_O_R");
+    mirrored.coord[0] = -544.26;
+    mirrored.coord[1] = -554.412;
+    mirrored.coord[2] = 138.408;
+    mirrored.mirrorOf = QStringLiteral("F_LCA_O");
+    table.points.push_back(mirrored);
+
+    QTemporaryDir directory;
+    const QString path = directory.filePath(QStringLiteral("with_mirror.xlsx"));
+    const QString error = writeHardpointsXlsx(path, table, result.source);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+
+    const HardpointLoadResult reread = readHardpointsXlsx(path);
+    QVERIFY2(reread.ok(), qPrintable(reread.error));
+    QCOMPARE(int(reread.table->size()), before + 1);
+
+    const Hardpoint* point = findPoint(*reread.table, "F_LCA_O_R");
+    QVERIFY(point);
+    QCOMPARE(point->coord[0], -544.26);
+    QCOMPARE(point->coord[1], -554.412);
+    QCOMPARE(point->coord[2], 138.408);
+
+    // The points that were already there are untouched by the append.
+    const Hardpoint* original = findPoint(*reread.table, "F_LCA_O");
+    QVERIFY(original);
+    QCOMPARE(original->coord[1], 554.412);
+
+    // And the parts the writer was not asked to change still come through.
+    QVERIFY(partOf(path, "customXml/item1.xml").contains("vaultMetadata"));
+}
+
+void TestXlsxHardpoints::reReadingPicksUpAppendedRowsSoTheyAreNotAddedTwice()
+{
+    const HardpointLoadResult first = readHardpointsXlsx(dataPath("hardpoints.xlsx"));
+    QVERIFY(first.ok());
+
+    HardpointTable table = *first.table;
+    Hardpoint mirrored;
+    mirrored.name = QStringLiteral("F_LCA_O_R");
+    mirrored.coord[1] = -554.412;
+    table.points.push_back(mirrored);
+
+    QTemporaryDir directory;
+    const QString path = directory.filePath(QStringLiteral("twice.xlsx"));
+    QVERIFY(writeHardpointsXlsx(path, table, first.source).isEmpty());
+
+    // Saving again against the re-read source patches the appended cells rather
+    // than appending them a second time -- which is why the application re-reads
+    // the workbook after overwriting it.
+    const HardpointLoadResult second = readHardpointsXlsx(path);
+    QVERIFY(second.ok());
+    HardpointTable edited = *second.table;
+    edited.points[std::size_t(edited.indexOf(QStringLiteral("F_LCA_O_R")))].coord[1] = -1.5;
+
+    const QString again = directory.filePath(QStringLiteral("twice_again.xlsx"));
+    QVERIFY(writeHardpointsXlsx(again, edited, second.source).isEmpty());
+
+    const HardpointLoadResult third = readHardpointsXlsx(again);
+    QVERIFY(third.ok());
+    QCOMPARE(int(third.table->size()), int(second.table->size()));
+    QCOMPARE(findPoint(*third.table, "F_LCA_O_R")->coord[1], -1.5);
 }
 
 QTEST_MAIN(TestXlsxHardpoints)

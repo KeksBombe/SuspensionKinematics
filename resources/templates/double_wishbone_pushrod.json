@@ -1,0 +1,107 @@
+{
+    "format": "suspkin-linkage-template",
+    "formatVersion": 1,
+    "name": "Double wishbone, pushrod-actuated rocker",
+    "description": "The parts a hardpoint table implies: two wishbones, a tie rod, a pushrod, an upright, a rocker, a damper and an anti-roll bar, per corner.",
+    "notes": [
+        "A part is drawn as one or more chains of hardpoints. A chain is a polyline through the points it names; 'closed': true joins the last point back to the first, which is what makes a wishbone read as an A-arm rather than as two loose legs.",
+        "{corner} stands for one of the tokens under 'corners' below, so every part here is written once and instantiated per axle.",
+        "The other side of the car is not written out. Each part is instantiated a second time with every point name put through the project's own mirror rule (Hardpoints > Mirror), so whatever naming convention the workbook uses is the one used here. {side} in a label becomes the matching entry from 'sides'.",
+        "'optional': true on a part or a chain means 'say nothing when these points are absent'. Use it for anything a car may not have -- an anti-roll bar, a rocker axis point.",
+        "Point names that do not exist in the table are reported once per part; the rest of the part is still drawn.",
+        "INTERPRETATION WORTH CHECKING: in this workbook {corner}_PushRod_O sits 21 mm (front) and 31 mm (rear) off the plane of the upper wishbone and 37-80 mm from its outer ball joint, so the pushrod is taken to pick up on the UPPER WISHBONE. The 'pushRodPickup' part below draws that link. If the pushrod is actually mounted on the upright, delete that part and add {corner}_PushRod_O to the 'upright' part's first chain instead."
+    ],
+    "corners": [
+        { "token": "F", "label": "Front" },
+        { "token": "R", "label": "Rear" }
+    ],
+    "sides": {
+        "base": "left",
+        "mirrored": "right"
+    },
+    "parts": [
+        {
+            "id": "lowerWishbone",
+            "label": "{corner} {side} lower wishbone",
+            "kind": "wishbone",
+            "points": ["{corner}_LCA_IF", "{corner}_LCA_O", "{corner}_LCA_IR"],
+            "closed": true
+        },
+        {
+            "id": "upperWishbone",
+            "label": "{corner} {side} upper wishbone",
+            "kind": "wishbone",
+            "points": ["{corner}_UCA_IF", "{corner}_UCA_O", "{corner}_UCA_IR"],
+            "closed": true
+        },
+        {
+            "id": "upright",
+            "label": "{corner} {side} upright",
+            "kind": "upright",
+            "chains": [
+                { "points": ["{corner}_LCA_O", "{corner}_UCA_O", "{corner}_TieRod_O"], "closed": true },
+                { "points": ["{corner}_UCA_O", "{corner}_WheelCenter", "{corner}_LCA_O"] }
+            ]
+        },
+        {
+            "id": "tieRod",
+            "label": "{corner} {side} tie rod",
+            "kind": "link",
+            "points": ["{corner}_TieRod_I", "{corner}_TieRod_O"]
+        },
+        {
+            "id": "pushRod",
+            "label": "{corner} {side} pushrod",
+            "kind": "link",
+            "points": ["{corner}_PushRod_O", "{corner}_PushRod_I"]
+        },
+        {
+            "id": "pushRodPickup",
+            "label": "{corner} {side} pushrod pickup",
+            "kind": "wishbone",
+            "optional": true,
+            "points": ["{corner}_UCA_O", "{corner}_PushRod_O"]
+        },
+        {
+            "id": "rocker",
+            "label": "{corner} {side} rocker",
+            "kind": "rocker",
+            "chains": [
+                { "points": ["{corner}_Rocker_Center", "{corner}_Rocker_AxisPoint"], "optional": true },
+                { "points": ["{corner}_PushRod_I", "{corner}_Rocker_Center", "{corner}_Damper_O"] },
+                { "points": ["{corner}_AntiRoll_O", "{corner}_Rocker_Center"], "optional": true },
+                {
+                    "points": ["{corner}_PushRod_I", "{corner}_Damper_O", "{corner}_AntiRoll_O"],
+                    "closed": true,
+                    "optional": true
+                }
+            ]
+        },
+        {
+            "id": "damper",
+            "label": "{corner} {side} damper",
+            "kind": "damper",
+            "points": ["{corner}_Damper_O", "{corner}_Damper_I"]
+        },
+        {
+            "id": "antiRollArm",
+            "label": "{corner} {side} anti-roll bar arm",
+            "kind": "antiroll",
+            "optional": true,
+            "points": ["{corner}_AntiRoll_Center", "{corner}_AntiRoll_I"]
+        },
+        {
+            "id": "antiRollDropLink",
+            "label": "{corner} {side} anti-roll drop link",
+            "kind": "link",
+            "optional": true,
+            "points": ["{corner}_AntiRoll_I", "{corner}_AntiRoll_O"]
+        },
+        {
+            "id": "wheel",
+            "label": "{corner} {side} wheel",
+            "kind": "wheel",
+            "points": ["{corner}_WheelCenter", "{corner}_ContactPatch"]
+        }
+    ]
+}

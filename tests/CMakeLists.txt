@@ -39,6 +39,22 @@ target_compile_definitions(test_xlsx_hardpoints PRIVATE
     SUSPKIN_TEST_DATA_DIR="${SUSPKIN_TEST_DATA_DIR}")
 add_test(NAME xlsx_hardpoints COMMAND test_xlsx_hardpoints)
 
+qt_add_executable(test_hardpoint_mirror test_hardpoint_mirror.cpp)
+target_link_libraries(test_hardpoint_mirror PRIVATE suspkin_core Qt6::Test)
+add_test(NAME hardpoint_mirror COMMAND test_hardpoint_mirror)
+
+qt_add_executable(test_wheels test_wheels.cpp)
+target_link_libraries(test_wheels PRIVATE suspkin_core Qt6::Test)
+add_test(NAME wheels COMMAND test_wheels)
+
+qt_add_executable(test_linkage test_linkage.cpp)
+target_link_libraries(test_linkage PRIVATE suspkin_core Qt6::Test)
+add_test(NAME linkage COMMAND test_linkage)
+
+qt_add_executable(test_project test_project.cpp)
+target_link_libraries(test_project PRIVATE suspkin_core Qt6::Test)
+add_test(NAME project COMMAND test_project)
+
 qt_add_executable(test_camera test_camera.cpp)
 target_link_libraries(test_camera PRIVATE suspkin_core Qt6::Test)
 add_test(NAME camera COMMAND test_camera)

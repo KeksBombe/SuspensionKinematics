@@ -27,6 +27,11 @@ constexpr int kGizmoGap = 8;
 constexpr int kClickSlopPixels = 4;
 
 const QVector3D kSurfaceColor{ 0.62f, 0.66f, 0.72f };
+// The wheel bodies. Darker than imported geometry so a wheel does not read as
+// part of the chassis, and the two of them far enough apart that a rim inside a
+// tyre is still a rim.
+const QVector3D kWheelColor{ 0.33f, 0.34f, 0.37f };
+const QVector3D kRimColor{ 0.78f, 0.80f, 0.84f };
 // Light lines on the dark ground, slightly translucent: a CAD export tessellates
 // a flat face into a fan of slivers, so blending lets dense regions read as tone
 // instead of saturating to a solid mass.
@@ -44,6 +49,40 @@ constexpr float kHighlightSizePx = 15.0f;
 constexpr float kOccludedAlpha = 0.30f;
 /// Click and hover tolerance, in logical pixels, around a marker's centre.
 constexpr qreal kPickRadiusPx = 10.0;
+
+// The parts drawn between the markers, by kind. Chosen to stay apart from the
+// amber of a marker and the neutral grey of imported geometry, and to group by
+// function: everything that is a two-force member shares one colour, and each
+// body that carries load in bending gets its own.
+const QVector3D kWishboneColor{ 0.42f, 0.72f, 0.98f };
+const QVector3D kLinkColor{ 0.55f, 0.88f, 0.52f };
+const QVector3D kUprightColor{ 0.98f, 0.55f, 0.38f };
+const QVector3D kRockerColor{ 0.80f, 0.62f, 0.98f };
+const QVector3D kDamperColor{ 0.98f, 0.86f, 0.36f };
+const QVector3D kAntiRollColor{ 0.36f, 0.88f, 0.82f };
+const QVector3D kWheelPartColor{ 0.72f, 0.76f, 0.82f };
+const QVector3D kOtherPartColor{ 0.80f, 0.80f, 0.80f };
+/// Wide enough to read as structure next to the tessellation overlay. GL 3.3
+/// core leaves anything above 1.0 up to the driver, so this is a request.
+constexpr float kLinkWidthPx = 2.5f;
+/// How much of a part still shows through the geometry in front of it. Lower
+/// than a marker's: a whole wishbone behind a chassis panel is a lot of ink.
+constexpr float kOccludedLinkAlpha = 0.22f;
+
+const QVector3D& partColor(PartKind kind)
+{
+    switch (kind) {
+    case PartKind::Wishbone: return kWishboneColor;
+    case PartKind::Link:     return kLinkColor;
+    case PartKind::Upright:  return kUprightColor;
+    case PartKind::Rocker:   return kRockerColor;
+    case PartKind::Damper:   return kDamperColor;
+    case PartKind::AntiRoll: return kAntiRollColor;
+    case PartKind::Wheel:    return kWheelPartColor;
+    case PartKind::Other:    break;
+    }
+    return kOtherPartColor;
+}
 
 constexpr qreal kLabelPadX = 5.0;
 constexpr qreal kLabelPadY = 1.0;
@@ -102,6 +141,9 @@ ViewportWidget::~ViewportWidget()
     makeCurrent();
     m_gpu.destroy(*this);
     m_gpuPoints.destroy(*this);
+    m_gpuLines.destroy(*this);
+    m_wheelGpu.destroy(*this);
+    m_rimGpu.destroy(*this);
     m_solidProgram.reset();
     m_lineProgram.reset();
     m_pointProgram.reset();
@@ -142,6 +184,10 @@ void ViewportWidget::setHardpoints(const HardpointTable& table)
     m_selectedPoint = -1;
     m_hoveredPoint = -1;
     m_pointsUploadPending = true;
+    // The linkage is indices into the table too, and the one it was built from
+    // has just been replaced. Whoever set the points sets the parts again.
+    m_linkage = Linkage{};
+    rebuildLinkageVertices();
     update();
 }
 
@@ -161,7 +207,122 @@ void ViewportWidget::moveHardpoint(int index, const QVector3D& position)
     for (const QVector3D& p : m_hardpoints) m_hardpointBounds.expand(p);
 
     m_pointsUploadPending = true;
+    // Parts are stored as indices, so the segments are still correct -- but the
+    // vertex buffer holds copies of the coordinates, which are not.
+    rebuildLinkageVertices();
     update();
+}
+
+void ViewportWidget::setLinkage(const Linkage& linkage)
+{
+    m_linkage = linkage;
+    rebuildLinkageVertices();
+    update();
+}
+
+void ViewportWidget::clearLinkage()
+{
+    setLinkage(Linkage{});
+}
+
+void ViewportWidget::setWheelModels(TriMesh wheel, EdgeSet wheelEdges, TriMesh rim,
+                                    EdgeSet rimEdges)
+{
+    m_wheelMesh = std::move(wheel);
+    m_wheelEdges = std::move(wheelEdges);
+    m_rimMesh = std::move(rim);
+    m_rimEdges = std::move(rimEdges);
+    m_wheelUploadPending = true;
+    // Every placement is measured from the model's own box, so new models move
+    // the wheels even though nobody touched a hardpoint.
+    updateWheelBounds();
+    update();
+}
+
+void ViewportWidget::setWheelPlacements(std::vector<WheelPlacement> placements, bool alignToCenter)
+{
+    m_wheelPlacements = std::move(placements);
+    m_wheelAlignToCenter = alignToCenter;
+    // No upload: the meshes have not changed, only the matrices they are drawn
+    // with, and those are rebuilt every frame.
+    updateWheelBounds();
+    update();
+}
+
+void ViewportWidget::clearWheels()
+{
+    setWheelModels(TriMesh{}, EdgeSet{}, TriMesh{}, EdgeSet{});
+    setWheelPlacements({}, m_wheelAlignToCenter);
+}
+
+void ViewportWidget::setWheelsVisible(bool visible)
+{
+    if (m_wheelsVisible == visible) return;
+    m_wheelsVisible = visible;
+    update();
+    emit viewChanged();
+}
+
+void ViewportWidget::updateWheelBounds()
+{
+    m_wheelBounds = Aabb{};
+    for (const TriMesh* model : { &m_wheelMesh, &m_rimMesh }) {
+        const Aabb placed = wheelBounds(m_wheelPlacements, model->bounds, m_wheelAlignToCenter);
+        if (placed.isEmpty()) continue;
+        m_wheelBounds.expand(placed.min);
+        m_wheelBounds.expand(placed.max);
+    }
+}
+
+void ViewportWidget::setLinkageVisible(bool visible)
+{
+    if (m_linkageVisible == visible) return;
+    m_linkageVisible = visible;
+    update();
+    emit viewChanged();
+}
+
+void ViewportWidget::rebuildLinkageVertices()
+{
+    m_linkVertices.clear();
+    m_linkRanges.clear();
+    m_linesUploadPending = true;
+
+    if (m_linkage.isEmpty() || m_hardpoints.empty()) return;
+
+    const int pointCount = static_cast<int>(m_hardpoints.size());
+    const auto position = [this](int index) {
+        return m_hardpoints[static_cast<std::size_t>(index)];
+    };
+
+    // Grouped by kind so that one uniform and one draw call cover each colour.
+    // The kinds are an enum over a handful of values, so this is a small fixed
+    // number of passes over a list that is tens of parts long.
+    for (int raw = 0; raw <= static_cast<int>(PartKind::Other); ++raw) {
+        const auto kind = static_cast<PartKind>(raw);
+        const int first = static_cast<int>(m_linkVertices.size());
+
+        for (const LinkagePart& part : m_linkage.parts) {
+            if (part.kind != kind) continue;
+            for (const ResolvedChain& chain : part.chains) {
+                const int count = static_cast<int>(chain.points.size());
+                if (count < 2) continue;
+                const int last = chain.closed && count > 2 ? count : count - 1;
+                for (int i = 0; i < last; ++i) {
+                    const int a = chain.points[static_cast<std::size_t>(i)];
+                    const int b = chain.points[static_cast<std::size_t>((i + 1) % count)];
+                    // A stale index cannot draw anything sensible, and reading
+                    // one would be worse than dropping the segment.
+                    if (a < 0 || b < 0 || a >= pointCount || b >= pointCount) continue;
+                    m_linkVertices.push_back(position(a));
+                    m_linkVertices.push_back(position(b));
+                }
+            }
+        }
+
+        const int count = static_cast<int>(m_linkVertices.size()) - first;
+        if (count > 0) m_linkRanges.push_back(LinkRange{ kind, first, count });
+    }
 }
 
 void ViewportWidget::setHardpointLabelsVisible(bool visible)
@@ -169,6 +330,7 @@ void ViewportWidget::setHardpointLabelsVisible(bool visible)
     if (m_labelsVisible == visible) return;
     m_labelsVisible = visible;
     update();
+    emit viewChanged();
 }
 
 void ViewportWidget::setSelectedHardpoint(int index)
@@ -177,6 +339,7 @@ void ViewportWidget::setSelectedHardpoint(int index)
     if (m_selectedPoint == clamped) return;
     m_selectedPoint = clamped;
     update();
+    emit viewChanged();
 }
 
 void ViewportWidget::setDisplayMode(DisplayMode mode)
@@ -184,6 +347,7 @@ void ViewportWidget::setDisplayMode(DisplayMode mode)
     if (m_mode == mode) return;
     m_mode = mode;
     update();
+    emit viewChanged();
 }
 
 void ViewportWidget::fitToView()
@@ -195,15 +359,29 @@ void ViewportWidget::fitToView()
         bounds.expand(m_hardpointBounds.min);
         bounds.expand(m_hardpointBounds.max);
     }
+    // A wheel reaches well outside the hardpoints it is pinned to, and cutting
+    // the tyres off is exactly what "fit" should not do.
+    if (!m_wheelBounds.isEmpty()) {
+        bounds.expand(m_wheelBounds.min);
+        bounds.expand(m_wheelBounds.max);
+    }
     if (bounds.isEmpty()) return;
 
     m_camera.fitTo(bounds, aspect());
     update();
+    emit viewChanged();
 }
 
 void ViewportWidget::applyPreset(ViewPreset preset)
 {
     m_camera.applyPreset(preset);
+    update();
+    emit viewChanged();
+}
+
+void ViewportWidget::setCameraState(const CameraState& state)
+{
+    m_camera.setState(state);
     update();
 }
 
@@ -279,8 +457,13 @@ void ViewportWidget::initializeGL()
     buildPrograms();
     m_gpu.destroy(*this);
     m_gpuPoints.destroy(*this);
+    m_gpuLines.destroy(*this);
+    m_wheelGpu.destroy(*this);
+    m_rimGpu.destroy(*this);
     m_uploadPending = !m_mesh.isEmpty();
+    m_wheelUploadPending = hasWheelModels();
     m_pointsUploadPending = !m_hardpoints.empty();
+    m_linesUploadPending = !m_linkVertices.empty();
 
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_MULTISAMPLE);
@@ -305,6 +488,15 @@ void ViewportWidget::renderScene()
     if (m_pointsUploadPending) {
         m_gpuPoints.upload(*this, m_hardpoints);
         m_pointsUploadPending = false;
+    }
+    if (m_linesUploadPending) {
+        m_gpuLines.upload(*this, m_linkVertices);
+        m_linesUploadPending = false;
+    }
+    if (m_wheelUploadPending) {
+        m_wheelGpu.upload(*this, m_wheelMesh, m_wheelEdges);
+        m_rimGpu.upload(*this, m_rimMesh, m_rimEdges);
+        m_wheelUploadPending = false;
     }
 
     // Qt's paint engine shares this context and leaves its own state behind.
@@ -354,9 +546,106 @@ void ViewportWidget::renderScene()
         }
     }
 
+    // Solid bodies like the imported geometry, and drawn in the same mode it is,
+    // so the triangle view shows the wheels as triangles too.
+    renderWheels(view, mvp);
+
     // Last, and deliberately outside the mesh guard: hardpoints are frequently
-    // the only thing loaded.
+    // the only thing loaded. The parts go under the markers, so a marker stays
+    // clickable where several links meet on it.
+    renderLinkage(mvp);
     renderHardpoints(mvp);
+}
+
+void ViewportWidget::renderWheels(const QMatrix4x4& view, const QMatrix4x4& mvp)
+{
+    if (!m_wheelsVisible || m_wheelPlacements.empty()) return;
+
+    // One model, drawn once per corner. The mesh is uploaded a single time and
+    // the copies differ only in their model matrix, so four wheels cost four
+    // draw calls rather than four buffers.
+    struct Body {
+        const GpuMesh* gpu;
+        const TriMesh* mesh;
+        QVector3D color;
+    };
+    const Body bodies[2] = {
+        { &m_wheelGpu, &m_wheelMesh, kWheelColor },
+        { &m_rimGpu, &m_rimMesh, kRimColor },
+    };
+
+    const bool wireframe = (m_mode == DisplayMode::Triangles);
+    QOpenGLShaderProgram* program = wireframe ? m_lineProgram.get() : m_solidProgram.get();
+    if (!program) return;
+
+    if (wireframe) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    }
+    program->bind();
+    if (wireframe) program->setUniformValue("uColor", kEdgeColor);
+
+    for (const WheelPlacement& placement : m_wheelPlacements) {
+        for (const Body& body : bodies) {
+            if (!body.gpu->isValid()) continue;
+
+            // Per body, not per placement: the wheel and the rim have their own
+            // boxes, so the point of each that lands on the hardpoint differs.
+            const QMatrix4x4 model =
+                wheelTransform(placement, body.mesh->bounds, m_wheelAlignToCenter);
+            program->setUniformValue("uMvp", mvp * model);
+            if (wireframe) {
+                body.gpu->drawLines(*this);
+                continue;
+            }
+            // A mirrored copy has a negative determinant, which flips the
+            // winding; nothing here cares, because culling is off and the
+            // fragment shader turns the normal towards the viewer. The inverse
+            // transpose keeps the normals themselves honest.
+            const QMatrix4x4 modelView = view * model;
+            program->setUniformValue("uModelView", modelView);
+            program->setUniformValue("uNormalMatrix", modelView.normalMatrix());
+            program->setUniformValue("uBaseColor", body.color);
+            body.gpu->drawSolid(*this);
+        }
+    }
+
+    program->release();
+    if (wireframe) glDisable(GL_BLEND);
+}
+
+void ViewportWidget::renderLinkage(const QMatrix4x4& mvp)
+{
+    if (!m_linkageVisible || !m_lineProgram || !m_gpuLines.isValid()) return;
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glLineWidth(kLinkWidthPx * static_cast<float>(devicePixelRatioF()));
+
+    m_lineProgram->bind();
+    m_lineProgram->setUniformValue("uMvp", mvp);
+
+    // Two passes, the same way the markers do it: what the geometry hides is
+    // drawn first, dimmed and without writing depth, so a wishbone inside a
+    // chassis panel is still findable.
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool occluded = (pass == 0);
+        glDepthFunc(occluded ? GL_GREATER : GL_LESS);
+        glDepthMask(occluded ? GL_FALSE : GL_TRUE);
+        const float alpha = occluded ? kOccludedLinkAlpha : 1.0f;
+
+        for (const LinkRange& range : m_linkRanges) {
+            m_lineProgram->setUniformValue("uColor", QVector4D(partColor(range.kind), alpha));
+            m_gpuLines.draw(*this, range.first, range.count);
+        }
+    }
+
+    m_lineProgram->release();
+
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glLineWidth(1.0f);
+    glDisable(GL_BLEND);
 }
 
 void ViewportWidget::renderHardpoints(const QMatrix4x4& mvp)
@@ -659,6 +948,7 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* event)
         m_camera.pan(static_cast<float>(delta.x()), static_cast<float>(delta.y()), height());
 
     update();
+    emit viewChanged();
 }
 
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* event)
@@ -674,6 +964,7 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event)
         && (event->position().toPoint() - m_pressPos).manhattanLength() <= kClickSlopPixels) {
         m_camera.applyPreset(NavGizmo::presetForAxis(m_pressedAxis));
         update();
+        emit viewChanged();
     }
 
     // A click that did not turn into an orbit picks a marker -- or, on empty
@@ -696,6 +987,7 @@ void ViewportWidget::wheelEvent(QWheelEvent* event)
     if (delta == 0) return;
     m_camera.zoom(static_cast<float>(delta) * kWheelStepsPerNotch);
     update();
+    emit viewChanged();
 }
 
 void ViewportWidget::leaveEvent(QEvent* event)

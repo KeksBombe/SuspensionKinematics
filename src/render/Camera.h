@@ -9,6 +9,19 @@ namespace suspkin {
 
 enum class ViewPreset { Front, Rear, Left, Right, Top, Bottom, Isometric };
 
+/// The camera's whole orientation, in the terms it actually stores rather than
+/// as a matrix. A project keeps this so reopening it puts the user back exactly
+/// where they were looking, and a matrix would not survive a later change to
+/// how the camera derives one.
+struct CameraState {
+    QVector3D pivot{ 0.0f, 0.0f, 0.0f };
+    float distance = 5.0f;
+    float azimuthDeg = -45.0f;
+    float elevationDeg = 30.0f;
+    float fovYDeg = 45.0f;
+    float sceneRadius = 1.0f;
+};
+
 /// Turntable camera orbiting a pivot, with a permanently fixed world up.
 ///
 /// A turntable rather than an arcball: an arcball lets the model roll to an
@@ -38,6 +51,13 @@ public:
 
     QMatrix4x4 viewMatrix() const;
     QMatrix4x4 projectionMatrix(float aspect) const;
+
+    CameraState state() const;
+    /// Restore a saved view. Values that would make the camera unusable -- a
+    /// non-positive distance or radius, an elevation at the pole -- are clamped
+    /// rather than rejected, so a hand-edited project file cannot produce a
+    /// black viewport.
+    void setState(const CameraState& state);
 
 private:
     QVector3D m_pivot{ 0.0f, 0.0f, 0.0f };

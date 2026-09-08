@@ -20,6 +20,13 @@ struct Hardpoint {
     QString name;                 ///< the base name, e.g. "F_LCA_O"
     double coord[3] = { 0.0, 0.0, 0.0 };
 
+    /// The point this one was mirrored from, empty for a point that came out of
+    /// the workbook. Kept because it is the only record of where a mirrored
+    /// point came from once its coordinates have been edited by hand.
+    QString mirrorOf;
+
+    bool isMirrored() const { return !mirrorOf.isEmpty(); }
+
     double x() const { return coord[0]; }
     double y() const { return coord[1]; }
     double z() const { return coord[2]; }
@@ -40,6 +47,21 @@ struct HardpointTable {
 
     bool isEmpty() const { return points.empty(); }
     std::size_t size() const { return points.size(); }
+
+    /// Index of @p name, or -1. Linear: a hardpoint list is tens of rows, and
+    /// keeping an index in step with editing would cost more than it saves.
+    int indexOf(const QString& name) const
+    {
+        for (std::size_t i = 0; i < points.size(); ++i)
+            if (points[i].name == name) return static_cast<int>(i);
+        return -1;
+    }
+
+    const Hardpoint* find(const QString& name) const
+    {
+        const int index = indexOf(name);
+        return index < 0 ? nullptr : &points[static_cast<std::size_t>(index)];
+    }
 
     Aabb bounds() const
     {

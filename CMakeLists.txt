@@ -91,15 +91,46 @@ add_library(suspkin_core STATIC
     src/io/Zip.h
     src/io/Zip.cpp
     src/model/Hardpoint.h
+    src/model/HardpointMirror.h
+    src/model/HardpointMirror.cpp
+    # Where the wheel models are placed: pure geometry over the hardpoint table,
+    # so it is resolved and tested without a graphics context.
+    src/model/Wheels.h
+    src/model/Wheels.cpp
+    # What joins the hardpoints: the parts a template describes, and the file
+    # that describes them. Pure data, so a linkage can be resolved and checked
+    # without a window.
+    src/model/Linkage.h
+    src/model/Linkage.cpp
+    src/io/LinkageTemplate.h
+    src/io/LinkageTemplate.cpp
     src/io/XlsxHardpoints.h
     src/io/XlsxHardpoints.cpp
+    # The project format: what a project holds and how it is written. No widgets,
+    # so opening and saving a project can be tested without a window.
+    src/project/Project.h
+    src/project/Project.cpp
     # Camera is pure math with no GL dependency, so it lives here where the
     # tests can reach it.
     src/render/Camera.h
     src/render/Camera.cpp
+    # Header-only, but the project stores a display mode, so core owns it too.
+    src/render/DisplayMode.h
 )
 target_include_directories(suspkin_core PUBLIC src)
 target_link_libraries(suspkin_core PUBLIC Qt6::Core Qt6::Gui)
+
+# The linkage template a project gets when it does not have one of its own.
+# Embedded rather than installed as a data file for the same reason the shaders
+# are: one self-contained binary, and no runtime path to resolve. It lives on
+# the core library so that the tests, which link only that, read the same bytes
+# the application ships.
+qt_add_resources(suspkin_core "templates"
+    PREFIX "/templates"
+    BASE "resources/templates"
+    FILES
+        resources/templates/double_wishbone_pushrod.json
+)
 
 # MSVC needs both of these; setting them now costs nothing and saves a confusing
 # first Windows build later.
@@ -126,11 +157,22 @@ qt_add_executable(suspkin
     src/app/HardpointModel.cpp
     src/app/HardpointPanel.h
     src/app/HardpointPanel.cpp
-    src/render/DisplayMode.h
+    src/app/ProjectLauncher.h
+    src/app/ProjectLauncher.cpp
+    src/app/MirrorDialog.h
+    src/app/MirrorDialog.cpp
+    src/app/RecentProjects.h
+    src/app/RecentProjects.cpp
+    src/app/WheelDialog.h
+    src/app/WheelDialog.cpp
+    src/app/AppController.h
+    src/app/AppController.cpp
     src/render/GpuMesh.h
     src/render/GpuMesh.cpp
     src/render/GpuPoints.h
     src/render/GpuPoints.cpp
+    src/render/GpuLines.h
+    src/render/GpuLines.cpp
     src/render/NavGizmo.h
     src/render/NavGizmo.cpp
     src/render/ModeSelector.h

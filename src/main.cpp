@@ -1,3 +1,4 @@
+#include "app/AppController.h"
 #include "app/MainWindow.h"
 
 #include <QApplication>
@@ -24,6 +25,9 @@ int main(int argc, char* argv[])
     QApplication::setOrganizationName(QStringLiteral("Bremergy"));
     QApplication::setApplicationName(QStringLiteral("SuspensionKinematics"));
     QApplication::setApplicationVersion(QStringLiteral(SUSPKIN_VERSION));
+    // Between one project and the next there is a moment with no window open,
+    // and Qt would take that for the end of the run.
+    QApplication::setQuitOnLastWindowClosed(false);
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -31,11 +35,16 @@ int main(int argc, char* argv[])
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addPositionalArgument(
-        QStringLiteral("files"),
-        QStringLiteral("Files to open on startup: STL or STEP geometry, and/or an .xlsx "
-                       "hardpoint workbook."),
-        QStringLiteral("[files...]"));
+        QStringLiteral("project"),
+        QStringLiteral("A project to open (its project.suspkin, or the folder holding it). "
+                       "Without one, the project list comes up first."),
+        QStringLiteral("[project]"));
 
+    const QCommandLineOption importOption(
+        QStringLiteral("import"),
+        QStringLiteral("Import a file into the project on startup: STL or STEP geometry, or an "
+                       ".xlsx hardpoint workbook. May be given more than once."),
+        QStringLiteral("path"));
     const QCommandLineOption modeOption(
         QStringLiteral("mode"),
         QStringLiteral("Initial display mode: solid or triangles (default solid)."),
@@ -44,37 +53,43 @@ int main(int argc, char* argv[])
         QStringLiteral("screenshot"),
         QStringLiteral("Render one frame to this PNG and exit. For verification and CI."),
         QStringLiteral("path"));
+    parser.addOption(importOption);
     parser.addOption(modeOption);
     parser.addOption(screenshotOption);
     parser.process(app);
 
-    suspkin::MainWindow window;
-    window.show();
+    suspkin::AppController controller;
+    const QStringList positional = parser.positionalArguments();
+    const bool opened = positional.isEmpty() ? controller.startFromLauncher()
+                                             : controller.openProject(positional.first());
+    if (!opened) return 0;
+
+    suspkin::MainWindow* window = controller.window();
 
     if (parser.isSet(modeOption)) {
         const QString mode = parser.value(modeOption).toLower();
         if (mode == QLatin1String("solid"))
-            window.setDisplayMode(suspkin::DisplayMode::Solid);
+            window->setDisplayMode(suspkin::DisplayMode::Solid);
         else if (mode == QLatin1String("triangles"))
-            window.setDisplayMode(suspkin::DisplayMode::Triangles);
+            window->setDisplayMode(suspkin::DisplayMode::Triangles);
         else
             qWarning("Unknown --mode '%s'; keeping the default.", qPrintable(mode));
     }
 
     // Dispatch on the extension rather than on argument order, so geometry and
     // hardpoints can be given in either order, or one without the other.
-    for (const QString& file : parser.positionalArguments()) {
+    for (const QString& file : parser.values(importOption)) {
         if (QFileInfo(file).suffix().compare(QLatin1String("xlsx"), Qt::CaseInsensitive) == 0)
-            window.loadHardpointFile(file);
+            window->loadHardpointFile(file);
         else
-            window.loadFile(file);
+            window->loadFile(file);
     }
 
     if (parser.isSet(screenshotOption)) {
         const QString path = parser.value(screenshotOption);
         // Queued so the widget has a live context and one painted frame first.
-        QTimer::singleShot(0, &window, [&window, path] {
-            const QImage frame = window.captureViewport();
+        QTimer::singleShot(0, window, [window, path] {
+            const QImage frame = window->captureViewport();
             if (frame.isNull() || !frame.save(path)) {
                 qCritical("Could not write screenshot to %s", qPrintable(path));
                 QCoreApplication::exit(1);

@@ -90,6 +90,30 @@ void Camera::applyPreset(ViewPreset preset)
     }
 }
 
+CameraState Camera::state() const
+{
+    return CameraState{ m_pivot,     m_distance, m_azimuthDeg,
+                        m_elevationDeg, m_fovYDeg,  m_sceneRadius };
+}
+
+void Camera::setState(const CameraState& state)
+{
+    m_pivot = state.pivot;
+    m_sceneRadius = std::isfinite(state.sceneRadius) && state.sceneRadius > 0.0f
+                        ? state.sceneRadius
+                        : 1.0f;
+    m_distance = std::isfinite(state.distance) && state.distance > 0.0f ? state.distance
+                                                                        : 5.0f * m_sceneRadius;
+    m_distance = std::clamp(m_distance, 1e-3f * m_sceneRadius, 1e3f * m_sceneRadius);
+    m_azimuthDeg = std::isfinite(state.azimuthDeg) ? std::fmod(state.azimuthDeg, 360.0f) : -45.0f;
+    m_elevationDeg = std::isfinite(state.elevationDeg)
+                         ? std::clamp(state.elevationDeg, -kMaxElevationDeg, kMaxElevationDeg)
+                         : 30.0f;
+    m_fovYDeg = (std::isfinite(state.fovYDeg) && state.fovYDeg > 1.0f && state.fovYDeg < 179.0f)
+                    ? state.fovYDeg
+                    : 45.0f;
+}
+
 QMatrix4x4 Camera::viewMatrix() const
 {
     QMatrix4x4 m;

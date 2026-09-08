@@ -256,8 +256,9 @@ struct Group {
 
 struct Extraction {
     HardpointTable table;
-    std::vector<std::array<QString, 3>> cells;
-    std::vector<std::array<QString, 3>> text;
+    std::vector<XlsxCellRow> rows;
+    int nameColumn = 0;  ///< 1-based, 0 when the layout was not established
+    int valueColumn = 0;
     QStringList warnings;
 };
 
@@ -328,6 +329,8 @@ Extraction extractWith(const SheetRows& rows, int nameColumn, int valueColumn, i
     }
 
     Extraction result;
+    result.nameColumn = nameColumn;
+    result.valueColumn = valueColumn;
     QStringList incomplete;
     for (const Group& group : groups) {
         if (!group.present[0] || !group.present[1] || !group.present[2]) {
@@ -338,8 +341,9 @@ Extraction extractWith(const SheetRows& rows, int nameColumn, int valueColumn, i
         point.name = group.base;
         for (int axis = 0; axis < 3; ++axis) point.coord[axis] = group.value[axis];
         result.table.points.push_back(std::move(point));
-        result.cells.push_back({ group.ref[0], group.ref[1], group.ref[2] });
-        result.text.push_back({ group.text[0], group.text[1], group.text[2] });
+        result.rows.push_back(XlsxCellRow{ group.base,
+                                           { group.ref[0], group.ref[1], group.ref[2] },
+                                           { group.text[0], group.text[1], group.text[2] } });
     }
 
     if (skippedRows > 0) {
@@ -610,6 +614,106 @@ std::optional<QByteArray> patchCellValues(const QByteArray& xml,
     return out;
 }
 
+/// XML text escaping, for the one place this file writes content rather than
+/// splicing it: the name cell of an appended row.
+QByteArray escapeXmlText(const QString& text)
+{
+    QByteArray out;
+    const QByteArray utf8 = text.toUtf8();
+    out.reserve(utf8.size());
+    for (const char ch : utf8) {
+        switch (ch) {
+        case '&': out.append("&amp;"); break;
+        case '<': out.append("&lt;"); break;
+        case '>': out.append("&gt;"); break;
+        default: out.append(ch); break;
+        }
+    }
+    return out;
+}
+
+/// One appended row: a name and a number, in the two columns the table uses.
+///
+/// The name goes in as an inline string rather than through the shared-string
+/// table. Both are valid, and an inline string keeps the edit inside this one
+/// worksheet part -- adding to sharedStrings.xml would mean renumbering every
+/// index in the workbook that points past the insertion.
+QByteArray appendedRow(int row, int nameColumn, int valueColumn, const QString& name,
+                       const QString& value)
+{
+    struct Entry {
+        int column;
+        QByteArray xml;
+    };
+    // Cells have to come out in column order; the two columns can sit either way
+    // round, and Excel rejects a row whose cells run backwards.
+    Entry entries[2] = {
+        { nameColumn, QByteArray("<c r=\"") + cellRef(row, nameColumn).toLatin1()
+                          + "\" t=\"inlineStr\"><is><t>" + escapeXmlText(name) + "</t></is></c>" },
+        { valueColumn, QByteArray("<c r=\"") + cellRef(row, valueColumn).toLatin1() + "\"><v>"
+                           + value.toLatin1() + "</v></c>" },
+    };
+    if (entries[0].column > entries[1].column) std::swap(entries[0], entries[1]);
+
+    QByteArray out = QByteArray("<row r=\"") + QByteArray::number(row) + "\">";
+    out.append(entries[0].xml);
+    out.append(entries[1].xml);
+    out.append("</row>");
+    return out;
+}
+
+/// Splice @p rows in just before `</sheetData>`, and widen `<dimension>` so it
+/// still covers the sheet. Excel repairs a stale dimension silently, but other
+/// readers trust it and would stop at the old last row.
+std::optional<QByteArray> appendRows(const QByteArray& xml, const QByteArray& rows, int lastRow,
+                                     int lastColumn, QString* error)
+{
+    if (rows.isEmpty()) return xml;
+
+    QByteArray out = xml;
+
+    const QByteArray kEmptySheetData = QByteArrayLiteral("<sheetData/>");
+    const qsizetype selfClosing = out.indexOf(kEmptySheetData);
+    if (selfClosing >= 0) {
+        const QByteArray replacement = QByteArray("<sheetData>") + rows + "</sheetData>";
+        out.replace(selfClosing, kEmptySheetData.size(), replacement);
+    } else {
+        const qsizetype close = out.indexOf("</sheetData>");
+        if (close < 0) {
+            if (error) *error = tr("The worksheet has no sheet data to append to.");
+            return std::nullopt;
+        }
+        out.insert(close, rows);
+    }
+
+    // <dimension ref="A1:B27"/> -- only the end of the range can need widening,
+    // because rows are only ever added below and in columns that already exist.
+    const qsizetype dimension = out.indexOf("<dimension");
+    if (dimension >= 0) {
+        const qsizetype begin = out.indexOf("ref=\"", dimension);
+        const qsizetype tagEnd = out.indexOf('>', dimension);
+        if (begin > 0 && tagEnd > begin) {
+            const qsizetype valueBegin = begin + 5;
+            const qsizetype valueEnd = out.indexOf('"', valueBegin);
+            if (valueEnd > valueBegin && valueEnd < tagEnd) {
+                const QByteArray range = out.mid(valueBegin, valueEnd - valueBegin);
+                const qsizetype colon = range.indexOf(':');
+                const QByteArray end = (colon < 0) ? range : range.mid(colon + 1);
+                int endRow = 0;
+                int endColumn = 0;
+                if (parseCellRef(QString::fromLatin1(end), &endRow, &endColumn)) {
+                    const QByteArray widened =
+                        (colon < 0 ? range : range.left(colon + 1))
+                        + cellRef(std::max(endRow, lastRow), std::max(endColumn, lastColumn))
+                              .toLatin1();
+                    out.replace(valueBegin, valueEnd - valueBegin, widened);
+                }
+            }
+        }
+    }
+    return out;
+}
+
 /// Ask Excel to recalculate on open, so formulas elsewhere in the workbook that
 /// read these cells do not show stale cached results. Only ever edits a calcPr
 /// element that is already there -- inserting one would mean getting the
@@ -633,6 +737,13 @@ QByteArray withFullCalcOnLoad(const QByteArray& workbookXml)
 }
 
 } // namespace
+
+const XlsxCellRow* XlsxHardpointSource::find(const QString& name) const
+{
+    for (const XlsxCellRow& row : rows)
+        if (row.name == name) return &row;
+    return nullptr;
+}
 
 HardpointLoadResult readHardpointsXlsx(const QString& path)
 {
@@ -716,7 +827,8 @@ HardpointLoadResult readHardpointsXlsx(const QString& path)
         const std::optional<QByteArray> sheetXml = archive->extract(sheet.part);
         if (!sheetXml) continue;
 
-        Extraction extraction = extractHardpoints(parseSheet(*sheetXml, sharedStrings));
+        const SheetRows parsed = parseSheet(*sheetXml, sharedStrings);
+        Extraction extraction = extractHardpoints(parsed);
         if (extraction.table.isEmpty()) continue;
 
         result.table = std::move(extraction.table);
@@ -725,8 +837,12 @@ HardpointLoadResult readHardpointsXlsx(const QString& path)
         result.source.workbookPart = workbookPart;
         result.source.sheetPart = sheet.part;
         result.source.sheetName = sheet.name;
-        result.source.cells = std::move(extraction.cells);
-        result.source.text = std::move(extraction.text);
+        result.source.rows = std::move(extraction.rows);
+        result.source.nameColumn = extraction.nameColumn;
+        result.source.valueColumn = extraction.valueColumn;
+        // The last row of the sheet, not of the table: appending below anything
+        // the author wrote is the only placement that cannot land on top of it.
+        result.source.lastRow = parsed.empty() ? 0 : parsed.rbegin()->first;
         result.elapsedMs = timer.elapsed();
         return result;
     }
@@ -742,39 +858,73 @@ QString writeHardpointsXlsx(const QString& path, const HardpointTable& table,
 {
     if (!source.isValid())
         return tr("There is no source workbook to write into.");
-    if (table.points.size() != source.cells.size() || table.points.size() != source.text.size())
-        return tr("The hardpoints no longer match the workbook they were read from.");
 
     QString error;
     const std::optional<zip::Archive> archive = zip::Archive::open(source.workbook, &error);
     if (!archive) return tr("The source workbook can no longer be read. %1").arg(error);
 
+    // Points the workbook already holds are patched in place; the rest -- what
+    // mirroring produced -- are appended as new rows below the table.
     QHash<QString, QString> values;
     values.reserve(static_cast<qsizetype>(table.points.size()) * 3);
-    for (std::size_t i = 0; i < table.points.size(); ++i) {
+    std::vector<const Hardpoint*> newPoints;
+
+    for (const Hardpoint& point : table.points) {
         for (int axis = 0; axis < 3; ++axis) {
-            const QString& ref = source.cells[i][axis];
+            if (!std::isfinite(point.coord[axis])) {
+                return tr("\"%1\" has a coordinate that is not a number, so nothing was written.")
+                    .arg(point.name);
+            }
+        }
+
+        const XlsxCellRow* cells = source.find(point.name);
+        if (!cells) {
+            newPoints.push_back(&point);
+            continue;
+        }
+        for (int axis = 0; axis < 3; ++axis) {
+            const QString& ref = cells->ref[axis];
             if (ref.isEmpty()) continue;
-            const QString& original = source.text[i][axis];
             // An untouched coordinate is written back with the very text the
             // workbook already had, so saving a file nobody edited leaves its
             // cells byte for byte as they were.
-            const double value = table.points[i].coord[axis];
-            if (!std::isfinite(value)) {
-                return tr("\"%1\" has a coordinate that is not a number, so nothing was written.")
-                    .arg(table.points[i].name);
-            }
+            const QString& original = cells->text[axis];
             bool ok = false;
             const double previous = original.toDouble(&ok);
+            const double value = point.coord[axis];
             values.insert(ref, (ok && previous == value) ? original : numberToXml(value));
         }
+    }
+
+    if (!newPoints.empty() && !source.canAppend()) {
+        return tr("%1 point(s) are not in this workbook and there is no Name/Value table to add "
+                  "them to, so nothing was written.")
+            .arg(newPoints.size());
     }
 
     const std::optional<QByteArray> sheetXml = archive->extract(source.sheetPart, &error);
     if (!sheetXml) return tr("The worksheet could not be read back. %1").arg(error);
 
-    const std::optional<QByteArray> patched = patchCellValues(*sheetXml, values, &error);
+    std::optional<QByteArray> patched = patchCellValues(*sheetXml, values, &error);
     if (!patched) return error;
+
+    if (!newPoints.empty()) {
+        static constexpr char kAxisSuffix[3] = { 'x', 'y', 'z' };
+        QByteArray rows;
+        int row = source.lastRow;
+        for (const Hardpoint* point : newPoints) {
+            for (int axis = 0; axis < 3; ++axis) {
+                ++row;
+                rows.append(appendedRow(row, source.nameColumn, source.valueColumn,
+                                        point->name + QLatin1Char('_')
+                                            + QLatin1Char(kAxisSuffix[axis]),
+                                        numberToXml(point->coord[axis])));
+            }
+        }
+        patched = appendRows(*patched, rows, row,
+                             std::max(source.nameColumn, source.valueColumn), &error);
+        if (!patched) return error;
+    }
 
     QHash<QString, QByteArray> replacements;
     replacements.insert(source.sheetPart, *patched);
