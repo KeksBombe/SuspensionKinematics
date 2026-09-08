@@ -58,6 +58,21 @@
             "cacheVariables": {
                 "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}"
             }
+        },
+        {
+            "name": "windows-ninja",
+            "displayName": "Windows | RelWithDebInfo (Ninja + MSVC)",
+            "inherits": "base",
+            "generator": "Ninja",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_PREFIX_PATH": "$env{QT_ROOT_DIR}"
+            }
         }
     ],
     "buildPresets": [
@@ -78,6 +93,10 @@
             "name": "windows-msvc-release",
             "configurePreset": "windows-msvc",
             "configuration": "RelWithDebInfo"
+        },
+        {
+            "name": "windows-ninja",
+            "configurePreset": "windows-ninja"
         }
     ],
     "testPresets": [

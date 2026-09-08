@@ -102,8 +102,14 @@ cmake --preset windows-msvc
 cmake --build --preset windows-msvc-release
 ```
 
-For STEP on Windows, point `OpenCASCADE_DIR` at an OCCT install. Packaging
-(`windeployqt`, installers) is not part of this milestone.
+For STEP on Windows, point `OpenCASCADE_DIR` at an OCCT install.
+
+There is also a `windows-ninja` preset, which builds with Ninja from a
+"x64 Native Tools" prompt instead of generating a Visual Studio solution. It is
+what CI uses, because it does not pin a Visual Studio version the way the
+`windows-msvc` generator string does.
+
+Packaging is handled by `.github/workflows/release.yml`; see **Download** above.
 
 ### A note on CMake on this machine
 

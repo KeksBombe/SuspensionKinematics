@@ -43,6 +43,53 @@ jobs:
           "full=$v-build.${{ github.run_number }}"      >> $env:GITHUB_OUTPUT
           "fileversion=$v.${{ github.run_number }}"     >> $env:GITHUB_OUTPUT
 
+      # The runner image tracks the current Visual Studio, so pinning a
+      # generator ("Visual Studio 17 2022") breaks the moment the image moves on.
+      # vswhere finds whatever is installed and vcvars64 puts its toolchain on
+      # PATH, which keeps this job working across VS releases -- and lets both
+      # builds below use Ninja instead of MSBuild.
+      - name: Enter MSVC x64 environment
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found at $vswhere" }
+
+          # Not $args -- that is an automatic variable in PowerShell.
+          $query = @('-latest', '-products', '*',
+                     '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64')
+          $install = & $vswhere @query -property installationPath
+          $display = & $vswhere @query -property catalog_productDisplayVersion
+          if (-not $install) { throw "no Visual Studio with the x64 C++ toolset is installed" }
+          Write-Host "Using Visual Studio $display at $install"
+
+          $vcvars = Join-Path $install 'VC\Auxiliary\Build\vcvars64.bat'
+          if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
+
+          # vcvars64 only mutates its own cmd session, so its resulting
+          # environment is dumped and forwarded to the later steps. PATH goes
+          # through GITHUB_PATH rather than GITHUB_ENV, which is what the runner
+          # documents for path changes.
+          $skip = '^(GITHUB_|RUNNER_|ACTIONS_|PROMPT$|_$)'
+          cmd /c "call `"$vcvars`" >nul 2>&1 && set" | ForEach-Object {
+            if ($_ -match '^([A-Za-z_][A-Za-z0-9_()]*)=(.*)$') {
+              $name, $value = $matches[1], $matches[2]
+              if ($name -match $skip) { return }
+              if ($name -eq 'PATH') {
+                $value | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
+              } else {
+                "$name=$value" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+              }
+            }
+          }
+
+      - name: Ensure Ninja is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+          }
+          ninja --version
+
       # OCCT is a ~30 minute build, so it is cached on its tag and the compiler.
       # Only the first run on a new tag pays for it.
       - name: Cache Open CASCADE
@@ -50,7 +97,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/occt-install
-          key: occt-${{ env.OCCT_TAG }}-windows-msvc-x64-v1
+          key: occt-${{ env.OCCT_TAG }}-windows-ninja-x64-v2
 
       - name: Build Open CASCADE
         if: steps.occt-cache.outputs.cache-hit != 'true'
@@ -62,7 +109,8 @@ jobs:
           # path the Linux presets already use.
           # Only the modules the STEP reader pulls in are built; Visualization
           # and Draw are the expensive ones and this project uses neither.
-          cmake -S occt-src -B occt-build -G "Visual Studio 17 2022" -A x64 `
+          cmake -S occt-src -B occt-build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
             -DINSTALL_DIR_LAYOUT=Unix `
             -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/occt-install" `
             -DBUILD_LIBRARY_TYPE=Shared `
@@ -75,8 +123,8 @@ jobs:
             -DUSE_VTK=OFF `
             -DUSE_TBB=OFF `
             -DUSE_FFMPEG=OFF
-          cmake --build occt-build --config Release --parallel
-          cmake --install occt-build --config Release
+          cmake --build occt-build --parallel
+          cmake --install occt-build
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -90,19 +138,19 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
-          cmake --preset windows-msvc `
+          cmake --preset windows-ninja `
             -DSUSPKIN_BUILD_TESTS=OFF `
             -DOpenCASCADE_DIR="${{ github.workspace }}/occt-install/lib/cmake/opencascade"
 
       - name: Build
-        run: cmake --build --preset windows-msvc-release
+        run: cmake --build --preset windows-ninja
 
       # cmake --install runs windeployqt through the deploy script generated in
       # CMakeLists.txt, so dist/bin ends up with the Qt runtime beside the exe.
       - name: Stage install tree
         shell: pwsh
         run: |
-          cmake --install build/windows-msvc --config RelWithDebInfo --prefix dist
+          cmake --install build/windows-ninja --prefix dist
           # windeployqt knows nothing about OCCT, so its DLLs are copied by hand.
           Copy-Item occt-install/bin/*.dll dist/bin/ -Force
           Get-ChildItem dist/bin | Select-Object Name, Length
