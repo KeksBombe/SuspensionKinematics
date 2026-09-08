@@ -10,16 +10,18 @@ void GpuMesh::upload(QOpenGLFunctions_3_3_Core& gl, const TriMesh& mesh, const E
     if (mesh.isEmpty()) return;
 
     // --- Solid stream ------------------------------------------------------
-    // Non-indexed: each triangle contributes three vertices carrying its own
-    // face normal. Sharing vertices here would average the normals and smooth
-    // away the facets, which for an STL is exactly the wrong answer.
+    // Non-indexed: each triangle contributes three vertices with their own
+    // normal. That is what lets one buffer serve both shading models -- flat
+    // facets for an STL, and the exact analytic normals of a tessellated B-Rep,
+    // which no amount of averaging welded vertices could reconstruct.
     const std::size_t triCount = mesh.triangleCount();
+    const bool smooth = mesh.hasCornerNormals();
     std::vector<float> solidVerts;
     solidVerts.reserve(triCount * 3 * 6);
     for (std::size_t t = 0; t < triCount; ++t) {
-        const QVector3D& n = mesh.faceNormals[t];
         for (int k = 0; k < 3; ++k) {
             const QVector3D& p = mesh.positions[mesh.indices[3 * t + k]];
+            const QVector3D& n = smooth ? mesh.cornerNormals[3 * t + k] : mesh.faceNormals[t];
             solidVerts.insert(solidVerts.end(),
                               { p.x(), p.y(), p.z(), n.x(), n.y(), n.z() });
         }

@@ -19,6 +19,7 @@ class TestStepReader : public QObject {
 private slots:
     void readsAPlateWithAHole();
     void tessellationScalesWithTheModel();
+    void carriesExactSurfaceNormals();
     void reportsAnUnreadableFile();
     void dispatchesByExtension();
 };
@@ -65,6 +66,32 @@ void TestStepReader::tessellationScalesWithTheModel()
     }
     // The bore wall contributes many differently-angled facets.
     QVERIFY2(nonAxisAligned > 20, qPrintable(QString::number(nonAxisAligned)));
+}
+
+void TestStepReader::carriesExactSurfaceNormals()
+{
+    const MeshLoadResult result = readStep(fixture("plate_with_hole.step"));
+    QVERIFY2(result.ok(), qPrintable(result.error));
+
+    // Importing STEP rather than a mesh is only worth it if the analytic normals
+    // survive: the triangles approximate the surface, the normals do not.
+    QVERIFY2(result.mesh->hasCornerNormals(), "no per-corner normals were produced");
+    for (const QVector3D& n : result.mesh->cornerNormals)
+        QVERIFY2(std::abs(n.length() - 1.0f) < 1e-3f, "a corner normal is not unit length");
+
+    // On the curved bore the three corners of a triangle must disagree. If every
+    // triangle's corners shared one normal these would just be facet normals
+    // wearing a disguise, and the hole would shade as a prism.
+    int varyingTriangles = 0;
+    for (std::size_t t = 0; t < result.mesh->triangleCount(); ++t) {
+        const QVector3D& a = result.mesh->cornerNormals[3 * t + 0];
+        const QVector3D& b = result.mesh->cornerNormals[3 * t + 1];
+        const QVector3D& c = result.mesh->cornerNormals[3 * t + 2];
+        if ((a - b).length() > 1e-4f || (b - c).length() > 1e-4f) ++varyingTriangles;
+    }
+    QVERIFY2(varyingTriangles > 10,
+             qPrintable(QStringLiteral("only %1 triangles have varying normals")
+                            .arg(varyingTriangles)));
 }
 
 void TestStepReader::reportsAnUnreadableFile()

@@ -19,7 +19,10 @@ inline constexpr float kDefaultCreaseAngleDeg = 30.0f;
 /// file are ignored entirely: exporters frequently write zero, unnormalised, or
 /// winding-inconsistent normals. Zero-area triangles are dropped and counted in
 /// @p droppedDegenerate.
-TriMesh weldSoup(const std::vector<QVector3D>& corners, int* droppedDegenerate = nullptr);
+/// @param cornerNormals optional exact per-corner normals, 3 per input triangle,
+///        filtered alongside the triangles that survive.
+TriMesh weldSoup(const std::vector<QVector3D>& corners, int* droppedDegenerate = nullptr,
+                 const std::vector<QVector3D>* cornerNormals = nullptr);
 
 /// Line index buffers for wireframe rendering: 2 indices per edge.
 struct EdgeSet {

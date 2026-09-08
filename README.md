@@ -19,7 +19,12 @@ SUSPKIN_PRESET=linux-release ./start.sh     # optimised build
 | Format | Notes |
 |---|---|
 | **STL**, binary and ASCII | Auto-detected from the file size, not the leading `solid` token, which is unreliable in both directions. Facet normals in the file are ignored and recomputed from the winding. |
-| **STEP** (`.step`, `.stp`) | ISO 10303 boundary representation. Read and tessellated with Open CASCADE; the chord tolerance scales with the model, so a 10 mm bracket and a 3 m chassis both come out sensibly. Optional at build time. |
+| **STEP** (`.step`, `.stp`) | ISO 10303 boundary representation. Read and tessellated with Open CASCADE; the chord tolerance scales with the model, so a 10 mm bracket and a 3 m chassis both come out sensibly. The **exact analytic surface normal** is evaluated at every vertex from the B-Rep, so curved faces shade smoothly rather than as flat facets. Optional at build time. |
+
+Both formats end up in the same triangle mesh for rendering — a GPU draws nothing
+else. The difference that matters is the normals: an STL is genuinely faceted and
+is shaded flat, while a STEP body is analytic surfaces that merely got tessellated,
+so its normals come from the real surface and a bore shades as the cylinder it is.
 
 ## Controls
 

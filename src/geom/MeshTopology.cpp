@@ -33,7 +33,8 @@ struct GridKeyHash {
 
 } // namespace
 
-TriMesh weldSoup(const std::vector<QVector3D>& corners, int* droppedDegenerate)
+TriMesh weldSoup(const std::vector<QVector3D>& corners, int* droppedDegenerate,
+                 const std::vector<QVector3D>* cornerNormals)
 {
     TriMesh mesh;
     int dropped = 0;
@@ -70,8 +71,12 @@ TriMesh weldSoup(const std::vector<QVector3D>& corners, int* droppedDegenerate)
         return idx;
     };
 
+    const bool haveCornerNormals =
+        cornerNormals != nullptr && cornerNormals->size() == corners.size();
+
     mesh.indices.reserve(triCount * 3);
     mesh.faceNormals.reserve(triCount);
+    if (haveCornerNormals) mesh.cornerNormals.reserve(triCount * 3);
 
     for (std::size_t t = 0; t < triCount; ++t) {
         const QVector3D& a = corners[3 * t + 0];
@@ -97,6 +102,11 @@ TriMesh weldSoup(const std::vector<QVector3D>& corners, int* droppedDegenerate)
         mesh.indices.push_back(i1);
         mesh.indices.push_back(i2);
         mesh.faceNormals.push_back(n.normalized());
+        if (haveCornerNormals) {
+            mesh.cornerNormals.push_back((*cornerNormals)[3 * t + 0]);
+            mesh.cornerNormals.push_back((*cornerNormals)[3 * t + 1]);
+            mesh.cornerNormals.push_back((*cornerNormals)[3 * t + 2]);
+        }
     }
 
     for (const QVector3D& p : mesh.positions) mesh.bounds.expand(p);
