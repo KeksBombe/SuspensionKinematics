@@ -6,6 +6,20 @@ This milestone is the 3D viewport foundation: import geometry and inspect it, as
 shaded solid or as its triangle mesh, with a camera that behaves the way a CAD user
 expects. Hardpoint editing, bump/roll sweeps and camber/toe plots build on top of it.
 
+## Download
+
+Every push to `main` republishes the [`latest` release](https://github.com/KeksBombe/SuspensionKinematics/releases/tag/latest).
+The tag is moved rather than accumulated, so these links always point at the
+current build.
+
+| Platform | File | Install |
+|---|---|---|
+| Windows 10/11 x64 | `SuspensionKinematics-windows-x64-setup.exe` | Run it. Qt and Open CASCADE are bundled. |
+| Windows 10/11 x64 | `SuspensionKinematics-windows-x64.zip` | Portable — unzip and run `suspkin.exe`. |
+| Arch Linux x86_64 | `suspensionkinematics-*-x86_64.pkg.tar.zst` | `sudo pacman -U <file>` |
+
+Packaging lives in `packaging/` and is driven by `.github/workflows/release.yml`.
+
 ## Quick start (Linux)
 
 ```bash

@@ -1,0 +1,38 @@
+# Maintainer: Marvin <m.lohss04@gmail.com>
+#
+# Built by .github/workflows/release.yml, which templates pkgver from the
+# project() version in CMakeLists.txt and feeds in a git-archive tarball of the
+# commit being released.
+pkgname=suspensionkinematics
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Suspension kinematics tool for Bremergy - 3D viewport for STL and STEP geometry"
+arch=('x86_64')
+url="https://github.com/KeksBombe/SuspensionKinematics"
+license=('LicenseRef-unknown')
+depends=('qt6-base' 'opencascade' 'hicolor-icon-theme')
+makedepends=('cmake' 'ninja' 'python')
+# Without this makepkg splits out a -debug package, which would show up as a
+# second, confusing download on the release page.
+options=('!debug')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    # Tests are on so that check() below has something to run; they need
+    # python3 for the STL fixtures, which is already a makedepend.
+    cmake -S "$srcdir/$pkgname-$pkgver" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DSUSPKIN_BUILD_TESTS=ON
+    cmake --build build
+}
+
+check() {
+    # Every suite is QTEST_APPLESS_MAIN, so no display is needed.
+    ctest --test-dir build --output-on-failure
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+}

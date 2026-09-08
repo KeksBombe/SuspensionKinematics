@@ -1,0 +1,262 @@
+name: Release
+
+# Every push to main republishes the rolling "latest" release. The tag is moved
+# rather than accumulated, so the download URLs never change and the releases
+# page stays at one entry.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push while the first is still building would race on deleting and
+# recreating the same tag, so only one release run is ever in flight.
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  QT_VERSION: 6.8.2
+  # Open CASCADE 7.8 renamed the STEP libraries to TKDESTEP, which is what
+  # CMakeLists.txt links against, so 7.9.x is the floor here as well.
+  OCCT_TAG: V7_9_3
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Windows: suspkin.exe, once as a portable zip and once as an installer.
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Windows (MSVC x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read project version
+        id: ver
+        shell: pwsh
+        run: |
+          $m = Select-String -Path CMakeLists.txt -Pattern '^\s*VERSION (\d+\.\d+\.\d+)' | Select-Object -First 1
+          $v = $m.Matches[0].Groups[1].Value
+          "version=$v"                                  >> $env:GITHUB_OUTPUT
+          "full=$v-build.${{ github.run_number }}"      >> $env:GITHUB_OUTPUT
+          "fileversion=$v.${{ github.run_number }}"     >> $env:GITHUB_OUTPUT
+
+      # OCCT is a ~30 minute build, so it is cached on its tag and the compiler.
+      # Only the first run on a new tag pays for it.
+      - name: Cache Open CASCADE
+        id: occt-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/occt-install
+          key: occt-${{ env.OCCT_TAG }}-windows-msvc-x64-v1
+
+      - name: Build Open CASCADE
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:OCCT_TAG https://github.com/Open-Cascade-SAS/OCCT.git occt-src
+          # INSTALL_DIR_LAYOUT=Unix gives the plain bin/lib/include tree instead
+          # of OCCT's win64/vc14 nesting, so OpenCASCADE_DIR below matches the
+          # path the Linux presets already use.
+          # Only the modules the STEP reader pulls in are built; Visualization
+          # and Draw are the expensive ones and this project uses neither.
+          cmake -S occt-src -B occt-build -G "Visual Studio 17 2022" -A x64 `
+            -DINSTALL_DIR_LAYOUT=Unix `
+            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/occt-install" `
+            -DBUILD_LIBRARY_TYPE=Shared `
+            -DBUILD_MODULE_Draw=OFF `
+            -DBUILD_MODULE_Visualization=OFF `
+            -DBUILD_DOC_Overview=OFF `
+            -DUSE_FREETYPE=OFF `
+            -DUSE_OPENGL=OFF `
+            -DUSE_FREEIMAGE=OFF `
+            -DUSE_VTK=OFF `
+            -DUSE_TBB=OFF `
+            -DUSE_FFMPEG=OFF
+          cmake --build occt-build --config Release --parallel
+          cmake --install occt-build --config Release
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake --preset windows-msvc `
+            -DSUSPKIN_BUILD_TESTS=OFF `
+            -DOpenCASCADE_DIR="${{ github.workspace }}/occt-install/lib/cmake/opencascade"
+
+      - name: Build
+        run: cmake --build --preset windows-msvc-release
+
+      # cmake --install runs windeployqt through the deploy script generated in
+      # CMakeLists.txt, so dist/bin ends up with the Qt runtime beside the exe.
+      - name: Stage install tree
+        shell: pwsh
+        run: |
+          cmake --install build/windows-msvc --config RelWithDebInfo --prefix dist
+          # windeployqt knows nothing about OCCT, so its DLLs are copied by hand.
+          Copy-Item occt-install/bin/*.dll dist/bin/ -Force
+          Get-ChildItem dist/bin | Select-Object Name, Length
+
+      - name: Smoke test the binary
+        shell: pwsh
+        run: |
+          # WIN32_EXECUTABLE means --version writes to a message box, not stdout,
+          # so the check is just that the loader resolves every DLL.
+          $p = Start-Process -FilePath dist/bin/suspkin.exe -ArgumentList '--help' -PassThru
+          Start-Sleep -Seconds 5
+          if ($p.HasExited -and $p.ExitCode -ne 0) {
+            throw "suspkin.exe exited with $($p.ExitCode) -- a DLL is probably missing"
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive -Path dist/bin/* `
+            -DestinationPath "out/SuspensionKinematics-windows-x64.zip"
+
+      - name: Package installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc `
+            "/DAppVersion=${{ steps.ver.outputs.full }}" `
+            "/DFileVersion=${{ steps.ver.outputs.fileversion }}" `
+            "/DSourceDir=${{ github.workspace }}\dist\bin" `
+            "/DOutputDir=${{ github.workspace }}\out" `
+            "/DOutputName=SuspensionKinematics-windows-x64-setup" `
+            packaging\windows\suspkin.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Arch Linux: a real pacman package, built in an Arch container because the
+  # GitHub runners are Ubuntu.
+  # ---------------------------------------------------------------------------
+  archlinux:
+    name: Arch Linux package
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      # Before checkout: actions/checkout shells out to git when it is present,
+      # and the container image ships without it.
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git cmake ninja qt6-base opencascade python sudo
+
+      - uses: actions/checkout@v4
+
+      - name: Read project version
+        id: ver
+        run: |
+          v=$(grep -m1 -oP '^\s*VERSION \K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)
+          echo "version=$v"                             >> "$GITHUB_OUTPUT"
+          echo "full=$v-build.${{ github.run_number }}"  >> "$GITHUB_OUTPUT"
+
+      - name: Build package
+        env:
+          PKGVER: ${{ steps.ver.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          # The checkout is owned by a different uid than the build user.
+          git config --global --add safe.directory '*'
+
+          # makepkg refuses to run as root, so the build happens as an
+          # unprivileged user that can still call pacman for dependencies.
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+
+          # A PKGBUILD wants a source tarball, so the checkout becomes one
+          # rather than the PKGBUILD reaching outside $srcdir.
+          git archive --format=tar.gz \
+            --prefix="suspensionkinematics-${PKGVER}/" \
+            -o "packaging/arch/suspensionkinematics-${PKGVER}.tar.gz" HEAD
+
+          chown -R builder:builder .
+          # pkgver is templated so the PKGBUILD stays in step with CMakeLists.
+          sudo -u builder env PKGVER="$PKGVER" bash -c '
+            cd packaging/arch
+            sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" PKGBUILD
+            makepkg -sf --noconfirm
+          '
+
+      - name: Collect package
+        run: |
+          mkdir -p out
+          cp packaging/arch/*.pkg.tar.zst out/
+          # The pacman filename is fixed by makepkg, so the build number is
+          # recorded alongside rather than baked into it.
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archlinux
+          path: out/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Move the "latest" tag onto this commit and republish it with both downloads.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish rolling release
+    needs: [windows, archlinux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          ls -l artifacts
+
+          # Deleting the release with its tag is what makes this rolling; the
+          # tag is then recreated on the commit being built. Ignore the failure
+          # on the very first run, when there is nothing to delete yet.
+          gh release delete latest --yes --cleanup-tag || true
+
+          {
+            echo "Automatic build of \`main\` at ${GITHUB_SHA}."
+            echo
+            echo "| Download | Platform | Notes |"
+            echo "|---|---|---|"
+            echo "| \`SuspensionKinematics-windows-x64-setup.exe\` | Windows 10/11 x64 | Installer. Qt and Open CASCADE are bundled. |"
+            echo "| \`SuspensionKinematics-windows-x64.zip\` | Windows 10/11 x64 | Portable, same files without the installer. |"
+            echo "| \`*.pkg.tar.zst\` | Arch Linux x86_64 | \`sudo pacman -U <file>\` |"
+            echo
+            echo "Built from $(git log -1 --pretty='%s')"
+          } > notes.md
+
+          gh release create latest \
+            --title "Latest build (build.${{ github.run_number }})" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" \
+            artifacts/*

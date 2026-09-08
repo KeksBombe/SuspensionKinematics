@@ -127,6 +127,35 @@ qt_add_resources(suspkin "shaders"
 set_target_properties(suspkin PROPERTIES WIN32_EXECUTABLE ON)
 
 # ---------------------------------------------------------------------------
+# Install / deploy
+#
+# Enough for both packaging paths: `cmake --install` produces a runnable tree on
+# Windows (windeployqt is invoked by the generated deploy script) and a normal
+# /usr layout on Linux for the PKGBUILD to hand to makepkg.
+# ---------------------------------------------------------------------------
+include(GNUInstallDirs)
+
+install(TARGETS suspkin
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    BUNDLE  DESTINATION .)
+
+if(UNIX AND NOT APPLE)
+    install(FILES packaging/linux/suspkin.desktop
+            DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
+endif()
+
+if(WIN32)
+    # Collects the Qt DLLs and plugins next to the exe. OCCT is not Qt's to
+    # know about, so its DLLs are copied by the packaging workflow instead.
+    qt_generate_deploy_app_script(
+        TARGET suspkin
+        OUTPUT_SCRIPT SUSPKIN_DEPLOY_SCRIPT
+        NO_TRANSLATIONS
+        NO_UNSUPPORTED_PLATFORM_ERROR)
+    install(SCRIPT ${SUSPKIN_DEPLOY_SCRIPT})
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 option(SUSPKIN_BUILD_TESTS "Build unit tests" ON)

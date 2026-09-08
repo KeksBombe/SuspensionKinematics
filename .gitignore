@@ -11,3 +11,10 @@ compile_commands.json
 # Generated test fixtures
 tests/data/
 .nix/
+
+# Packaging output
+dist/
+packaging/arch/pkg/
+packaging/arch/src/
+packaging/arch/*.tar.gz
+packaging/arch/*.pkg.tar.zst
