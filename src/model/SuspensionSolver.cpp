@@ -21,10 +21,45 @@ constexpr double kTargetTolerance = 1e-7;
 /// into a region where it does not assemble.
 constexpr double kMaxStep = 0.35;
 
+/// Where the road is. A hardpoint workbook is measured in vehicle coordinates
+/// with z up from the ground, so this is not a guess so much as the frame's own
+/// definition -- and a corner whose workbook says otherwise names a contact
+/// patch, which is taken over it.
+constexpr double kGroundZ = 0.0;
+
 double pickWheelHeight(const CornerPose& pose) { return pose.wheelCenter.z; }
 double pickContactHeight(const CornerPose& pose) { return pose.contactPatch.z; }
 
 } // namespace
+
+Vec3 wheelPlaneDown(const Vec3& spinAxis)
+{
+    const Vec3 axis = spinAxis.normalized();
+    const Vec3 down(0.0, 0.0, -1.0);
+    const Vec3 inPlane = down - axis * dot(down, axis);
+    // A wheel whose axis stands vertical has no down in its own plane. It is not
+    // a suspension anybody is drawing, but it is a division by zero if ignored.
+    if (inPlane.lengthSquared() < 1e-12) return Vec3();
+    return inPlane.normalized();
+}
+
+Vec3 contactPatchFor(const Vec3& wheelCenter, const Vec3& spinAxis, double tireRadius)
+{
+    const Vec3 down = wheelPlaneDown(spinAxis);
+    if (down.lengthSquared() < 0.5) return wheelCenter;
+    return wheelCenter + down * tireRadius;
+}
+
+double tireRadiusToGround(const Vec3& wheelCenter, const Vec3& spinAxis, double groundZ, bool* ok)
+{
+    if (ok) *ok = false;
+    const Vec3 down = wheelPlaneDown(spinAxis);
+    if (down.z > -1e-9) return 0.0; // the wheel plane runs away from the ground
+    const double radius = (groundZ - wheelCenter.z) / down.z;
+    if (radius <= 0.0) return 0.0; // a wheel centre at or below the ground
+    if (ok) *ok = true;
+    return radius;
+}
 
 const Vec3* CornerPose::find(const QString& name) const
 {
@@ -69,9 +104,17 @@ std::optional<CornerSolver> CornerSolver::bind(const MechanismTemplate& mechanis
     solver.m_tieRodOutboard = at(mechanism.tieRodOutboard);
     solver.m_wheelCenter = at(mechanism.wheelCenter);
 
+    // A rack drives this corner only if the template says one does, and only
+    // through the point this solve knows how to move. Anything else is caught
+    // where there is somewhere to report it -- AxleSolver::build().
+    solver.m_steered = !mechanism.steeringRack.isEmpty()
+                       && mechanism.steeringRack == mechanism.tieRodInboard;
+
+    solver.m_hasWheelAxis = has(mechanism.wheelAxis);
+    if (solver.m_hasWheelAxis) solver.m_wheelAxisPoint = at(mechanism.wheelAxis);
+
     solver.m_hasContactPatch = has(mechanism.contactPatch);
-    solver.m_contactPatch = solver.m_hasContactPatch ? at(mechanism.contactPatch)
-                                                     : solver.m_wheelCenter - Vec3(0, 0, 1);
+    if (solver.m_hasContactPatch) solver.m_contactPatch = at(mechanism.contactPatch);
 
     solver.m_hasRocker = mechanism.hasRocker() && has(mechanism.pushrodOuter)
                          && has(mechanism.pushrodInner) && has(mechanism.rockerPivot)
@@ -147,15 +190,48 @@ std::optional<CornerSolver> CornerSolver::bind(const MechanismTemplate& mechanis
         if (!solver.m_antiRollCircle.isValid()) solver.m_hasAntiRoll = false;
     }
 
-    // The wheel plane's normal, pointing outboard. Taken from the contact patch
-    // sitting under the wheel centre, so whatever static camber the workbook
-    // holds is carried through. Static toe is not in a hardpoint table at all --
-    // it is set by winding the tie rod -- which is why toe is also reported as a
-    // change from this position.
-    const Vec3 up = solver.m_wheelCenter - solver.m_contactPatch;
-    Vec3 spin = cross(up, Vec3(1, 0, 0)).normalized() * solver.side();
+    // Which way the wheel points, as a unit vector outboard along its own axis of
+    // rotation.
+    //
+    // A second point on that axis says it outright, camber and toe together, and
+    // is the only way a hardpoint table can state static toe at all. Without one
+    // it is inferred the old way, from the contact patch sitting under the wheel
+    // centre: that carries the workbook's static camber and assumes zero toe,
+    // which is why toe is also reported as a change from this position.
+    Vec3 spin;
+    if (solver.m_hasWheelAxis) {
+        spin = (solver.m_wheelAxisPoint - solver.m_wheelCenter).normalized();
+        // Either end of the axle may have been measured; outboard is the end the
+        // measures are read against.
+        if (spin.y * solver.side() < 0.0) spin = spin * -1.0;
+    } else if (solver.m_hasContactPatch) {
+        const Vec3 up = solver.m_wheelCenter - solver.m_contactPatch;
+        spin = cross(up, Vec3(1, 0, 0)).normalized() * solver.side();
+    }
     if (spin.lengthSquared() < 0.5) spin = Vec3(0, solver.side(), 0);
     solver.m_designSpinAxis = spin;
+
+    // The tyre radius, which is what turns a wheel centre and an axis into a
+    // contact patch: the drop from the centre down the wheel's own plane onto
+    // the road. What a patch in the workbook supplies is the height of that
+    // road -- a table measured from a chassis datum rather than from the ground
+    // has no other way of saying where the ground is -- and not the patch's own
+    // position, which under a cambered wheel is not where the tyre touches.
+    //
+    // With no axis point named the two come to the same thing: the drop is then
+    // straight down the line the patch itself defined, so the patch is
+    // reproduced exactly and nothing about an older project moves.
+    const double groundZ = solver.m_hasContactPatch ? solver.m_contactPatch.z : kGroundZ;
+    bool grounded = false;
+    solver.m_tireRadius = tireRadiusToGround(solver.m_wheelCenter, spin, groundZ, &grounded);
+    solver.m_hasGround = grounded;
+
+    // Computed from here on, at design as well as through the travel, so that
+    // the rise a roll sweep drives is measured against the same thing it moves.
+    if (grounded)
+        solver.m_contactPatch = contactPatchFor(solver.m_wheelCenter, spin, solver.m_tireRadius);
+    else if (!solver.m_hasContactPatch)
+        solver.m_contactPatch = solver.m_wheelCenter - Vec3(0, 0, 1);
 
     CornerPose design;
     if (!solver.solveAt(0.0, 0.0, nullptr, &design)) {
@@ -192,7 +268,10 @@ bool CornerSolver::solveAt(double angle, double rackTravel, const CornerPose* pr
 {
     CornerPose pose;
     pose.armAngle = angle;
-    pose.rackTravel = rackTravel;
+    // An axle with no rack ignores rack travel rather than pretending to steer.
+    // The pose reports what actually happened, not what was asked for.
+    const double rack = m_steered ? rackTravel : 0.0;
+    pose.rackTravel = rack;
 
     Vec3 candidates[2];
     bool ok = false;
@@ -215,7 +294,7 @@ bool CornerSolver::solveAt(double angle, double rackTravel, const CornerPose* pr
 
     // 3. The outer tie rod end: rigid with the two ball joints, and a tie rod's
     //    length from the rack.
-    pose.tieRodInboard = m_tieRodInboard + Vec3(0.0, rackTravel, 0.0);
+    pose.tieRodInboard = m_tieRodInboard + Vec3(0.0, rack, 0.0);
     count = trilaterate(pose.lowerOuter, m_uprightLowerTie, pose.upperOuter, m_uprightUpperTie,
                         pose.tieRodInboard, m_tieRodLength, candidates);
     if (count == 0) {
@@ -237,8 +316,18 @@ bool CornerSolver::solveAt(double angle, double rackTravel, const CornerPose* pr
         return false;
     }
     pose.wheelCenter = upright.map(m_wheelCenter);
-    pose.contactPatch = upright.map(m_contactPatch);
     pose.spinAxis = upright.rotate(m_designSpinAxis).normalized();
+    pose.uprightMotion = upright;
+    pose.wheelCenterName = m_mechanism.wheelCenter;
+
+    // The wheel is rigid with the upright; the contact patch is not. It is the
+    // bottom of a tyre that stays on the road, so it is recomputed from the
+    // wheel's new attitude rather than carried round with the upright -- which
+    // is what makes it walk outboard as the wheel gains camber instead of
+    // lifting off the ground with it.
+    pose.contactPatch = m_hasGround
+                            ? contactPatchFor(pose.wheelCenter, pose.spinAxis, m_tireRadius)
+                            : upright.map(m_contactPatch);
 
     // 5. How far the upper wishbone turned, which is what carries the pushrod.
     pose.upperArmAngle = m_upperCircle.angleOf(pose.upperOuter);
@@ -294,6 +383,7 @@ bool CornerSolver::solveAt(double angle, double rackTravel, const CornerPose* pr
     add(m_mechanism.tieRodInboard, pose.tieRodInboard);
     add(m_mechanism.tieRodOutboard, pose.tieRodOutboard);
     add(m_mechanism.wheelCenter, pose.wheelCenter);
+    if (m_hasWheelAxis) add(m_mechanism.wheelAxis, upright.map(m_wheelAxisPoint));
     if (m_hasContactPatch) add(m_mechanism.contactPatch, pose.contactPatch);
     for (const PosedPoint& carried : m_carried) add(carried.name, upright.map(carried.position));
     if (m_hasRocker) {
@@ -335,9 +425,10 @@ void CornerSolver::measure(CornerPose* pose) const
     pose->contactPatchRise = pose->contactPatch.z - m_contactPatch.z;
 
     // Track and wheelbase are read at the ground when there is a contact patch
-    // to read them at, and at the wheel centre when there is not.
-    const Vec3& ground = m_hasContactPatch ? pose->contactPatch : pose->wheelCenter;
-    const Vec3& groundDesign = m_hasContactPatch ? m_contactPatch : m_wheelCenter;
+    // to read them at -- named or computed -- and at the wheel centre when the
+    // wheel is lying so flat that there is none.
+    const Vec3& ground = m_hasGround ? pose->contactPatch : pose->wheelCenter;
+    const Vec3& groundDesign = m_hasGround ? m_contactPatch : m_wheelCenter;
     pose->halfTrackChange = s * (ground.y - groundDesign.y);
     pose->wheelbaseChange = ground.x - groundDesign.x;
 

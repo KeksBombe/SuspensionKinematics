@@ -171,6 +171,15 @@ std::vector<WheelPlacement> resolveWheels(const WheelSpec& spec, const Hardpoint
     return placements;
 }
 
+void orientWheels(std::vector<WheelPlacement>& placements, const WheelRotations& rotations)
+{
+    for (WheelPlacement& placement : placements) {
+        const auto it = rotations.constFind(placement.pointName);
+        if (it == rotations.constEnd()) continue;
+        placement.rotation = *it;
+    }
+}
+
 QMatrix4x4 wheelTransform(const WheelPlacement& placement, const Aabb& modelBounds,
                           bool alignToCenter)
 {
@@ -182,6 +191,10 @@ QMatrix4x4 wheelTransform(const WheelPlacement& placement, const Aabb& modelBoun
 
     QMatrix4x4 transform;
     transform.translate(placement.center);
+    // The upright's own turn, about the wheel centre: steering and camber, and
+    // on the far side the far side's, which is why it is applied after the
+    // mirror rather than being mirrored with the model.
+    if (!placement.rotation.isIdentity()) transform.rotate(placement.rotation);
     // Y, because that is what "the other side of the car" negates in ISO 8855.
     if (placement.mirrored) transform.scale(1.0f, -1.0f, 1.0f);
     transform.translate(-anchor);

@@ -185,6 +185,8 @@ qt_add_executable(suspkin
     src/app/ProjectLauncher.cpp
     src/app/MirrorDialog.h
     src/app/MirrorDialog.cpp
+    src/app/SteeringDialog.h
+    src/app/SteeringDialog.cpp
     src/app/RecentProjects.h
     src/app/RecentProjects.cpp
     src/app/WheelDialog.h
@@ -196,6 +198,8 @@ qt_add_executable(suspkin
     src/app/PlotWidget.cpp
     src/app/AnalysisPanel.h
     src/app/AnalysisPanel.cpp
+    src/app/SweepParametersDialog.h
+    src/app/SweepParametersDialog.cpp
     src/app/AppController.h
     src/app/AppController.cpp
     src/render/GpuMesh.h

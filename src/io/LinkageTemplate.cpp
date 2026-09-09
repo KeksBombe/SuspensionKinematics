@@ -2,6 +2,9 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QHash>
+#include <cctype>
+#include <utility>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -75,6 +78,7 @@ MechanismTemplate mechanismFromJson(const QJsonObject& root)
     mechanism.tieRodInboard = roleName(object, "tieRod", "inboard");
     mechanism.tieRodOutboard = roleName(object, "tieRod", "outboard");
     mechanism.wheelCenter = roleName(object, "upright", "wheelCenter");
+    mechanism.wheelAxis = roleName(object, "upright", "wheelAxis");
     mechanism.contactPatch = roleName(object, "upright", "contactPatch");
     mechanism.carried = stringList(
         object.value(QStringLiteral("upright")).toObject().value(QStringLiteral("carries")));
@@ -121,6 +125,8 @@ QJsonObject mechanismToJson(const MechanismTemplate& mechanism)
     QJsonObject upright;
     if (!mechanism.wheelCenter.isEmpty())
         upright.insert(QStringLiteral("wheelCenter"), mechanism.wheelCenter);
+    if (!mechanism.wheelAxis.isEmpty())
+        upright.insert(QStringLiteral("wheelAxis"), mechanism.wheelAxis);
     if (!mechanism.contactPatch.isEmpty())
         upright.insert(QStringLiteral("contactPatch"), mechanism.contactPatch);
     if (!mechanism.carried.isEmpty()) {
@@ -154,7 +160,24 @@ QJsonObject mechanismToJson(const MechanismTemplate& mechanism)
 
 } // namespace
 
-LinkageTemplateLoadResult readLinkageTemplate(const QByteArray& bytes, const QString& label)
+namespace {
+
+LinkageTemplateLoadResult readTemplate(const QByteArray& bytes, const QString& label,
+                                       bool allowMechanismFallback);
+
+/// The roles the shipped template gives a corner, read without the fallback --
+/// this is the thing the fallback falls back *to*, so it must never be able to
+/// ask for itself.
+MechanismTemplate builtinMechanism()
+{
+    const LinkageTemplateLoadResult result =
+        readTemplate(builtinLinkageTemplateBytes(), QStringLiteral("the built-in linkage template"),
+                     false);
+    return result.ok() ? result.templ->mechanism : MechanismTemplate{};
+}
+
+LinkageTemplateLoadResult readTemplate(const QByteArray& bytes, const QString& label,
+                                       bool allowMechanismFallback)
 {
     LinkageTemplateLoadResult result;
 
@@ -193,6 +216,13 @@ LinkageTemplateLoadResult readLinkageTemplate(const QByteArray& bytes, const QSt
             const QJsonObject object = value.toObject();
             corner.token = object.value(QStringLiteral("token")).toString();
             corner.label = object.value(QStringLiteral("label")).toString(corner.token);
+            // Which hardpoint this axle's rack drives, if it has one. Only the
+            // long form can say it: a corner written as a bare string is a
+            // token and nothing else, and an axle nobody has said anything
+            // about is not steered -- unless no corner says anything at all,
+            // which is LinkageTemplate::steeringDeclared()'s job to notice.
+            corner.steeringStated = object.contains(QStringLiteral("steering"));
+            corner.steeringRack = object.value(QStringLiteral("steering")).toString();
         }
         if (!corner.token.isEmpty()) templ.corners.push_back(corner);
     }
@@ -242,8 +272,28 @@ LinkageTemplateLoadResult readLinkageTemplate(const QByteArray& bytes, const QSt
         return result;
     }
 
+    // A template written before the solver existed has parts and no mechanism.
+    // It still draws, but nothing else can do anything with it: the corner
+    // cannot be solved, and no hardpoint can be told what it is for. The
+    // built-in block is the right guess -- such a file is almost certainly a
+    // copy of the built-in template -- and a guess that says so beats a table
+    // of points that all read "unassigned". A template naming points that are
+    // called something else entirely resolves none of it, which lands back
+    // exactly where it started.
+    if (allowMechanismFallback && !root.contains(QStringLiteral("mechanism"))) {
+        templ.mechanism = builtinMechanism();
+        templ.mechanismAssumed = !templ.mechanism.isEmpty();
+    }
+
     result.templ = std::move(templ);
     return result;
+}
+
+} // namespace
+
+LinkageTemplateLoadResult readLinkageTemplate(const QByteArray& bytes, const QString& label)
+{
+    return readTemplate(bytes, label, true);
 }
 
 LinkageTemplateLoadResult readLinkageTemplateFile(const QString& path)
@@ -278,6 +328,11 @@ QByteArray writeLinkageTemplate(const LinkageTemplate& templ)
         QJsonObject object;
         object.insert(QStringLiteral("token"), corner.token);
         object.insert(QStringLiteral("label"), corner.label);
+        // An empty role is written out when the corner said so on purpose: "this
+        // axle is not steered" is an answer, and losing it would read as a
+        // template that never heard the question.
+        if (!corner.steeringRack.isEmpty() || corner.steeringStated)
+            object.insert(QStringLiteral("steering"), corner.steeringRack);
         corners.append(object);
     }
     if (!corners.isEmpty()) root.insert(QStringLiteral("corners"), corners);
@@ -330,12 +385,280 @@ QByteArray builtinLinkageTemplateBytes()
 
 LinkageTemplate builtinLinkageTemplate()
 {
-    const LinkageTemplateLoadResult result = readLinkageTemplate(
-        builtinLinkageTemplateBytes(), QStringLiteral("the built-in linkage template"));
+    const LinkageTemplateLoadResult result =
+        readTemplate(builtinLinkageTemplateBytes(),
+                     QStringLiteral("the built-in linkage template"), false);
     return result.ok() ? *result.templ : LinkageTemplate{};
 }
 
-MechanismTemplate builtinMechanismTemplate() { return builtinLinkageTemplate().mechanism; }
+MechanismTemplate builtinMechanismTemplate() { return builtinMechanism(); }
+
+namespace {
+
+/// The answer for one corner: what its steering role should say, and whether it
+/// should say anything at all.
+struct WantedSteering {
+    QString rack;
+    bool stated = false;
+
+    bool wanted() const { return stated || !rack.isEmpty(); }
+};
+
+/// The index just past the value that starts at @p open, which is a '{', '[' or
+/// '"'. Strings and their escapes are respected, which is the whole difficulty:
+/// a brace inside a note would otherwise end the object early.
+int endOfValue(const QByteArray& text, int open)
+{
+    const char first = text.at(open);
+    if (first == '"') {
+        for (int i = open + 1; i < text.size(); ++i) {
+            if (text.at(i) == '\\') {
+                ++i;
+                continue;
+            }
+            if (text.at(i) == '"') return i + 1;
+        }
+        return -1;
+    }
+    if (first != '{' && first != '[') return -1;
+
+    const char close = (first == '{') ? '}' : ']';
+    int depth = 0;
+    for (int i = open; i < text.size(); ++i) {
+        const char c = text.at(i);
+        if (c == '"') {
+            const int after = endOfValue(text, i);
+            if (after < 0) return -1;
+            i = after - 1;
+            continue;
+        }
+        if (c == first) ++depth;
+        else if (c == close && --depth == 0) return i + 1;
+    }
+    return -1;
+}
+
+/// Where the "corners" array starts and ends in @p text, or {-1, -1}.
+std::pair<int, int> findCornersArray(const QByteArray& text)
+{
+    const QByteArray key = QByteArrayLiteral("\"corners\"");
+    for (int at = text.indexOf(key); at >= 0; at = text.indexOf(key, at + 1)) {
+        int i = at + key.size();
+        while (i < text.size() && std::isspace(static_cast<unsigned char>(text.at(i)))) ++i;
+        if (i >= text.size() || text.at(i) != ':') continue; // a note mentioning the word
+        ++i;
+        while (i < text.size() && std::isspace(static_cast<unsigned char>(text.at(i)))) ++i;
+        if (i >= text.size() || text.at(i) != '[') continue;
+        const int end = endOfValue(text, i);
+        if (end < 0) return { -1, -1 };
+        return { i, end };
+    }
+    return { -1, -1 };
+}
+
+/// The spans of the array's elements, in the order they are written.
+std::vector<std::pair<int, int>> elementSpans(const QByteArray& text, int arrayStart, int arrayEnd)
+{
+    std::vector<std::pair<int, int>> spans;
+    for (int i = arrayStart + 1; i < arrayEnd - 1;) {
+        const char c = text.at(i);
+        if (std::isspace(static_cast<unsigned char>(c)) || c == ',') {
+            ++i;
+            continue;
+        }
+        const int end = endOfValue(text, i);
+        if (end < 0) return {};
+        spans.push_back({ i, end });
+        i = end;
+    }
+    return spans;
+}
+
+/// The whitespace at the start of the line @p at sits on, for writing a new
+/// entry that lines up with the ones around it.
+QByteArray indentAt(const QByteArray& text, int at)
+{
+    int lineStart = at;
+    while (lineStart > 0 && text.at(lineStart - 1) != '\n') --lineStart;
+    int i = lineStart;
+    while (i < text.size() && (text.at(i) == ' ' || text.at(i) == '\t')) ++i;
+    return text.mid(lineStart, i - lineStart);
+}
+
+/// One corner object with its steering entry set, removed, or left alone --
+/// edited as text, so everything else in it stays exactly as the user wrote it.
+QByteArray withSteering(const QByteArray& object, const WantedSteering& answer)
+{
+    const QByteArray key = QByteArrayLiteral("\"steering\"");
+    const int at = object.indexOf(key);
+
+    if (at >= 0) {
+        // Replace the value in place, or take the whole entry out.
+        int valueStart = at + key.size();
+        while (valueStart < object.size()
+               && (std::isspace(static_cast<unsigned char>(object.at(valueStart)))
+                   || object.at(valueStart) == ':'))
+            ++valueStart;
+        const int valueEnd = endOfValue(object, valueStart);
+        if (valueEnd < 0) return {};
+
+        QByteArray out = object;
+        if (answer.wanted()) {
+            out.replace(valueStart, valueEnd - valueStart,
+                        QJsonValue(answer.rack).toString().toUtf8().prepend('"').append('"'));
+            return out;
+        }
+
+        // Out it comes, with the comma that joined it to its neighbour and any
+        // blank line it leaves behind.
+        int from = at;
+        while (from > 0 && std::isspace(static_cast<unsigned char>(out.at(from - 1)))) --from;
+        int to = valueEnd;
+        if (from > 0 && out.at(from - 1) == ',') {
+            --from; // it was not the first entry: its own comma goes with it
+        } else {
+            while (to < out.size() && std::isspace(static_cast<unsigned char>(out.at(to)))) ++to;
+            if (to < out.size() && out.at(to) == ',') ++to;
+        }
+        out.remove(from, to - from);
+        return out;
+    }
+
+    if (!answer.wanted()) return object;
+
+    // No entry yet: written in just before the closing brace, in the shape the
+    // object is already written in.
+    const int close = object.lastIndexOf('}');
+    if (close < 0) return {};
+    int insertAt = close;
+    while (insertAt > 0 && std::isspace(static_cast<unsigned char>(object.at(insertAt - 1))))
+        --insertAt;
+
+    QByteArray entry = QByteArrayLiteral(", \"steering\": \"") + answer.rack.toUtf8() + '"';
+    if (object.contains('\n')) {
+        // A multi-line object gets a line of its own, lined up with the entry
+        // above it.
+        entry = QByteArrayLiteral(",\n") + indentAt(object, insertAt)
+                + QByteArrayLiteral("\"steering\": \"") + answer.rack.toUtf8() + '"';
+    }
+
+    QByteArray out = object;
+    out.insert(insertAt, entry);
+    return out;
+}
+
+/// @p bytes with the steering entries edited as text. Empty when the file is
+/// shaped in a way this cannot follow, which is the caller's signal to fall back
+/// on rewriting it.
+QByteArray spliceSteering(const QByteArray& bytes, const QJsonArray& parsed,
+                          const QHash<QString, WantedSteering>& wanted)
+{
+    const auto [arrayStart, arrayEnd] = findCornersArray(bytes);
+    if (arrayStart < 0) return {};
+
+    const std::vector<std::pair<int, int>> spans = elementSpans(bytes, arrayStart, arrayEnd);
+    if (spans.size() != static_cast<std::size_t>(parsed.size())) return {};
+
+    QByteArray out = bytes;
+    // Back to front, so an edit never moves the span of one not yet made.
+    for (int i = static_cast<int>(spans.size()) - 1; i >= 0; --i) {
+        const QJsonValue value = parsed.at(i);
+        const QString token = value.isString() ? value.toString()
+                                               : value.toObject()
+                                                     .value(QStringLiteral("token"))
+                                                     .toString();
+        const auto it = wanted.constFind(token);
+        if (it == wanted.constEnd()) continue; // a corner nobody said anything about
+
+        const auto [from, to] = spans[static_cast<std::size_t>(i)];
+        const QByteArray element = bytes.mid(from, to - from);
+        QByteArray replacement;
+        if (value.isString()) {
+            if (!it->wanted()) continue; // the shorthand had nothing to lose
+            // The shorthand cannot carry a role, so it grows into the long form.
+            replacement = QByteArrayLiteral("{ \"token\": \"") + token.toUtf8()
+                          + QByteArrayLiteral("\", \"label\": \"") + token.toUtf8()
+                          + QByteArrayLiteral("\", \"steering\": \"") + it->rack.toUtf8()
+                          + QByteArrayLiteral("\" }");
+        } else {
+            replacement = withSteering(element, *it);
+            if (replacement.isEmpty()) return {};
+        }
+        out.replace(from, to - from, replacement);
+    }
+    return out;
+}
+
+} // namespace
+
+QByteArray setTemplateSteering(const QByteArray& bytes, const std::vector<CornerSpec>& corners,
+                               QString* error)
+{
+    QJsonParseError parseError;
+    QJsonDocument document = QJsonDocument::fromJson(bytes, &parseError);
+    if (document.isNull() || !document.isObject()) {
+        if (error)
+            *error = tr("The template is not readable JSON: %1 (at offset %2)")
+                         .arg(parseError.errorString())
+                         .arg(parseError.offset);
+        return {};
+    }
+
+    // By token, because the order in the file is the user's and a corner they
+    // added by hand should keep its place.
+    QHash<QString, WantedSteering> wanted;
+    for (const CornerSpec& corner : corners)
+        wanted.insert(corner.token, WantedSteering{ corner.steeringRack, corner.steeringStated });
+
+    QJsonObject root = document.object();
+    const QJsonArray parsed = root.value(QStringLiteral("corners")).toArray();
+    QJsonArray out;
+    for (const QJsonValue& value : parsed) {
+        QJsonObject object;
+        if (value.isString()) {
+            // The shorthand cannot carry a steering role, so it grows into the
+            // long form -- and only when it has one to carry.
+            const QString token = value.toString();
+            const WantedSteering answer = wanted.value(token);
+            if (!answer.wanted()) {
+                out.append(value);
+                continue;
+            }
+            object.insert(QStringLiteral("token"), token);
+            object.insert(QStringLiteral("label"), token);
+        } else {
+            object = value.toObject();
+        }
+
+        const QString token = object.value(QStringLiteral("token")).toString();
+        const auto it = wanted.constFind(token);
+        // A corner nobody said anything about keeps whatever it had.
+        if (it != wanted.constEnd()) {
+            if (it->wanted())
+                object.insert(QStringLiteral("steering"), it->rack);
+            else
+                object.remove(QStringLiteral("steering"));
+        }
+        out.append(object);
+    }
+
+    root.insert(QStringLiteral("corners"), out);
+    document.setObject(root);
+    // Rewriting the file is the fallback, not the plan: QJsonDocument sorts every
+    // key alphabetically, which would shuffle a template somebody wrote by hand
+    // and lose the order their notes read in.
+    const QByteArray rewritten = document.toJson(QJsonDocument::Indented);
+
+    // The plan: edit the steering entries as text and leave every other byte
+    // where it was. What makes that safe is checking it afterwards -- the spliced
+    // file has to parse, and has to say exactly what the rewritten one says.
+    const QByteArray spliced = spliceSteering(bytes, parsed, wanted);
+    if (!spliced.isEmpty()) {
+        const QJsonDocument check = QJsonDocument::fromJson(spliced);
+        if (!check.isNull() && check == document) return spliced;
+    }
+    return rewritten;
+}
 
 QString linkageTemplateRelativePath() { return QStringLiteral("linkage/template.json"); }
 

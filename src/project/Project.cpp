@@ -9,6 +9,8 @@
 #include <QJsonObject>
 #include <QSaveFile>
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace suspkin {
@@ -28,6 +30,75 @@ QString isoOrEmpty(const QDateTime& time)
 QDateTime fromIso(const QJsonValue& value)
 {
     return value.isString() ? QDateTime::fromString(value.toString(), Qt::ISODate) : QDateTime();
+}
+
+QJsonObject writeSweepSettings(const SweepSettings& settings)
+{
+    QJsonObject sweep;
+    sweep.insert(QStringLiteral("bumpTravel"), settings.bumpTravel);
+    sweep.insert(QStringLiteral("reboundTravel"), settings.reboundTravel);
+    sweep.insert(QStringLiteral("bumpIncrement"), settings.bumpIncrement);
+    sweep.insert(QStringLiteral("rollAngle"), settings.rollAngle);
+    sweep.insert(QStringLiteral("rollIncrement"), settings.rollIncrement);
+    sweep.insert(QStringLiteral("steerTravel"), settings.steerTravel);
+    sweep.insert(QStringLiteral("steerIncrement"), settings.steerIncrement);
+    sweep.insert(QStringLiteral("rack"), settings.rackTravel);
+    return sweep;
+}
+
+SweepSettings readSweepSettings(const QJsonObject& sweep)
+{
+    SweepSettings settings;
+    const auto number = [&sweep](const QString& key, double fallback) {
+        return sweep.value(key).toDouble(fallback);
+    };
+    settings.bumpTravel = number(QStringLiteral("bumpTravel"), settings.bumpTravel);
+    settings.reboundTravel = number(QStringLiteral("reboundTravel"), settings.reboundTravel);
+    settings.bumpIncrement = number(QStringLiteral("bumpIncrement"), settings.bumpIncrement);
+    settings.rollAngle = number(QStringLiteral("rollAngle"), settings.rollAngle);
+    settings.rollIncrement = number(QStringLiteral("rollIncrement"), settings.rollIncrement);
+    settings.steerTravel = number(QStringLiteral("steerTravel"), settings.steerTravel);
+    settings.steerIncrement = number(QStringLiteral("steerIncrement"), settings.steerIncrement);
+    settings.rackTravel = number(QStringLiteral("rack"), settings.rackTravel);
+    return settings;
+}
+
+/// What a project written before the three sweeps had their own travel holds:
+/// one range, in whichever unit the sweep it was left on happened to be in.
+///
+/// It is folded back into that kind's own numbers rather than dropped, so
+/// reopening an older project lands on the travel it was last used with. The
+/// other two kinds keep their defaults, which is all the file has to say about
+/// them.
+SweepSettings legacySweepSettings(const QJsonObject& simulation, SweepKind kind)
+{
+    SweepSettings settings;
+    const double from = simulation.value(QStringLiteral("from")).toDouble(-25.0);
+    const double to = simulation.value(QStringLiteral("to")).toDouble(25.0);
+    const int steps = simulation.value(QStringLiteral("steps")).toInt(41);
+    settings.rackTravel = simulation.value(QStringLiteral("rack")).toDouble(0.0);
+
+    const double low = std::min(from, to);
+    const double high = std::max(from, to);
+    const double increment = steps > 1 ? (high - low) / double(steps - 1) : 1.0;
+    if (!(increment > 0.0)) return settings;
+
+    switch (kind) {
+    case SweepKind::Bump:
+        settings.reboundTravel = std::abs(low);
+        settings.bumpTravel = std::abs(high);
+        settings.bumpIncrement = increment;
+        break;
+    case SweepKind::Roll:
+        settings.rollAngle = std::max(std::abs(low), std::abs(high));
+        settings.rollIncrement = increment;
+        break;
+    case SweepKind::Steer:
+        settings.steerTravel = std::max(std::abs(low), std::abs(high));
+        settings.steerIncrement = increment;
+        break;
+    }
+    return settings;
 }
 
 QJsonObject assetToJson(const AssetRef& asset)
@@ -359,13 +430,16 @@ std::optional<Project> Project::open(const QString& manifestPath, QString* error
         state.axle = simulation.value(QStringLiteral("axle")).toString();
         state.position = simulation.value(QStringLiteral("position")).toDouble(0.0);
         state.measure = simulation.value(QStringLiteral("measure")).toString();
-        state.sweep.kind = sweepKindFromString(simulation.value(QStringLiteral("kind")).toString());
-        state.sweep.from = simulation.value(QStringLiteral("from")).toDouble(state.sweep.from);
-        state.sweep.to = simulation.value(QStringLiteral("to")).toDouble(state.sweep.to);
-        state.sweep.steps = simulation.value(QStringLiteral("steps")).toInt(state.sweep.steps);
-        state.sweep.rackTravel = simulation.value(QStringLiteral("rack")).toDouble(0.0);
+        state.kind = sweepKindFromString(simulation.value(QStringLiteral("kind")).toString());
+        const QJsonObject sweep = simulation.value(QStringLiteral("sweep")).toObject();
+        state.sweep = sweep.isEmpty()
+                          ? legacySweepSettings(simulation, state.kind)
+                          : readSweepSettings(sweep);
         state.animating = simulation.value(QStringLiteral("animating")).toBool(false);
+        state.animationSeconds =
+            simulation.value(QStringLiteral("animationSeconds")).toDouble(4.0);
         state.allAxles = simulation.value(QStringLiteral("allAxles")).toBool(true);
+        state.parametersOpen = simulation.value(QStringLiteral("parametersOpen")).toBool(false);
     }
 
     const QJsonObject window = root.value(QStringLiteral("window")).toObject();
@@ -452,14 +526,13 @@ bool Project::save(QString* error) const
     simulation.insert(QStringLiteral("active"), state.active);
     if (!state.axle.isEmpty()) simulation.insert(QStringLiteral("axle"), state.axle);
     if (!state.measure.isEmpty()) simulation.insert(QStringLiteral("measure"), state.measure);
-    simulation.insert(QStringLiteral("kind"), sweepKindToString(state.sweep.kind));
-    simulation.insert(QStringLiteral("from"), state.sweep.from);
-    simulation.insert(QStringLiteral("to"), state.sweep.to);
-    simulation.insert(QStringLiteral("steps"), state.sweep.steps);
-    simulation.insert(QStringLiteral("rack"), state.sweep.rackTravel);
+    simulation.insert(QStringLiteral("kind"), sweepKindToString(state.kind));
+    simulation.insert(QStringLiteral("sweep"), writeSweepSettings(state.sweep));
     simulation.insert(QStringLiteral("position"), state.position);
     simulation.insert(QStringLiteral("animating"), state.animating);
+    simulation.insert(QStringLiteral("animationSeconds"), state.animationSeconds);
     simulation.insert(QStringLiteral("allAxles"), state.allAxles);
+    simulation.insert(QStringLiteral("parametersOpen"), state.parametersOpen);
     view.insert(QStringLiteral("simulation"), simulation);
 
     root.insert(QStringLiteral("view"), view);

@@ -1,6 +1,8 @@
 #include "io/LinkageTemplate.h"
 #include "model/HardpointConfig.h"
 
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSet>
 #include <QTest>
 
@@ -39,7 +41,7 @@ QStringList frontCornerNames()
         QStringLiteral("F_Damper_I"),        QStringLiteral("F_Damper_O"),
         QStringLiteral("F_AntiRoll_Center"), QStringLiteral("F_AntiRoll_I"),
         QStringLiteral("F_AntiRoll_O"),      QStringLiteral("F_WheelCenter"),
-        QStringLiteral("F_ContactPatch"),
+        QStringLiteral("F_WheelAxis"),       QStringLiteral("F_ContactPatch"),
     };
 }
 
@@ -48,6 +50,15 @@ QStringList frontCornerNames()
 MirrorSpec suffixMirror()
 {
     return MirrorSpec{};
+}
+
+/// @p bytes with the mechanism block taken out: a template as it was written
+/// before the solver existed, which is what projects made then still hold.
+QByteArray withoutMechanism(const QByteArray& bytes)
+{
+    QJsonObject root = QJsonDocument::fromJson(bytes).object();
+    root.remove(QStringLiteral("mechanism"));
+    return QJsonDocument(root).toJson();
 }
 
 HardpointConfigMap inferFrontCorner()
@@ -78,6 +89,7 @@ private slots:
     void whatTheUprightCarriesIsDependentOnIt();
     void theFarSideIsInferredThroughTheMirrorRule();
     void aPointTheTemplateDoesNotNameIsLeftAlone();
+    void aTemplateWithoutAMechanismStillDescribesItsPoints();
     void aJointBetweenOneBodyAndItselfIsRefused();
     void aBushingIndexOutsideTheRangeIsRefused();
     void aBodyThatIsNotInTheCatalogIsRefused();
@@ -159,6 +171,21 @@ void TestHardpointConfig::anOuterJointNamesBothMembersThatMeetThere()
     QCOMPARE(upper.type, PointType::Solved);
     QCOMPARE(upper.part1, kUpperWishbone);
     QCOMPARE(upper.part2, kUpright);
+
+    // Part 1 is always the member the point belongs to and Part 2 what it is
+    // attached to, whichever order the template happens to list its parts in.
+    // The upright is drawn through the tie rod end before the tie rod is.
+    const HardpointConfig tieRod = config.value(QStringLiteral("F_TieRod_O"));
+    QCOMPARE(tieRod.part1, QStringLiteral("Tie rod"));
+    QCOMPARE(tieRod.part2, kUpright);
+
+    const HardpointConfig damper = config.value(QStringLiteral("F_Damper_O"));
+    QCOMPARE(damper.part1, QStringLiteral("Damper"));
+    QCOMPARE(damper.part2, QStringLiteral("Rocker"));
+
+    const HardpointConfig dropLink = config.value(QStringLiteral("F_AntiRoll_O"));
+    QCOMPARE(dropLink.part1, QStringLiteral("Anti-roll drop link"));
+    QCOMPARE(dropLink.part2, QStringLiteral("Rocker"));
 }
 
 void TestHardpointConfig::thePushrodPicksUpOnTheArmItsMountNames()
@@ -190,6 +217,12 @@ void TestHardpointConfig::whatTheUprightCarriesIsDependentOnIt()
     const HardpointConfig patch = config.value(QStringLiteral("F_ContactPatch"));
     QCOMPARE(patch.type, PointType::Dependent);
     QCOMPARE(patch.part1, kWheel);
+
+    // The axis point is bolted to the wheel as much as its centre is: it is a
+    // direction the upright carries, not something the solve positions.
+    const HardpointConfig axis = config.value(QStringLiteral("F_WheelAxis"));
+    QCOMPARE(axis.type, PointType::Dependent);
+    QCOMPARE(axis.part1, kWheel);
 }
 
 void TestHardpointConfig::theFarSideIsInferredThroughTheMirrorRule()
@@ -218,6 +251,27 @@ void TestHardpointConfig::aPointTheTemplateDoesNotNameIsLeftAlone()
 
     // An empty row is honest; a guessed one is not.
     QVERIFY(!config.contains(QStringLiteral("Battery_Mount")));
+}
+
+void TestHardpointConfig::aTemplateWithoutAMechanismStillDescribesItsPoints()
+{
+    // A project made before the solver existed holds a template with parts and
+    // no mechanism. Its parts draw, so it looks fine, while nothing knows what
+    // any point is for -- which is a whole table reading "unassigned".
+    const LinkageTemplateLoadResult result = readLinkageTemplate(
+        withoutMechanism(builtinLinkageTemplateBytes()), QStringLiteral("an old template"));
+    QVERIFY2(result.ok(), qPrintable(result.error));
+    QVERIFY(result.templ->mechanismAssumed);
+
+    const HardpointConfigMap config =
+        inferHardpointConfig(tableOf(frontCornerNames()), *result.templ, suffixMirror());
+
+    // Every relationship the newer template would have found, this one finds too.
+    QCOMPARE(config, inferFrontCorner());
+    QCOMPARE(config.value(QStringLiteral("F_LCA_IF")).type, PointType::ToBody);
+    QCOMPARE(config.value(QStringLiteral("F_LCA_O")).part1, kLowerWishbone);
+    QCOMPARE(config.value(QStringLiteral("F_LCA_O")).part2, kUpright);
+    QCOMPARE(config.value(QStringLiteral("F_WheelCenter")).type, PointType::Dependent);
 }
 
 void TestHardpointConfig::aJointBetweenOneBodyAndItselfIsRefused()

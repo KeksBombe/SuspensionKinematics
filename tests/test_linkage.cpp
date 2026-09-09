@@ -2,6 +2,9 @@
 #include "model/Mechanism.h"
 #include "model/Linkage.h"
 
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -40,7 +43,7 @@ QStringList frontCornerNames()
         QStringLiteral("F_Damper_I"),        QStringLiteral("F_Damper_O"),
         QStringLiteral("F_AntiRoll_Center"), QStringLiteral("F_AntiRoll_I"),
         QStringLiteral("F_AntiRoll_O"),      QStringLiteral("F_WheelCenter"),
-        QStringLiteral("F_ContactPatch"),
+        QStringLiteral("F_WheelAxis"),       QStringLiteral("F_ContactPatch"),
     };
 }
 
@@ -76,6 +79,9 @@ private slots:
     void somethingThatIsNotATemplateIsRejected();
 
     void theBuiltinTemplateSaysWhichPointsMakeTheMechanism();
+    void theBuiltinTemplateSteersTheFrontAxleAndNotTheRear();
+    void aCornersSteeringSurvivesAWriteAndAReadBack();
+    void patchingTheSteeringLeavesTheRestOfTheFileAlone();
     void theMechanismSurvivesAWriteAndAReadBack();
     void aTemplateWithoutAMechanismStillLoads();
 };
@@ -308,6 +314,9 @@ void TestLinkage::theBuiltinTemplateSaysWhichPointsMakeTheMechanism()
     QCOMPARE(mechanism.upperOuter, QStringLiteral("{corner}_UCA_O"));
     QCOMPARE(mechanism.tieRodOutboard, QStringLiteral("{corner}_TieRod_O"));
     QCOMPARE(mechanism.wheelCenter, QStringLiteral("{corner}_WheelCenter"));
+    // Which way the wheel points, which is what turns the model with the
+    // steering instead of leaving it pointing straight ahead all day.
+    QCOMPARE(mechanism.wheelAxis, QStringLiteral("{corner}_WheelAxis"));
     QVERIFY(mechanism.hasRocker());
     QVERIFY(mechanism.hasAntiRoll());
 
@@ -325,6 +334,128 @@ void TestLinkage::theBuiltinTemplateSaysWhichPointsMakeTheMechanism()
                  qPrintable(name));
 }
 
+void TestLinkage::theBuiltinTemplateSteersTheFrontAxleAndNotTheRear()
+{
+    const LinkageTemplate templ = builtinLinkageTemplate();
+    QVERIFY(templ.steeringDeclared());
+    QCOMPARE(templ.corners.size(), std::size_t(2));
+
+    // Which axle has a rack is the corner's own business: the mechanism block is
+    // one block for every corner and cannot say it.
+    QCOMPARE(templ.corners[0].token, QStringLiteral("F"));
+    QCOMPARE(templ.corners[0].steeringRack, QStringLiteral("{corner}_TieRod_I"));
+    QCOMPARE(templ.corners[1].token, QStringLiteral("R"));
+    QVERIFY(templ.corners[1].steeringRack.isEmpty());
+}
+
+void TestLinkage::aCornersSteeringSurvivesAWriteAndAReadBack()
+{
+    const LinkageTemplate original = builtinLinkageTemplate();
+    const LinkageTemplateLoadResult reloaded =
+        readLinkageTemplate(writeLinkageTemplate(original), QStringLiteral("round trip"));
+    QVERIFY2(reloaded.ok(), qPrintable(reloaded.error));
+    QCOMPARE(reloaded.templ->corners[0].steeringRack, original.corners[0].steeringRack);
+    QVERIFY(reloaded.templ->corners[1].steeringRack.isEmpty());
+
+    // A corner written as a bare string is a token and nothing else, so it names
+    // no rack -- and a template of nothing but those says nothing at all, which
+    // is what leaves an older project's axles steering.
+    const QByteArray shorthand = R"({
+        "format": "suspkin-linkage-template",
+        "formatVersion": 1,
+        "name": "shorthand corners",
+        "corners": ["F", "R"],
+        "parts": [ { "id": "link", "points": ["F_TieRod_I", "F_TieRod_O"] } ]
+    })";
+    const LinkageTemplateLoadResult bare =
+        readLinkageTemplate(shorthand, QStringLiteral("shorthand"));
+    QVERIFY2(bare.ok(), qPrintable(bare.error));
+    QVERIFY(!bare.templ->steeringDeclared());
+}
+
+void TestLinkage::patchingTheSteeringLeavesTheRestOfTheFileAlone()
+{
+    // A template with a note, a part and a key this version knows nothing about.
+    const QByteArray before = R"({
+        "format": "suspkin-linkage-template",
+        "formatVersion": 1,
+        "name": "somebody's own template",
+        "notes": ["hand written, do not lose me"],
+        "somethingFromTheFuture": { "keep": "me" },
+        "corners": [
+            { "token": "F", "label": "Front", "colour": "red" },
+            "R"
+        ],
+        "parts": [ { "id": "link", "points": ["F_TieRod_I", "F_TieRod_O"] } ]
+    })";
+
+    std::vector<CornerSpec> corners;
+    CornerSpec front;
+    front.token = QStringLiteral("F");
+    front.steeringRack = QStringLiteral("{corner}_TieRod_I");
+    corners.push_back(front);
+    CornerSpec rear;
+    rear.token = QStringLiteral("R");
+    corners.push_back(rear); // no rack: left as the shorthand it was
+
+    QString error;
+    const QByteArray after = setTemplateSteering(before, corners, &error);
+    QVERIFY2(!after.isEmpty(), qPrintable(error));
+
+    // Byte for byte outside the corners array: the notes keep their order, the
+    // unknown key keeps its shape, and nothing is reformatted. A file somebody
+    // edits by hand has to survive being edited by us.
+    QVERIFY(after.contains(R"("somethingFromTheFuture": { "keep": "me" })"));
+    QVERIFY(after.contains(R"("notes": ["hand written, do not lose me"])"));
+    QVERIFY(after.contains(
+        R"({ "token": "F", "label": "Front", "colour": "red", "steering": "{corner}_TieRod_I" })"));
+    QVERIFY(after.indexOf("\"name\"") < after.indexOf("\"notes\""));
+    QVERIFY(after.indexOf("\"notes\"") < after.indexOf("\"corners\""));
+    QVERIFY(after.indexOf("\"corners\"") < after.indexOf("\"parts\""));
+
+    const QJsonObject root = QJsonDocument::fromJson(after).object();
+    // The file is the user's: nothing but the steering was touched.
+    QCOMPARE(root.value(QStringLiteral("name")).toString(),
+             QStringLiteral("somebody's own template"));
+    QCOMPARE(root.value(QStringLiteral("notes")).toArray().first().toString(),
+             QStringLiteral("hand written, do not lose me"));
+    QCOMPARE(root.value(QStringLiteral("somethingFromTheFuture"))
+                 .toObject()
+                 .value(QStringLiteral("keep"))
+                 .toString(),
+             QStringLiteral("me"));
+
+    const QJsonArray patched = root.value(QStringLiteral("corners")).toArray();
+    const QJsonObject frontOut = patched.at(0).toObject();
+    QCOMPARE(frontOut.value(QStringLiteral("steering")).toString(),
+             QStringLiteral("{corner}_TieRod_I"));
+    QCOMPARE(frontOut.value(QStringLiteral("colour")).toString(), QStringLiteral("red"));
+    // A corner that gains no rack keeps the shorthand it was written in.
+    QVERIFY(patched.at(1).isString());
+
+    const LinkageTemplateLoadResult reread =
+        readLinkageTemplate(after, QStringLiteral("patched"));
+    QVERIFY2(reread.ok(), qPrintable(reread.error));
+    QVERIFY(reread.templ->steeringDeclared());
+    QCOMPARE(reread.templ->corners[0].steeringRack, QStringLiteral("{corner}_TieRod_I"));
+    QVERIFY(reread.templ->corners[1].steeringRack.isEmpty());
+
+    // And a rack taken away again leaves the file without the key -- and with
+    // the corner otherwise exactly as it was before any of this.
+    corners[0].steeringRack.clear();
+    corners[0].steeringStated = false;
+    const QByteArray cleared = setTemplateSteering(after, corners, &error);
+    QVERIFY2(!cleared.isEmpty(), qPrintable(error));
+    QVERIFY(cleared.contains(R"({ "token": "F", "label": "Front", "colour": "red" })"));
+    QVERIFY(!QJsonDocument::fromJson(cleared)
+                 .object()
+                 .value(QStringLiteral("corners"))
+                 .toArray()
+                 .at(0)
+                 .toObject()
+                 .contains(QStringLiteral("steering")));
+}
+
 void TestLinkage::theMechanismSurvivesAWriteAndAReadBack()
 {
     const LinkageTemplate original = builtinLinkageTemplate();
@@ -338,14 +469,18 @@ void TestLinkage::theMechanismSurvivesAWriteAndAReadBack()
     QCOMPARE(after.pushrodMount, before.pushrodMount);
     QCOMPARE(after.lowerRear, before.lowerRear);
     QCOMPARE(after.antiRollArmPivot, before.antiRollArmPivot);
+    QCOMPARE(after.wheelAxis, before.wheelAxis);
     QCOMPARE(after.contactPatch, before.contactPatch);
 }
 
 void TestLinkage::aTemplateWithoutAMechanismStillLoads()
 {
     // The block is additive: a template written before the solver existed is a
-    // perfectly good template, it just cannot be simulated until it says which
-    // point is which.
+    // perfectly good template, it just does not say which point is which. It is
+    // read with the built-in roles assumed, because a file like this is almost
+    // certainly a copy of the built-in template -- and without them nothing
+    // downstream can do anything at all: no corner solves, and every hardpoint
+    // in the table reads "unassigned".
     const QByteArray bare = R"({
         "format": "suspkin-linkage-template",
         "formatVersion": 1,
@@ -356,10 +491,13 @@ void TestLinkage::aTemplateWithoutAMechanismStillLoads()
         readLinkageTemplate(bare, QStringLiteral("bare template"));
     QVERIFY2(result.ok(), qPrintable(result.error));
     QVERIFY(!result.templ->isEmpty());
-    QVERIFY(!result.templ->canSimulate());
-    QVERIFY(result.templ->mechanism.isEmpty());
+    QVERIFY(result.templ->canSimulate());
+    QCOMPARE(result.templ->mechanism.lowerOuter, builtinMechanismTemplate().lowerOuter);
+    // Flagged, because it is a guess and not the user's own statement.
+    QVERIFY(result.templ->mechanismAssumed);
 
-    // And there is somewhere to fall back to.
+    // A template that does say so keeps what it says, and is not flagged.
+    QVERIFY(!builtinLinkageTemplate().mechanismAssumed);
     QVERIFY(!builtinMechanismTemplate().isEmpty());
 }
 

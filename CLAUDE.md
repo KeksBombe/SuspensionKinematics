@@ -142,9 +142,13 @@ hardpoint dock is the one place all of that is edited.
 - `inferHardpointConfig()` fills a table in from the template -- types from the
   `mechanism` block, bodies from the parts the template actually draws through
   each point -- so the configuration and the linkage cannot disagree about what a
-  corner is made of. `fillMissingConfig()` never touches an entry that already
-  exists, *including an empty one*: that is how "the user cleared this row" is
-  told apart from "nobody has got to it yet".
+  corner is made of. On a solved joint, Part 1 is the member the point belongs to
+  (the body it shares with the far end of its own link) and Part 2 is what that
+  member is attached to, so a tie rod end reads "tie rod, upright" rather than
+  whichever way round the template happened to list its parts.
+- `fillMissingConfig()` never touches an entry that already exists, *including an
+  empty one*: that is how "the user cleared this row" is told apart from "nobody
+  has got to it yet".
 - `validateHardpointConfig()` is pure and lives in the core. `HardpointModel::setData()`
   refuses an **error** before the store changes and reports it through
   `editRejected()`; a **warning** is stored and shown as a dot on the row, because
@@ -186,6 +190,48 @@ as `:/templates/...` so the tests read the same bytes the application ships.
 - A project without a template gets the built-in one written in on open
   (`installBuiltinLinkageTemplate()`), so it becomes an ordinary project file the
   user can edit. A template that fails to parse is *not* repaired by overwriting.
+- `mechanism.upright.wheelAxis` is a second point on the **wheel's own axis of
+  rotation** (`{corner}_WheelAxis`), rigid with the upright. It is what says
+  which way the wheel points -- static toe, which no other hardpoint in a table
+  can state, and static camber with it -- and it is what the wheel *model* is
+  turned by. With it named, `mechanism.upright.contactPatch` is optional: the
+  patch is **computed**, a tyre radius from the wheel centre straight down the
+  wheel's own plane (`contactPatchFor()`), and it is recomputed at every pose
+  rather than carried rigidly, because a tyre stays on the road while the wheel
+  leans. What a named patch supplies is the **height of the ground**, for a
+  workbook measured from a chassis datum; without one the ground is `z = 0`.
+  With no axis point named, the old rule stands -- the axis is inferred from the
+  patch under the wheel centre, zero toe assumed -- and the computed patch comes
+  out exactly where the workbook put it, so nothing about an older project moves.
+- **Which axle has a steering rack is the corner's business, not a point's.**
+  A `corners` entry may name `"steering"`: the hardpoint that axle's rack drives
+  (the inboard tie rod end, with `{corner}` still in it). An axle that names none
+  is not steered -- rack travel leaves its toe link alone and the analysis dock
+  does not offer it a steer sweep. The compatibility rule is the whole of it:
+  **a template that says nothing anywhere leaves every axle steered**
+  (`LinkageTemplate::steeringDeclared()`), which is what every project written
+  before the role existed relies on; one that says something is taken literally.
+  `CornerSpec::steeringStated` is why "no axle on this car steers" survives a
+  reload instead of reading as a template that was never asked.
+  This is not a `PointType`: both ends of a toe link are bolted to something on
+  either axle, and what tells a rack from a bracket is the car, not the joint.
+  `AxleSolver::build()` puts the corner's answer into `MechanismTemplate::
+  steeringRack` before instantiating, so it goes through the same `{corner}`
+  substitution and the same mirror rule as every other role.
+- **Parts > Steering...** edits it, and the template is *patched* rather than
+  rewritten (`setTemplateSteering()`) for the same reason `writeHardpointsXlsx()`
+  splices a workbook: the file is the user's, and notes, parts and keys a later
+  release adds have to come out the other side. A project whose template
+  predates the role and is recognisably the built-in one gets the answer written
+  in on open (`MainWindow::adoptTemplateSteering()`); one that is somebody's own
+  is left alone and said so about in the status line.
+- A template with **no `mechanism` block** -- one written before the solver
+  existed, which is what older projects still hold -- is read with the built-in
+  mechanism assumed and `LinkageTemplate::mechanismAssumed` set. Without it the
+  parts draw while nothing else works: no corner solves, and every row of the
+  hardpoint table reads "unassigned". The fallback lives in the *reader* so that
+  every consumer sees the same roles; `builtinLinkageTemplate()` is read with it
+  disabled, so it can never be asked to fall back to itself.
 
 ## Wheels
 
@@ -196,6 +242,16 @@ each of four hardpoints the user picks. The placement is pure and testable:
 - The `WheelSpec` the project stores names *hardpoints*, not coordinates, so a
   wheel centre that gets edited in the table takes its wheel with it
   (`rebuildWheels()` is called from the coordinate-edit path for that reason).
+- **A wheel is bolted to its upright, so it turns with it.** `WheelPlacement`
+  carries a rotation as well as a centre: `MainWindow::wheelRotations()` reads
+  `CornerPose::uprightMotion` out of the current poses, keyed by
+  `CornerPose::wheelCenterName`, and `orientWheels()` puts it on the placements.
+  Identity when nothing is being simulated, which is the model as its CAD file
+  drew it. Without this the models slide about the car on steering lock without
+  ever pointing anywhere -- which is what they used to do.
+- The mirror comes *before* the rotation in `wheelTransform()`. The rotation is
+  a real one, measured on that corner of the car; mirroring it would steer the
+  far wheel the wrong way.
 - **The corner decides which side a copy is on, not the sign of y.** The user
   says which point is the front left one. `WheelModelSide` says which side the
   models were drawn for, and the copies on the other side are mirrored in Y --

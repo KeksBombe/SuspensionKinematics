@@ -262,10 +262,36 @@ HardpointConfigMap inferHardpointConfig(const HardpointTable& table, const Linka
     const auto grounded = [&](const QString& name) {
         assign(name, PointType::ToBody, bodiesAt(name).value(0), BodyCatalog::ground());
     };
-    // A solved joint is where two members meet, and both are drawn through it.
-    const auto solved = [&](const QString& name) {
+    /// The member @p name belongs to: the one body it shares with @p otherEnd,
+    /// the far end of its own link or arm. Empty when the two share nothing,
+    /// which is what a table missing half a corner looks like.
+    const auto memberOf = [&](const QString& name, const QString& otherEnd) {
         const QStringList at = bodiesAt(name);
-        assign(name, PointType::Solved, at.value(0), at.value(1));
+        const QStringList far = bodiesAt(otherEnd);
+        for (const QString& body : at)
+            if (far.contains(body)) return body;
+        return QString();
+    };
+
+    /// A solved joint is where two members meet. Part 1 is the one this point
+    /// belongs to and Part 2 is what it is attached to, always in that order --
+    /// a tie rod end reads "tie rod, upright" for the same reason a lower ball
+    /// joint reads "lower wishbone, upright", rather than one of each way round
+    /// depending on which part the template happened to list first.
+    const auto solved = [&](const QString& name, const QString& otherEnd) {
+        const QStringList at = bodiesAt(name);
+        const QString member = memberOf(name, otherEnd);
+        if (member.isEmpty()) {
+            assign(name, PointType::Solved, at.value(0), at.value(1));
+            return;
+        }
+        QString attached;
+        for (const QString& body : at) {
+            if (body == member) continue;
+            attached = body;
+            break;
+        }
+        assign(name, PointType::Solved, member, attached);
     };
     const auto dependent = [&](const QString& name, const QString& carrier) {
         const QStringList at = bodiesAt(name);
@@ -290,28 +316,23 @@ HardpointConfigMap inferHardpointConfig(const HardpointTable& table, const Linka
             grounded(mechanism.damperInboard);
             grounded(mechanism.antiRollArmPivot);
 
-            solved(mechanism.lowerOuter);
-            solved(mechanism.upperOuter);
-            solved(mechanism.tieRodOutboard);
-            solved(mechanism.pushrodInner);
-            solved(mechanism.damperOutboard);
-            solved(mechanism.antiRollRocker);
-            solved(mechanism.antiRollArmOuter);
+            // Each of these is paired with the far end of its own member, which
+            // is what says which of the two bodies at the joint is which.
+            solved(mechanism.lowerOuter, mechanism.lowerFront);
+            solved(mechanism.upperOuter, mechanism.upperFront);
+            solved(mechanism.tieRodOutboard, mechanism.tieRodInboard);
+            solved(mechanism.pushrodInner, mechanism.pushrodOuter);
+            solved(mechanism.damperOutboard, mechanism.damperInboard);
+            solved(mechanism.antiRollRocker, mechanism.antiRollArmOuter);
+            solved(mechanism.antiRollArmOuter, mechanism.antiRollRocker);
 
             // The pushrod's outer end is the one place where what the template
             // draws and what the mechanism means come apart: a "pickup" member
             // is a way of showing which arm carries the rod, not a body. The
             // mount says which body it really is.
             {
-                const QStringList outer = bodiesAt(mechanism.pushrodOuter);
-                const QStringList inner = bodiesAt(mechanism.pushrodInner);
-                QString rod;
-                for (const QString& body : outer) {
-                    if (!inner.contains(body)) continue;
-                    rod = body; // the body both ends of the rod belong to
-                    break;
-                }
-                if (rod.isEmpty()) rod = outer.value(0);
+                QString rod = memberOf(mechanism.pushrodOuter, mechanism.pushrodInner);
+                if (rod.isEmpty()) rod = bodiesAt(mechanism.pushrodOuter).value(0);
 
                 QString mount;
                 switch (mechanism.pushrodMount) {
@@ -327,6 +348,7 @@ HardpointConfigMap inferHardpointConfig(const HardpointTable& table, const Linka
             // first body drawn through the wheel centre.
             const QString upright = bodiesAt(mechanism.wheelCenter).value(0);
             dependent(mechanism.wheelCenter, upright);
+            dependent(mechanism.wheelAxis, upright);
             dependent(mechanism.contactPatch, upright);
             for (const QString& carried : mechanism.carried) dependent(carried, upright);
         }

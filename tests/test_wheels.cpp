@@ -63,6 +63,9 @@ private slots:
     void mirrorsTheSideTheModelIsNotDrawnFor();
     void mirrorsNothingForASymmetricModel();
     void putsTheModelCentreOnTheHardpoint();
+    void turnsEachWheelByItsOwnUprightsRotation();
+    void turnsTheModelAboutTheWheelCentre();
+    void turnsTheFarSideByTheRealRotationAndNotItsMirrorImage();
     void placesByTheModelsOwnOriginWhenAsked();
     void mirrorsAboutThePlaneThroughTheAnchor();
     void boundsCoverEveryPlacedCopy();
@@ -163,6 +166,64 @@ void TestWheels::putsTheModelCentreOnTheHardpoint()
     const Aabb placed = transformedBounds(model, transform);
     QCOMPARE(placed.center(), placement.center);
     QCOMPARE(placed.extent(), model.extent());
+}
+
+void TestWheels::turnsEachWheelByItsOwnUprightsRotation()
+{
+    std::vector<WheelPlacement> placements = resolveWheels(fullSpec(), sample());
+    QCOMPARE(placements.size(), std::size_t(4));
+
+    WheelRotations rotations;
+    rotations.insert(QStringLiteral("F_WheelCenter"),
+                     QQuaternion::fromAxisAndAngle(0.0f, 0.0f, 1.0f, 8.0f));
+    orientWheels(placements, rotations);
+
+    // By the name of the hardpoint it is centred on, the same way a solved pose
+    // is laid over the table.
+    QVERIFY(!placements[0].rotation.isIdentity());
+    // A corner nobody said anything about stays where its CAD file drew it,
+    // rather than borrowing the angle of the wheel next to it.
+    for (std::size_t index = 1; index < placements.size(); ++index)
+        QVERIFY(placements[index].rotation.isIdentity());
+}
+
+void TestWheels::turnsTheModelAboutTheWheelCentre()
+{
+    WheelPlacement placement;
+    placement.center = QVector3D(800.0f, 600.0f, 230.0f);
+    // A quarter turn about z: steering lock, exaggerated until it is exact.
+    placement.rotation = QQuaternion::fromAxisAndAngle(0.0f, 0.0f, 1.0f, 90.0f);
+
+    const Aabb model = offCentreModel();
+    const QMatrix4x4 transform = wheelTransform(placement, model, true);
+
+    // The hardpoint is the pivot: the wheel turns, it does not walk off it.
+    const QVector3D turned = transform.map(model.center());
+    QVERIFY(turned.distanceToPoint(placement.center) < 1e-3f);
+
+    // And the axle really has swung: a point an axle's length outboard in the
+    // model ends up an axle's length forward on the car.
+    const QVector3D outboard = transform.map(model.center() + QVector3D(0.0f, 150.0f, 0.0f));
+    QVERIFY(outboard.distanceToPoint(placement.center + QVector3D(-150.0f, 0.0f, 0.0f)) < 1e-3f);
+}
+
+void TestWheels::turnsTheFarSideByTheRealRotationAndNotItsMirrorImage()
+{
+    WheelPlacement placement;
+    placement.center = QVector3D(800.0f, -600.0f, 230.0f);
+    placement.mirrored = true; // a left-hand model on the right of the car
+    placement.rotation = QQuaternion::fromAxisAndAngle(0.0f, 0.0f, 1.0f, 90.0f);
+
+    const Aabb model = offCentreModel();
+    const QMatrix4x4 transform = wheelTransform(placement, model, true);
+    QVERIFY(transform.map(model.center()).distanceToPoint(placement.center) < 1e-3f);
+
+    // The model is mirrored, so its outboard direction is already -y before the
+    // upright's own turn is applied on top. That turn is this corner's, measured
+    // on the car -- turning it the other way is how a mirrored wheel ends up
+    // steering into the kerb while the other one steers away from it.
+    const QVector3D outboard = transform.map(model.center() + QVector3D(0.0f, 150.0f, 0.0f));
+    QVERIFY(outboard.distanceToPoint(placement.center + QVector3D(150.0f, 0.0f, 0.0f)) < 1e-3f);
 }
 
 void TestWheels::placesByTheModelsOwnOriginWhenAsked()

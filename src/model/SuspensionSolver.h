@@ -19,6 +19,30 @@ struct PosedPoint {
     Vec3 position;
 };
 
+/// The unit direction that runs straight down the wheel's own plane -- vertical
+/// with the wheel upright, leaning with it once there is camber. It is @c down
+/// with whatever of it lies along the spin axis taken out, which is what makes
+/// it stay in the plane of the tyre.
+///
+/// Zero when @p spinAxis is vertical, where a wheel lying flat has no lowest
+/// point on its rim to speak of.
+Vec3 wheelPlaneDown(const Vec3& spinAxis);
+
+/// Where the tyre touches: @p tireRadius from @p wheelCenter, straight down the
+/// wheel's own plane. The patch is not carried rigidly by the upright -- it
+/// walks around the tyre as the wheel leans, which is exactly what a real
+/// contact patch does and what makes scrub radius change with camber.
+Vec3 contactPatchFor(const Vec3& wheelCenter, const Vec3& spinAxis, double tireRadius);
+
+/// The tyre radius a wheel centre implies: how far it is above @p groundZ,
+/// measured down the wheel plane rather than straight down. This is how a corner
+/// with no contact patch in its workbook gets one -- the ground and the wheel's
+/// own axis are between them enough to say where it is.
+///
+/// @p ok is cleared when the wheel plane never reaches the ground, which is a
+/// wheel lying on its side or a centre already below it.
+double tireRadiusToGround(const Vec3& wheelCenter, const Vec3& spinAxis, double groundZ, bool* ok);
+
 /// What one corner looks like at one point in its travel.
 ///
 /// Angles are degrees, lengths millimetres -- the units the user reads and the
@@ -56,6 +80,18 @@ struct CornerPose {
     /// The wheel's spin axis, pointing outboard. Camber and toe are this vector
     /// in two different views.
     Vec3 spinAxis;
+
+    /// The rigid motion the upright made from its design position.
+    ///
+    /// Everything outboard rides it, the wheel *model* included -- which is why
+    /// it is published here rather than staying inside the solve: a mesh cannot
+    /// be laid over a table by name the way a hardpoint can, so it is turned by
+    /// this instead.
+    Rigid uprightMotion;
+    /// Which hardpoint the wheel centre is, so that a wheel model pinned to that
+    /// name can be found and turned by @ref uprightMotion without the caller
+    /// having to know the mechanism this pose came out of.
+    QString wheelCenterName;
 
     double wheelTravel = 0.0;      ///< mm the wheel centre rose from design
     double contactPatchRise = 0.0; ///< mm the contact patch rose from design
@@ -107,6 +143,12 @@ public:
                                             const HardpointTable& table, QString* error);
 
     const MechanismTemplate& mechanism() const { return m_mechanism; }
+
+    /// Whether a steering rack drives this corner. False for an axle whose toe
+    /// link inboard end is simply bolted to the chassis: it then ignores rack
+    /// travel entirely rather than being dragged sideways by a rack it has not
+    /// got.
+    bool isSteered() const { return m_steered; }
 
     /// Which side of the car this is, from the sign of the wheel centre's y.
     /// It is what camber and toe signs are read against: +y is left in ISO 8855.
@@ -165,6 +207,9 @@ private:
 
     MechanismTemplate m_mechanism;
     bool m_left = true;
+    /// The mechanism names a rack point, and it is the point this solve can
+    /// actually move: the inboard tie rod end.
+    bool m_steered = false;
 
     // Design coordinates, resolved once.
     Vec3 m_lowerFront, m_lowerRear, m_lowerOuter;
@@ -188,15 +233,26 @@ private:
     double m_pushrodLength = 0.0;
     double m_dropLinkLength = 0.0;
 
+    /// The table names a point on the wheel's axis, so the wheel's orientation
+    /// is measured rather than inferred from a patch under it.
+    bool m_hasWheelAxis = false;
+    Vec3 m_wheelAxisPoint;
+    /// The table names a contact patch of its own. It is still drawn and still
+    /// moved; what it supplies to the solve is the tyre radius.
     bool m_hasContactPatch = false;
+    /// A contact patch can be had at all -- named or computed. Only a wheel
+    /// lying flat has none.
+    bool m_hasGround = false;
+    double m_tireRadius = 0.0;
     bool m_hasRocker = false;
     bool m_hasDamper = false;
     bool m_hasAntiRoll = false;
 
-    /// The design wheel spin axis, outboard. Taken from the contact patch under
-    /// the wheel centre, so the workbook's own static camber survives; static
-    /// toe is not in a hardpoint table at all, which is why toe is reported as
-    /// a change as well as an absolute.
+    /// The design wheel spin axis, outboard. Taken from the wheel axis point when
+    /// the table has one -- which is the only way a table can state static toe --
+    /// and otherwise from the contact patch sitting under the wheel centre, which
+    /// carries the workbook's static camber but knows nothing about toe. That is
+    /// why toe is reported as a change as well as an absolute.
     Vec3 m_designSpinAxis;
     CornerPose m_design;
 };

@@ -44,8 +44,30 @@ struct MechanismTemplate {
     QString tieRodInboard;
     QString tieRodOutboard;
 
+    /// The hardpoint the steering rack drives, or empty for an axle with no
+    /// rack -- whose toe link inboard end is then simply bolted to the chassis
+    /// and stays there whatever a sweep asks for.
+    ///
+    /// Not read from the mechanism block, which is shared by every corner:
+    /// @ref AxleSolver fills it in per corner from that corner's own
+    /// @c CornerSpec before instantiating, so it goes through the same {corner}
+    /// substitution and the same mirror rule as every other name here.
+    QString steeringRack;
+
     /// What the upright carries besides its three joints.
     QString wheelCenter;
+    /// A second point on the wheel's own axis of rotation, rigid with the
+    /// upright. It is what says which way the wheel points: camber and toe are
+    /// this direction read in two different views, and it is what turns the
+    /// wheel model with the steering instead of leaving it standing.
+    ///
+    /// Either side of the wheel centre will do -- the direction is oriented
+    /// outboard whichever end of the axle was measured.
+    QString wheelAxis;
+    /// Where the tyre touches the ground. Optional, and no longer the thing the
+    /// wheel's orientation is read off: with @ref wheelAxis named it is computed
+    /// -- straight down the wheel's own plane from the centre onto the ground --
+    /// and a point named here only supplies the tyre radius to compute it at.
     QString contactPatch;
     /// Anything else rigid with the upright -- a caliper mount, a sensor -- so
     /// that it moves with the wheel instead of standing still in the viewport.

@@ -39,11 +39,21 @@ public:
     /// far side from @p mirror the same way the parts do. A side the table does
     /// not hold is simply absent; that is a workbook with one axle done, not an
     /// error.
+    ///
+    /// @p steeringDeclared is whether the template says anything anywhere about
+    /// which axles are steered (@ref LinkageTemplate::steeringDeclared). When it
+    /// does not -- every template written before the role existed -- every axle
+    /// is steered, which is the behaviour those projects have always had. When
+    /// it does, this corner is steered only if it names a rack point itself.
     static AxleSolver build(const MechanismTemplate& mechanism, const CornerSpec& corner,
-                            const HardpointTable& table, const MirrorSpec& mirror);
+                            const HardpointTable& table, const MirrorSpec& mirror,
+                            bool steeringDeclared = false);
 
     bool isEmpty() const { return !m_left && !m_right; }
     bool hasBothSides() const { return m_left.has_value() && m_right.has_value(); }
+    /// Whether a rack drives this axle. A steer sweep on an axle that has none
+    /// is not a flat curve, it is a question that cannot be asked.
+    bool isSteered() const;
     const QString& cornerToken() const { return m_token; }
     const QString& label() const { return m_label; }
     const QStringList& warnings() const { return m_warnings; }
@@ -63,6 +73,10 @@ private:
 };
 
 /// What to sweep, and how finely.
+///
+/// One range, in one unit. It is what a sweep is actually run with, and it is
+/// derived from @ref SweepSettings rather than edited directly -- see there for
+/// why the three kinds cannot share a range.
 struct SweepSpec {
     SweepKind kind = SweepKind::Bump;
     /// Millimetres of wheel travel, degrees of body roll, or millimetres of rack,
@@ -78,6 +92,59 @@ struct SweepSpec {
     bool operator!=(const SweepSpec& other) const { return !(*this == other); }
     /// The input value at step @p index, clamped into range.
     double inputAt(int index) const;
+};
+
+/// The most positions a sweep is allowed to solve. Past this a plot is drawing
+/// more points than it has pixels, and an increment of nearly zero stops being
+/// a finer sweep and starts being a hung window.
+constexpr int kMaxSweepSteps = 2001;
+
+/// How far each kind of sweep travels, and how finely -- stated the way a
+/// suspension is signed off on rather than as a bare range.
+///
+/// All three kinds are held at once, and that is the whole point. A single
+/// range cannot be shared between them: it is in millimetres of wheel travel
+/// for one, degrees of body roll for the next and millimetres of rack for the
+/// third, so switching from bump to roll on a shared range asks for twenty-five
+/// degrees of roll because the wheel travel happened to be twenty-five
+/// millimetres. Keeping each kind's own numbers means every sweep comes back to
+/// what it was last given.
+///
+/// Travel is stated as a distance and a step, not as a start and an end,
+/// because that is what is written on a damper and on a test sheet. Bump and
+/// rebound are separate because they are not symmetrical on a real car; roll
+/// and steer are, so they get one number each.
+struct SweepSettings {
+    /// Millimetres of wheel travel each way, both written positive: the sweep
+    /// runs from -@ref reboundTravel to +@ref bumpTravel.
+    double bumpTravel = 25.0;
+    double reboundTravel = 25.0;
+    double bumpIncrement = 1.0;
+
+    /// Degrees of body roll either side of level, and the step between them.
+    double rollAngle = 3.0;
+    double rollIncrement = 0.25;
+
+    /// Millimetres of rack either side of centre, and the step between them.
+    double steerTravel = 30.0;
+    double steerIncrement = 2.0;
+
+    /// Held constant through a bump or roll sweep, so bump steer can be looked
+    /// at on a wheel that is already turned.
+    double rackTravel = 0.0;
+
+    bool operator==(const SweepSettings& other) const;
+    bool operator!=(const SweepSettings& other) const { return !(*this == other); }
+
+    /// The range and step count @p kind runs over. Travels are taken as
+    /// magnitudes, so a rebound written as a negative number still means
+    /// downward, and an increment that would produce more than
+    /// @ref kMaxSweepSteps positions is honoured only as far as that.
+    SweepSpec specFor(SweepKind kind) const;
+
+    /// The travel and increment @p kind is stated with, for the readout that
+    /// says what the numbers above come to.
+    double incrementFor(SweepKind kind) const;
 };
 
 /// The axle at one point in the sweep.

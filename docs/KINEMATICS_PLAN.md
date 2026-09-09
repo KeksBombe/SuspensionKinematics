@@ -34,7 +34,7 @@ vocabulary is settled and does not change:
 {corner}_Rocker_Center  _Rocker_AxisPoint
 {corner}_Damper_O  _Damper_I
 {corner}_AntiRoll_O  _AntiRoll_I  _AntiRoll_Center
-{corner}_WheelCenter  _ContactPatch
+{corner}_WheelCenter  _WheelAxis  _ContactPatch   axis point new; patch optional
 ```
 
 So the missing pieces are: the *semantics* a solver needs on top of those names,
@@ -77,7 +77,7 @@ mechanism's single degree of freedom.
 | 1 | `LCA_O(θ)` = lower outer ball joint rotated about the `LCA_IF→LCA_IR` axis | `rotateAbout` |
 | 2 | `UCA_O` — on its own circle about `UCA_IF→UCA_IR`, and a fixed distance from `LCA_O(θ)` (the upright is rigid) | `intersectCircleSphere` |
 | 3 | `TieRod_O` — fixed distances from `LCA_O`, `UCA_O` and the (possibly steered) `TieRod_I` | `trilaterate` |
-| 4 | **Upright pose** — the rigid motion taking design `(LCA_O, UCA_O, TieRod_O)` onto the solved triple. Carries `WheelCenter`, `ContactPatch` and anything else named as carried. | `rigidFromTriangle` |
+| 4 | **Upright pose** — the rigid motion taking design `(LCA_O, UCA_O, TieRod_O)` onto the solved triple. Carries `WheelCenter`, `WheelAxis` and anything else named as carried — and the wheel *model*, through `CornerPose::uprightMotion`. | `rigidFromTriangle` |
 | 5 | **Upper-arm angle** `θ_u` — read off where `UCA_O` landed on its circle. `PushRod_O` is rigid with the **upper wishbone**, so it rotates by `θ_u` about the upper pivot axis. (`pushrodMount` selects upper arm / lower arm / upright.) | `Circle::angleOf`, `rotateAbout` |
 | 6 | **Rocker angle** `θ_r` — `PushRod_I` rides the rocker's circle about `Rocker_Center→Rocker_AxisPoint` and stays a pushrod-length from `PushRod_O`. `Damper_O` and `AntiRoll_O` then rotate by `θ_r`. | `intersectCircleSphere` |
 | 7 | **Anti-roll arm angle** — `AntiRoll_I` rides a circle about the **bar axis** and stays a drop-link length from `AntiRoll_O`. The bar axis runs through `AntiRoll_Center` and its mirror on the far side; with no far side it falls back to the Y direction, which is what a transverse U-bar is. | `intersectCircleSphere` |
@@ -91,9 +91,9 @@ converts a requested travel into `θ`. Same routine, different target, for
 
 | Measure | How |
 |---|---|
-| Camber, toe | The upright rotation applied to the design spin axis. The design axis is `normalize(cross(WC − CP, x̂))`, which captures static camber from the workbook; static **toe** is a setup value not present in the hardpoints, so toe is reported as **change from design** (which is what a bump-steer curve is) alongside the absolute number and a stated assumption. |
+| Camber, toe | The upright rotation applied to the design spin axis. That axis is `normalize(WheelAxis − WC)`, oriented outboard, which is static camber *and* static toe straight out of the table. With no axis point named it falls back to `normalize(cross(WC − CP, x̂))`, which captures camber only and assumes zero toe -- which is why toe is also reported as **change from design** (that curve being the bump steer) alongside the absolute number. |
 | Caster, KPI | The steering axis `LCA_O → UCA_O`, in side view and front view. |
-| Scrub radius, mechanical trail | Where that axis pierces the ground plane through the contact patch, against the contact patch itself. |
+| Scrub radius, mechanical trail | Where that axis pierces the ground plane through the contact patch, against the contact patch itself. The patch is computed per pose -- a tyre radius from the wheel centre, straight down the wheel's own plane -- so it walks round the tyre as the wheel leans instead of being carried rigidly by the upright. |
 | Track / half-track change, wheelbase change | The contact patch's `y` and `x` against design. |
 | Front-view instant centre | Each arm's pivot axis is crossed with the transverse plane through the wheel centre to give its front-view pivot; the two arm lines are then intersected in the `YZ` view. |
 | Roll centre | Per axle: the two `contact patch → instant centre` lines intersected. Falls back to the centre plane `y = 0` with one side only. |
@@ -117,7 +117,8 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started
       `poseAtArmAngle()`, `poseAtWheelTravel()`, `poseAtContactPatchRise()`,
       `CornerPose` with the measures above.
 - [x] `src/model/Sweep.h` / `.cpp` — `AxleSolver` (base + mirrored corner),
-      `SweepSpec` (bump / roll / steer, range, steps, held rack travel),
+      `SweepSpec` (bump / roll / steer, range, steps, held rack travel) and the
+      `SweepSettings` it is derived from (see Phase C3),
       `SweepResult`, roll-centre construction, motion ratio, `sweepToCsv()`.
 - [x] `CMakeLists.txt` — added to `suspkin_core`.
 
@@ -137,7 +138,8 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started
       batch pose update that keeps the linkage indices valid (unlike
       `setHardpoints()`, which drops the linkage by design).
 - [x] `src/app/AnalysisPanel.*` — dock: axle picker, **travel slider** that poses
-      the model live, sweep kind / range / steps, rack travel, Run, Export CSV.
+      the model live, sweep kind, Export CSV. Range, increments and rack travel
+      moved to their own window in Phase C3.
 - [x] `src/app/PlotWidget.*` — a `QPainter` XY plot (axes, grid, curves, hover
       readout). **No Qt Charts**: it is not currently a dependency and adding one
       would land on both packaging paths.
@@ -145,7 +147,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started
       live readout table of the eleven that matter, rather than a second dock.
 - [x] `MainWindow` — an `&Analysis` menu, the two docks, and the wiring that
       re-solves when a hardpoint moves.
-- [x] `ViewState` / manifest — sweep spec, current travel, simulation on/off,
+- [x] `ViewState` / manifest — sweep settings, current travel, simulation on/off,
       which curve is shown. Add to `collectViewState()` and `applyViewState()`.
 
 ### Phase C2 — animation (asked for mid-build)
@@ -158,6 +160,31 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started
       driving a rear toe link with it would invent a rear-steer.
 - [x] Position changes during animation do **not** `markDirty()`; stopping saves
       where it stopped. `animating` and `allAxles` both persist.
+
+### Phase C3 — the parameters window (asked for mid-build)
+
+- [x] `SweepSettings` in `src/model/Sweep.h` — bump travel, rebound travel and
+      their increment; roll angle and its increment; steer travel and its
+      increment; the held rack. `specFor(kind)` derives the `SweepSpec` that is
+      actually solved. A `SweepSpec` is no longer edited by hand.
+      **Why**: one shared range is one unit, so switching from a +-25 mm bump
+      sweep to roll asked for 25 degrees of body roll. Each kind now keeps its
+      own travel in its own unit, stated as travel + increment the way a damper
+      and a test sheet state it rather than as start / end / count.
+- [x] `src/app/SweepParametersDialog.*` — all three travels, the increments, the
+      held rack, the animation speed and the all-axles switch, in a non-modal
+      window that applies as it is typed. Under each block, the range and step
+      count its numbers come to. The live kind is marked, not enforced: setting
+      up a roll sweep before switching to it is the normal way round.
+- [x] `AnalysisPanel` keeps only what is touched continuously — axle, Simulate,
+      the position slider, sweep kind, Play, the curve — plus `Parameters...`.
+      `Analysis ▸ Sweep Parameters...` (Ctrl+Shift+P) opens the same window.
+- [x] Switching kind puts the position back to the design position when it falls
+      outside the new range, rather than to whichever end it was nearest.
+- [x] `SimulationState` carries `kind`, the whole `SweepSettings`,
+      `animationSeconds` and `parametersOpen`. A manifest written with the old
+      single `from`/`to`/`steps` is folded into that kind's own travel on open,
+      so an older project lands where its owner left it.
 
 ### Phase D — creating, editing and connecting points
 
@@ -194,6 +221,13 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started
       without one still loads; every name the mechanism asks for is one the
       parts already draw.
 - [ ] `tests/test_project.cpp` — `removed` round-trips through `edits.json`.
+- [x] `tests/test_kinematics.cpp` — a travel and an increment become a range and
+      a step count; bump and rebound are not assumed equal; each kind keeps its
+      own travel in its own unit; an increment of nothing is bounded rather than
+      obeyed.
+- [x] `tests/test_project.cpp` — every sweep's travel round-trips, not just the
+      one being swept; an older project's single range becomes that kind's own
+      travel and leaves the other two at their defaults.
 - [x] `tests/CMakeLists.txt` — `test_kinematics` registered.
 
 ## 5. Verification
@@ -261,3 +295,58 @@ solved the right branch at every step.
   +-30 mm bump sweep into a GIF: both corners move, the rockers turn, the dampers
   shorten. Also: a full 76-point two-axle workbook generator now lives in the
   scratchpad (`make_car.py`) built on `tools/make_test_xlsx.py`.
+
+- **2026-09-09** — **The wheel's own axis**, asked for after watching the wheels
+  slide about the car on steering lock without ever turning. Two things were
+  wrong and they were the same thing: a wheel *model* was placed by translation
+  only, and the wheel's attitude was inferred from the contact patch, which can
+  carry camber but never toe.
+  - `mechanism.upright.wheelAxis` (`{corner}_WheelAxis`) — a second point on the
+    axle line, rigid with the upright, either side of the wheel centre. It is
+    the design spin axis, so camber *and* static toe now come out of the table.
+    The old contact-patch inference stays as the fallback, so nothing about a
+    project without the point moves.
+  - **The contact patch is computed**, per pose: `contactPatchFor()`, a tyre
+    radius from the wheel centre straight down the wheel's own plane. It walks
+    round the tyre as the wheel leans instead of being carried rigidly by the
+    upright, which is what a tyre does and what makes scrub radius and track
+    honest under camber. A patch named in the workbook now supplies the *ground
+    height*, not the patch position. `mechanism.upright.contactPatch` is
+    optional from here.
+  - `CornerPose::uprightMotion` + `wheelCenterName` published, and
+    `WheelPlacement` grew a rotation: `orientWheels()` puts each upright's turn
+    on the wheel model bolted to it. The mirror is applied *before* the rotation
+    in `wheelTransform()` — the far side's turn is that corner's own, measured
+    on the car, and mirroring it steers the wheel the wrong way.
+  - Ten new cases across `test_kinematics`, `test_wheels`, `test_linkage` and
+    `test_hardpoint_config`; all eleven binaries green. Verified end to end on a
+    real project (`LeonsScheis`): headless top-view frames at 0 and +25 mm of
+    rack show the front wheels turned and the rear pair untouched.
+
+- **2026-09-09** — **Which axle has a steering rack**, after a steer sweep on the
+  rear axle walked `R_TieRod_I` out of the car. The sweep was doing exactly what
+  it says — the steer input *is* lateral movement of the inboard tie rod ends —
+  but nothing in a project said which axle has a rack, so every axle had one.
+  - `corners[].steering` in the template names the hardpoint that axle's rack
+    drives; an axle that names none is not steered. The rule that keeps old
+    projects working: **a template that says nothing anywhere leaves every axle
+    steered**, one that says something is taken literally
+    (`LinkageTemplate::steeringDeclared()`, `CornerSpec::steeringStated`).
+  - `AxleSolver::build()` injects the corner's answer into the mechanism before
+    instantiating, so the rack point goes through `{corner}` and the mirror rule
+    like every other role; `CornerSolver` gates rack travel on it and reports
+    `isSteered()`. A rack named on any other point is a steering linkage this
+    solve has no body for: warning, and the axle is treated as unsteered.
+  - The dock greys out Steer for an axle with no rack and steps off it if that is
+    where it was standing. The ordering hazard worth remembering:
+    `applyViewState()` restores the *kind* before the *axle*, so the fallback has
+    to run inside `setAxle()` — otherwise a project saved mid rear-steer reopens
+    still steering.
+  - Parts > Steering… writes it, by **patching** the template rather than
+    reserialising it — same principle as the workbook writer. A project whose
+    template predates the role and is recognisably the built-in one has the
+    answer written in on open.
+  - Verified on `LeonsScheis`: opening it migrates the template (front named,
+    rear not), the stored `kind: steer` on the rear axle comes back as `bump`,
+    and a rear steer pose renders pixel-identical to the bump pose it fell back
+    to. The front axle still steers.

@@ -71,18 +71,107 @@ double SweepSpec::inputAt(int index) const
     return from + (to - from) * (static_cast<double>(clamped) / static_cast<double>(steps - 1));
 }
 
+namespace {
+
+/// How many solved positions a range of @p span comes to at @p increment.
+///
+/// Two at the bottom, because a sweep of one position is not a sweep; and
+/// @ref kMaxSweepSteps at the top, because an increment left at nothing would
+/// otherwise ask for an unbounded number of solves.
+int stepsForIncrement(double span, double increment)
+{
+    if (!(span > 0.0) || !(increment > 0.0)) return 2;
+    const double count = std::floor(span / increment + 0.5) + 1.0;
+    if (count >= double(kMaxSweepSteps)) return kMaxSweepSteps;
+    return std::max(2, static_cast<int>(count));
+}
+
+} // namespace
+
+bool SweepSettings::operator==(const SweepSettings& other) const
+{
+    return bumpTravel == other.bumpTravel && reboundTravel == other.reboundTravel
+           && bumpIncrement == other.bumpIncrement && rollAngle == other.rollAngle
+           && rollIncrement == other.rollIncrement && steerTravel == other.steerTravel
+           && steerIncrement == other.steerIncrement && rackTravel == other.rackTravel;
+}
+
+double SweepSettings::incrementFor(SweepKind kind) const
+{
+    switch (kind) {
+    case SweepKind::Bump: return bumpIncrement;
+    case SweepKind::Roll: return rollIncrement;
+    case SweepKind::Steer: return steerIncrement;
+    }
+    return bumpIncrement;
+}
+
+SweepSpec SweepSettings::specFor(SweepKind kind) const
+{
+    SweepSpec spec;
+    spec.kind = kind;
+    // The rack is held through bump and roll and swept in steer, where the
+    // range below is what moves it. Carrying it either way costs nothing and
+    // keeps the spec a complete description of the run.
+    spec.rackTravel = rackTravel;
+
+    switch (kind) {
+    case SweepKind::Bump:
+        // Rebound is downward however it is written, so a user who types the
+        // minus sign in gets what they meant rather than a sweep that only
+        // goes up.
+        spec.from = -std::abs(reboundTravel);
+        spec.to = std::abs(bumpTravel);
+        break;
+    case SweepKind::Roll:
+        spec.from = -std::abs(rollAngle);
+        spec.to = std::abs(rollAngle);
+        break;
+    case SweepKind::Steer:
+        spec.from = -std::abs(steerTravel);
+        spec.to = std::abs(steerTravel);
+        break;
+    }
+    spec.steps = stepsForIncrement(spec.to - spec.from, incrementFor(kind));
+    return spec;
+}
+
 AxleSolver AxleSolver::build(const MechanismTemplate& mechanism, const CornerSpec& corner,
-                             const HardpointTable& table, const MirrorSpec& mirror)
+                             const HardpointTable& table, const MirrorSpec& mirror,
+                             bool steeringDeclared)
 {
     AxleSolver axle;
     axle.m_token = corner.token;
     axle.m_label = corner.label.isEmpty() ? corner.token : corner.label;
 
+    // Which axle has a rack is the corner's own business, not the mechanism
+    // block's -- that block is one block for every corner. Putting the name in
+    // here rather than teaching the solver about corners means it goes through
+    // the same {corner} substitution and the same mirror rule as every other
+    // role, and the solver keeps knowing only about names.
+    //
+    // A template that says nothing anywhere leaves every axle steered, which is
+    // what every project made before this existed has always done.
+    MechanismTemplate roles = mechanism;
+    roles.steeringRack = steeringDeclared ? corner.steeringRack : mechanism.tieRodInboard;
+    if (steeringDeclared && !roles.steeringRack.isEmpty()
+        && roles.steeringRack != mechanism.tieRodInboard) {
+        // A rack that picks up anywhere else is a steering linkage -- an idler,
+        // a drag link -- and this solve has no such body in it. Saying so beats
+        // moving a point nothing is attached to and calling it steering.
+        // Named the way the table names them, not with {corner} still in them:
+        // the user has to be able to go and look at the point.
+        const MechanismTemplate shown = instantiateMechanism(roles, corner.token, false, mirror);
+        axle.m_warnings << tr("%1: the steering rack is named as %2, but this model steers by "
+                              "moving the inboard tie rod end (%3). The rack is ignored.")
+                               .arg(axle.m_label, shown.steeringRack, shown.tieRodInboard);
+        roles.steeringRack.clear();
+    }
+
     std::optional<CornerSolver> sides[2];
     for (int side = 0; side < 2; ++side) {
         const bool mirrored = (side == 1);
-        const MechanismTemplate named =
-            instantiateMechanism(mechanism, corner.token, mirrored, mirror);
+        const MechanismTemplate named = instantiateMechanism(roles, corner.token, mirrored, mirror);
         if (named.isEmpty()) continue;
 
         // A corner or a side with not one of its points in the table is not a
@@ -139,6 +228,14 @@ AxleSolver AxleSolver::build(const MechanismTemplate& mechanism, const CornerSpe
     }
 
     return axle;
+}
+
+bool AxleSolver::isSteered() const
+{
+    // Either side is enough: the two are the same corner mirrored, so a rack
+    // that drives one drives the other, and a half-mirrored table should not
+    // read as half a steering system.
+    return (m_left && m_left->isSteered()) || (m_right && m_right->isSteered());
 }
 
 const AxleSample* SweepResult::nearest(double input) const
@@ -277,6 +374,17 @@ SweepResult runSweep(const AxleSolver& axle, const SweepSpec& spec)
     result.axleLabel = axle.label();
     result.warnings = axle.warnings();
     if (axle.isEmpty()) return result;
+
+    // A steer sweep of an axle with no rack is not a flat curve to plot, it is a
+    // question that cannot be asked. Coming back empty and saying why is the
+    // honest answer; a line of zeroes would read as "this suspension has no bump
+    // steer", which is a claim about the car rather than about the model.
+    if (spec.kind == SweepKind::Steer && !axle.isSteered()) {
+        result.warnings << tr("%1 has no steering: the linkage template names no hardpoint for "
+                              "its rack to drive. Parts > Steering names one.")
+                               .arg(result.axleLabel);
+        return result;
+    }
 
     const int steps = std::max(2, spec.steps);
     SweepSpec bounded = spec;

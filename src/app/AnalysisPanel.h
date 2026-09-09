@@ -2,6 +2,7 @@
 
 #include "model/Sweep.h"
 
+#include <QHash>
 #include <QList>
 #include <QPair>
 #include <QString>
@@ -13,7 +14,6 @@ class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
 class QSlider;
-class QSpinBox;
 class QTableWidget;
 class QTimer;
 class QToolButton;
@@ -21,6 +21,19 @@ class QToolButton;
 namespace suspkin {
 
 class PlotWidget;
+class SweepParametersDialog;
+
+/// One axle the dock can sweep.
+///
+/// It carries whether the axle is steered because that is not a property of the
+/// sweep or of the panel -- it is the project's linkage template saying whether
+/// this axle has a rack -- and the panel cannot ask anybody: it holds no solver
+/// and no project on purpose.
+struct AxleEntry {
+    QString token;
+    QString label;
+    bool steered = false;
+};
 
 /// The analysis dock: where the suspension is put through its travel, and what
 /// comes out when it is.
@@ -35,14 +48,32 @@ class AnalysisPanel : public QWidget {
 public:
     explicit AnalysisPanel(QWidget* parent = nullptr);
 
-    /// The axles that can be simulated, as token and label. An empty list
-    /// disables the panel: there is nothing to sweep.
-    void setAxles(const QList<QPair<QString, QString>>& axles);
+    /// The axles that can be simulated. An empty list disables the panel: there
+    /// is nothing to sweep.
+    void setAxles(const QList<AxleEntry>& axles);
     QString axle() const;
     void setAxle(const QString& token);
 
+    /// What the sweep is run with: the travel and increment of all three kinds
+    /// at once, edited in the parameters window rather than here.
+    SweepSettings settings() const;
+    void setSettings(const SweepSettings& settings);
+
+    /// Which of the three is being swept.
+    SweepKind kind() const;
+    void setKind(SweepKind kind);
+
+    /// The two together: the range and step count the solver is actually given.
     SweepSpec spec() const;
-    void setSpec(const SweepSpec& spec);
+
+    /// How long one there-and-back run of the travel takes.
+    double animationSeconds() const;
+    void setAnimationSeconds(double seconds);
+
+    /// Whether the parameters window is open. It is project state like every
+    /// other thing the user arranges, so it is asked about and restored.
+    bool parametersVisible() const;
+    void setParametersVisible(bool visible);
 
     /// Where the model is standing, in the sweep's own units.
     double position() const;
@@ -76,6 +107,10 @@ public:
 
     void setStatus(const QString& text);
 
+public slots:
+    /// Open the parameters window and bring it to the front.
+    void showParameters();
+
 signals:
     void axleChanged();
     /// The sweep's shape changed and wants running again.
@@ -85,10 +120,16 @@ signals:
     void simulatingChanged(bool simulating);
     void animatingChanged(bool animating);
     void measureChanged();
+    /// Something that is remembered but does not change the curve: how fast the
+    /// animation runs, whether the parameters window is open.
+    void playbackChanged();
     void exportCsvRequested();
 
 private:
     void buildUi();
+    /// Offer Steer only for an axle that has a rack, and step off it when the
+    /// selected axle has none.
+    void syncSteerAvailability();
     void syncPositionRange();
     void emitPositionFromSlider(int value);
     double sliderToPosition(int value) const;
@@ -100,19 +141,21 @@ private:
     void seedAnimationPhase();
 
     QComboBox* m_axleBox = nullptr;
+    /// Which axles have a steering rack, by token. Not every axle does, and an
+    /// axle that does not cannot be asked for a steer sweep at all.
+    QHash<QString, bool> m_steerable;
     QCheckBox* m_simulate = nullptr;
     QSlider* m_positionSlider = nullptr;
     QDoubleSpinBox* m_positionBox = nullptr;
     QLabel* m_positionUnit = nullptr;
     QComboBox* m_kindBox = nullptr;
-    QDoubleSpinBox* m_fromBox = nullptr;
-    QDoubleSpinBox* m_toBox = nullptr;
-    QSpinBox* m_stepsBox = nullptr;
-    QDoubleSpinBox* m_rackBox = nullptr;
     QComboBox* m_measureBox = nullptr;
     QToolButton* m_playButton = nullptr;
-    QDoubleSpinBox* m_secondsBox = nullptr;
-    QCheckBox* m_allAxles = nullptr;
+    QPushButton* m_parametersButton = nullptr;
+    /// The travel, the increments and the playback settings, in a window of
+    /// their own. Owned here rather than by the main window because this is
+    /// what asks the sweep for its numbers.
+    SweepParametersDialog* m_parameters = nullptr;
     QTimer* m_animation = nullptr;
     /// Where the animation is in its there-and-back cycle, in [0, 1).
     double m_phase = 0.0;
@@ -121,7 +164,6 @@ private:
     QTableWidget* m_readout = nullptr;
     PlotWidget* m_plot = nullptr;
 
-    SweepKind m_kind = SweepKind::Bump;
     /// Set while the panel is being told what to show, so echoing it straight
     /// back out does not look like the user having done something.
     bool m_updating = false;

@@ -74,9 +74,9 @@ QStringList MechanismTemplate::allNames() const
     QStringList names;
     for (const QString* name : { &lowerFront, &lowerRear, &lowerOuter, &upperFront, &upperRear,
                                  &upperOuter, &tieRodInboard, &tieRodOutboard, &wheelCenter,
-                                 &contactPatch, &pushrodOuter, &pushrodInner, &rockerPivot,
-                                 &rockerAxis, &damperInboard, &damperOutboard, &antiRollRocker,
-                                 &antiRollArmOuter, &antiRollArmPivot })
+                                 &wheelAxis, &contactPatch, &pushrodOuter, &pushrodInner,
+                                 &rockerPivot, &rockerAxis, &damperInboard, &damperOutboard,
+                                 &antiRollRocker, &antiRollArmOuter, &antiRollArmPivot })
         appendIfNamed(names, *name);
     names += carried;
     return names;
@@ -100,7 +100,13 @@ MechanismTemplate instantiateMechanism(const MechanismTemplate& templ, const QSt
     out.upperOuter = fill(templ.upperOuter);
     out.tieRodInboard = fill(templ.tieRodInboard);
     out.tieRodOutboard = fill(templ.tieRodOutboard);
+    // The rack point is a reference to a point the mechanism already names, not
+    // a point of its own, which is why it is instantiated here but stays out of
+    // allNames() and out of the coverage report -- counting it would report one
+    // hardpoint twice.
+    out.steeringRack = fill(templ.steeringRack);
     out.wheelCenter = fill(templ.wheelCenter);
+    out.wheelAxis = fill(templ.wheelAxis);
     out.contactPatch = fill(templ.contactPatch);
     out.pushrodOuter = fill(templ.pushrodOuter);
     out.pushrodInner = fill(templ.pushrodInner);
@@ -140,10 +146,10 @@ MechanismCoverage coverMechanism(const MechanismTemplate& mechanism, const Hardp
         check(*name, coverage.missingRequired);
 
     for (const QString* name :
-         { &mechanism.contactPatch, &mechanism.pushrodOuter, &mechanism.pushrodInner,
-           &mechanism.rockerPivot, &mechanism.rockerAxis, &mechanism.damperInboard,
-           &mechanism.damperOutboard, &mechanism.antiRollRocker, &mechanism.antiRollArmOuter,
-           &mechanism.antiRollArmPivot })
+         { &mechanism.wheelAxis, &mechanism.contactPatch, &mechanism.pushrodOuter,
+           &mechanism.pushrodInner, &mechanism.rockerPivot, &mechanism.rockerAxis,
+           &mechanism.damperInboard, &mechanism.damperOutboard, &mechanism.antiRollRocker,
+           &mechanism.antiRollArmOuter, &mechanism.antiRollArmPivot })
         check(*name, coverage.missingOptional);
 
     for (const QString& name : mechanism.carried) check(name, coverage.missingOptional);

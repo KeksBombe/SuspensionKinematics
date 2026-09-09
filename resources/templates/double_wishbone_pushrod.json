@@ -11,10 +11,13 @@
         "Point names that do not exist in the table are reported once per part; the rest of the part is still drawn.",
         "INTERPRETATION WORTH CHECKING: in this workbook {corner}_PushRod_O sits 21 mm (front) and 31 mm (rear) off the plane of the upper wishbone and 37-80 mm from its outer ball joint, so the pushrod is taken to pick up on the UPPER WISHBONE. The 'pushRodPickup' part below draws that link, and 'mechanism.pushrod.mount' below says the same thing to the solver. If the pushrod is actually mounted on the upright, change that to 'upright', delete the pushRodPickup part, and add {corner}_PushRod_O to the 'upright' part's first chain instead.",
         "'parts' above says what to DRAW. 'mechanism' below says what MOVES: which hardpoint plays which role, so the corner can be solved through its travel. Both use {corner} and both take the far side from your own mirror rule, so neither is written twice.",
+        "{corner}_WheelAxis is a second point on the wheel's own axis of rotation, anywhere along it, inboard or outboard of the wheel centre -- the end of the stub axle is the usual one to measure. It is what says which way the wheel points: static toe, which no other hardpoint can state, and static camber with it. The wheel model is turned by the upright it is bolted to, so with this named the wheels steer and lean instead of sliding about flat.",
+        "{corner}_ContactPatch is optional now. With a wheel axis named the patch is computed -- straight down the wheel's own plane from the centre onto the ground at z = 0, which is where a leaning wheel really touches -- and a patch in the workbook is then only a measurement of the tyre radius to compute it at. Leave it out and nothing is lost.",
+        "'steering' on a corner names the hardpoint this axle's steering rack drives -- the inboard tie rod end. A corner that does not name one is not steered: the Steer sweep is not offered for it, and rack travel leaves its toe link where the workbook put it. A rear-steer car names one on the rear corner too. Parts > Steering... edits this without opening the file. NOTE: if NO corner names one, every axle is taken to be steered, which is what templates written before this existed have always done.",
         "The mechanism has one degree of freedom: the lower wishbone's rotation about its own pivot axis. Everything else follows -- the upper wishbone from the upright being rigid, the tie rod end from being rigid with both ball joints, the wheel from the three of them together, and the rocker from the pushrod's length. Leave out 'rocker', 'damper' or 'antiRollBar' and what remains is still solved; leave out a wishbone and there is nothing to solve."
     ],
     "corners": [
-        { "token": "F", "label": "Front" },
+        { "token": "F", "label": "Front", "steering": "{corner}_TieRod_I" },
         { "token": "R", "label": "Rear" }
     ],
     "sides": {
@@ -38,6 +41,7 @@
         },
         "upright": {
             "wheelCenter": "{corner}_WheelCenter",
+            "wheelAxis": "{corner}_WheelAxis",
             "contactPatch": "{corner}_ContactPatch",
             "carries": []
         },
@@ -142,7 +146,10 @@
             "id": "wheel",
             "label": "{corner} {side} wheel",
             "kind": "wheel",
-            "points": ["{corner}_WheelCenter", "{corner}_ContactPatch"]
+            "chains": [
+                { "points": ["{corner}_WheelCenter", "{corner}_WheelAxis"], "optional": true },
+                { "points": ["{corner}_WheelCenter", "{corner}_ContactPatch"], "optional": true }
+            ]
         }
     ]
 }

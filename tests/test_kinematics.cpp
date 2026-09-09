@@ -61,6 +61,30 @@ HardpointTable frontLeftCorner()
     return table;
 }
 
+/// The direction a wheel's axle points, outboard on the left, for a given
+/// static attitude. Toe-in and negative camber are both what the tool calls
+/// positive and negative, so the numbers read as they would on a setup sheet.
+Vec3 spinAxisAt(double toeDeg, double camberDeg)
+{
+    const double toe = toeDeg * M_PI / 180.0;
+    const double camber = camberDeg * M_PI / 180.0;
+    return Vec3(std::sin(toe) * std::cos(camber), std::cos(toe) * std::cos(camber),
+                -std::sin(camber));
+}
+
+/// The same corner with a point on the wheel's own axis of rotation: 2 degrees
+/// of toe-in and 3 of negative camber, which is an attitude no other hardpoint
+/// in the table can state -- toe least of all.
+HardpointTable frontLeftCornerWithAxis(double toeDeg = 2.0, double camberDeg = -3.0)
+{
+    HardpointTable table = frontLeftCorner();
+    const Hardpoint* center = table.find(QStringLiteral("F_WheelCenter"));
+    const Vec3 axis = spinAxisAt(toeDeg, camberDeg) * 150.0; // the stub axle's end
+    table.points.push_back(make("F_WheelAxis", center->coord[0] + axis.x,
+                                center->coord[1] + axis.y, center->coord[2] + axis.z));
+    return table;
+}
+
 /// The roles those names play, written the way a template file writes them.
 MechanismTemplate cornerMechanism()
 {
@@ -73,7 +97,14 @@ MechanismTemplate cornerMechanism()
     mechanism.upperOuter = QStringLiteral("{corner}_UCA_O");
     mechanism.tieRodInboard = QStringLiteral("{corner}_TieRod_I");
     mechanism.tieRodOutboard = QStringLiteral("{corner}_TieRod_O");
+    // A corner bound on its own has to say whether a rack drives it: an empty
+    // role means "no steering", full stop. The compatibility rule -- a template
+    // that says nothing anywhere leaves every axle steered -- lives one level
+    // up, in AxleSolver::build(), which is the only thing that can see a whole
+    // template.
+    mechanism.steeringRack = QStringLiteral("{corner}_TieRod_I");
     mechanism.wheelCenter = QStringLiteral("{corner}_WheelCenter");
+    mechanism.wheelAxis = QStringLiteral("{corner}_WheelAxis");
     mechanism.contactPatch = QStringLiteral("{corner}_ContactPatch");
     mechanism.pushrodMount = PushrodMount::UpperArm;
     mechanism.pushrodOuter = QStringLiteral("{corner}_PushRod_O");
@@ -100,18 +131,34 @@ CornerSpec frontCorner()
     CornerSpec corner;
     corner.token = QStringLiteral("F");
     corner.label = QStringLiteral("Front");
+    corner.steeringRack = QStringLiteral("{corner}_TieRod_I");
     return corner;
 }
 
-CornerSolver bindFront()
+/// The same axle with no rack: a rear axle, in other words, whose toe link
+/// inboard end is bolted to the chassis and stays there.
+CornerSpec unsteeredCorner()
+{
+    CornerSpec corner = frontCorner();
+    corner.steeringRack.clear();
+    return corner;
+}
+
+CornerSolver bindTo(const HardpointTable& table)
 {
     QString error;
     const MechanismTemplate named =
         instantiateMechanism(cornerMechanism(), QStringLiteral("F"), false, MirrorSpec{});
-    std::optional<CornerSolver> solver = CornerSolver::bind(named, frontLeftCorner(), &error);
+    std::optional<CornerSolver> solver = CornerSolver::bind(named, table, &error);
     if (!solver) qFatal("front corner did not bind: %s", qPrintable(error));
     return *solver;
 }
+
+/// The corner as every other test here has it: no axle line, so the wheel's
+/// attitude is inferred from the patch under it.
+CornerSolver bindFront() { return bindTo(frontLeftCorner()); }
+/// The same corner, told outright which way its wheel points.
+CornerSolver bindFrontWithAxis() { return bindTo(frontLeftCornerWithAxis()); }
 
 } // namespace
 
@@ -142,6 +189,21 @@ private slots:
     void theRockerAndDamperFollowTheWheel();
     void travelBeyondTheMechanismIsRefusedNotFaked();
 
+    // ---- the wheel's own axis -------------------------------------------
+
+    void theWheelAxisStatesCamberAndToeTogether();
+    void theContactPatchIsComputedInTheWheelsOwnPlane();
+    void aCornerWithNoContactPatchStillFindsTheGround();
+    void theContactPatchWalksRoundTheTyreInsteadOfRidingTheUpright();
+    void theUprightsMotionIsWhatTurnsTheWheelModel();
+
+    // ---- which axle has a steering rack ---------------------------------
+
+    void anAxleWithNoRackIgnoresTheSteeringInputEntirely();
+    void aTemplateThatSaysNothingLeavesEveryAxleSteered();
+    void aRackThatPicksUpSomewhereElseIsRefusedWithAReason();
+    void aSteerSweepOfAnUnsteeredAxleComesBackEmptyAndSaysWhy();
+
     // ---- the axle and the sweeps ----------------------------------------
 
     void anAxleSortsItsTwoSidesByWhereTheyAre();
@@ -151,6 +213,13 @@ private slots:
     void aSteerSweepChangesToeAndNotRideHeight();
     void theCsvHasOneRowPerStepAndSaysNothingAboutWhatDidNotSolve();
     void theShippedTemplateSolvesTheCornerItDescribes();
+
+    // ---- what a sweep is asked for --------------------------------------
+
+    void aTravelAndAnIncrementBecomeARangeAndAStepCount();
+    void bumpAndReboundAreNotAssumedToBeEqual();
+    void eachKindKeepsItsOwnTravelInItsOwnUnit();
+    void anIncrementThatWouldNeverEndIsBoundedNotObeyed();
 };
 
 void TestKinematics::rotatingAboutAnAxisKeepsTheDistanceToIt()
@@ -499,6 +568,197 @@ void TestKinematics::travelBeyondTheMechanismIsRefusedNotFaked()
     QVERIFY(!absurd.error.isEmpty());
 }
 
+void TestKinematics::theWheelAxisStatesCamberAndToeTogether()
+{
+    const CornerPose& design = bindFrontWithAxis().designPose();
+    QVERIFY(std::abs(design.camber - (-3.0)) < 1e-6);
+    QVERIFY(std::abs(design.toe - 2.0) < 1e-6);
+
+    // The same table without that point cannot say either thing: a contact patch
+    // straight under the wheel centre reads as a wheel standing square, which is
+    // what every workbook without an axle line silently claims.
+    const CornerPose& assumed = bindFront().designPose();
+    QVERIFY(std::abs(assumed.camber) < 1e-6);
+    QVERIFY(std::abs(assumed.toe) < 1e-6);
+}
+
+void TestKinematics::theContactPatchIsComputedInTheWheelsOwnPlane()
+{
+    const CornerPose& design = bindFrontWithAxis().designPose();
+
+    // On the road, which is where the workbook's own patch was...
+    QVERIFY(std::abs(design.contactPatch.z) < 1e-9);
+    // ...square to the axle rather than straight down from the centre...
+    const Vec3 arm = design.contactPatch - design.wheelCenter;
+    QVERIFY(std::abs(dot(arm, design.spinAxis)) < 1e-9);
+    // ...and outboard of the centre, because that is what negative camber does
+    // to a contact patch and half the reason for computing it at all.
+    QVERIFY(design.contactPatch.y > 600.0);
+    QVERIFY(design.contactPatch.y < 615.0);
+}
+
+void TestKinematics::aCornerWithNoContactPatchStillFindsTheGround()
+{
+    HardpointTable table = frontLeftCornerWithAxis();
+    const int patch = table.indexOf(QStringLiteral("F_ContactPatch"));
+    QVERIFY(patch >= 0);
+    table.points.erase(table.points.begin() + patch);
+
+    // Nothing is lost by leaving the patch out of the workbook: the wheel centre,
+    // the axle and the ground are between them enough to say where the tyre is.
+    const CornerSolver solver = bindTo(table);
+    QVERIFY(std::abs(solver.designPose().contactPatch.z) < 1e-9);
+
+    // Including for a roll sweep, which asks a corner for a patch height rather
+    // than a wheel height and had nothing real to aim at without one.
+    const CornerPose lifted = solver.poseAtContactPatchRise(15.0);
+    QVERIFY2(lifted.valid, qPrintable(lifted.error));
+    QVERIFY(std::abs(lifted.contactPatchRise - 15.0) < 1e-6);
+}
+
+void TestKinematics::theContactPatchWalksRoundTheTyreInsteadOfRidingTheUpright()
+{
+    const CornerSolver solver = bindFrontWithAxis();
+    const CornerPose& design = solver.designPose();
+    const double radius = distance(design.wheelCenter, design.contactPatch);
+
+    for (const double travel : { -30.0, -10.0, 10.0, 30.0 }) {
+        const CornerPose pose = solver.poseAtWheelTravel(travel);
+        QVERIFY2(pose.valid, qPrintable(pose.error));
+
+        // A tyre does not lift off the road when the wheel leans: the patch stays
+        // a tyre radius from the centre, in the wheel's own plane, at the bottom
+        // of it. Carried rigidly with the upright it would swing out sideways.
+        const Vec3 arm = pose.contactPatch - pose.wheelCenter;
+        QVERIFY(std::abs(arm.length() - radius) < 1e-9);
+        QVERIFY(std::abs(dot(arm, pose.spinAxis)) < 1e-9);
+        QVERIFY(arm.z < 0.0);
+    }
+}
+
+void TestKinematics::theUprightsMotionIsWhatTurnsTheWheelModel()
+{
+    const CornerSolver solver = bindFrontWithAxis();
+    const CornerPose design = solver.designPose();
+    const CornerPose steered = solver.poseAtWheelTravel(0.0, 12.0);
+    QVERIFY2(steered.valid, qPrintable(steered.error));
+
+    // The published motion is the upright's own: it takes the design geometry
+    // onto the solved geometry. That is what a wheel *model* has to be turned
+    // by -- a mesh cannot be laid over the table by name the way a point can.
+    QVERIFY(distance(steered.uprightMotion.map(design.wheelCenter), steered.wheelCenter) < 1e-9);
+    QVERIFY(distance(steered.uprightMotion.map(design.lowerOuter), steered.lowerOuter) < 1e-9);
+    QVERIFY(distance(steered.uprightMotion.rotate(design.spinAxis), steered.spinAxis) < 1e-9);
+
+    // And it really has turned: this is the steering the wheel models were not
+    // doing. The name is published with it so the model can be found by it.
+    QVERIFY(std::abs(steered.toeChange) > 0.5);
+    QCOMPARE(steered.wheelCenterName, QStringLiteral("F_WheelCenter"));
+
+    // The axis point itself rides the upright rigidly, so it is still an axle's
+    // length from the centre once the wheel has been turned.
+    const Vec3* axis = steered.find(QStringLiteral("F_WheelAxis"));
+    QVERIFY(axis != nullptr);
+    QVERIFY(std::abs(distance(*axis, steered.wheelCenter) - 150.0) < 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// Which axle has a steering rack
+// ---------------------------------------------------------------------------
+
+void TestKinematics::anAxleWithNoRackIgnoresTheSteeringInputEntirely()
+{
+    MechanismTemplate mechanism = cornerMechanism();
+    mechanism.steeringRack.clear(); // a rear axle: the toe link is chassis-bolted
+
+    QString error;
+    const MechanismTemplate named =
+        instantiateMechanism(mechanism, QStringLiteral("F"), false, MirrorSpec{});
+    std::optional<CornerSolver> solver = CornerSolver::bind(named, frontLeftCorner(), &error);
+    QVERIFY2(solver.has_value(), qPrintable(error));
+    QVERIFY(!solver->isSteered());
+
+    // Not "steers a little", not "steers and is ignored downstream": the rack is
+    // not there, so twelve millimetres of it changes nothing at all. This is the
+    // bug it was written for -- a rear tie rod end walking out of the car.
+    const CornerPose still = solver->poseAtWheelTravel(0.0, 0.0);
+    const CornerPose asked = solver->poseAtWheelTravel(0.0, 12.0);
+    QVERIFY2(asked.valid, qPrintable(asked.error));
+    QCOMPARE(asked.rackTravel, 0.0);
+    QVERIFY(distance(asked.tieRodInboard, still.tieRodInboard) < 1e-12);
+    QVERIFY(distance(asked.wheelCenter, still.wheelCenter) < 1e-12);
+    QVERIFY(std::abs(asked.toe - still.toe) < 1e-12);
+
+    // And the same corner with the rack named still steers, so this is the role
+    // doing the work and not the fixture.
+    QVERIFY(bindFront().isSteered());
+    QVERIFY(std::abs(bindFront().poseAtWheelTravel(0.0, 12.0).toeChange) > 0.5);
+}
+
+void TestKinematics::aTemplateThatSaysNothingLeavesEveryAxleSteered()
+{
+    // Every project made before the role existed relies on this: no corner names
+    // a rack, so the axle keeps the steering it has always had.
+    CornerSpec silent = frontCorner();
+    silent.steeringRack.clear();
+    MechanismTemplate mechanism = cornerMechanism();
+    mechanism.steeringRack.clear();
+
+    const AxleSolver assumed =
+        AxleSolver::build(mechanism, silent, frontAxle(), MirrorSpec{}, false);
+    QVERIFY(assumed.isSteered());
+    QVERIFY(assumed.warnings().isEmpty());
+
+    // The same silence, once the template has spoken elsewhere, means no.
+    const AxleSolver declared =
+        AxleSolver::build(mechanism, silent, frontAxle(), MirrorSpec{}, true);
+    QVERIFY(!declared.isSteered());
+    QVERIFY(declared.warnings().isEmpty()); // saying nothing is an answer, not a fault
+}
+
+void TestKinematics::aRackThatPicksUpSomewhereElseIsRefusedWithAReason()
+{
+    // A rack acting anywhere but the inboard tie rod end is a steering linkage
+    // -- an idler, a drag link -- and there is no such body in this solve.
+    CornerSpec corner = frontCorner();
+    corner.steeringRack = QStringLiteral("{corner}_TieRod_O");
+
+    const AxleSolver axle =
+        AxleSolver::build(cornerMechanism(), corner, frontAxle(), MirrorSpec{}, true);
+    QVERIFY(!axle.isSteered());
+    QCOMPARE(axle.warnings().size(), 1);
+    QVERIFY(axle.warnings().first().contains(QStringLiteral("F_TieRod_O")));
+    QVERIFY(axle.warnings().first().contains(QStringLiteral("F_TieRod_I")));
+}
+
+void TestKinematics::aSteerSweepOfAnUnsteeredAxleComesBackEmptyAndSaysWhy()
+{
+    const AxleSolver axle =
+        AxleSolver::build(cornerMechanism(), unsteeredCorner(), frontAxle(), MirrorSpec{}, true);
+    QVERIFY(!axle.isEmpty());
+
+    SweepSpec spec;
+    spec.kind = SweepKind::Steer;
+    spec.from = -20.0;
+    spec.to = 20.0;
+    spec.steps = 9;
+    const SweepResult result = runSweep(axle, spec);
+
+    // A line of zeroes would read as "this suspension has no bump steer", which
+    // is a claim about the car. Nothing plotted, and a reason, is the truth.
+    QVERIFY(result.samples.empty());
+    QCOMPARE(result.warnings.size(), 1);
+    QVERIFY(result.warnings.first().contains(QStringLiteral("steering")));
+
+    // Bump still sweeps: it is the steering that is missing, not the axle.
+    spec.kind = SweepKind::Bump;
+    spec.from = -10.0;
+    spec.to = 10.0;
+    const SweepResult bump = runSweep(axle, spec);
+    QCOMPARE(bump.samples.size(), std::size_t(9));
+    QVERIFY(bump.warnings.isEmpty());
+}
+
 void TestKinematics::anAxleSortsItsTwoSidesByWhereTheyAre()
 {
     const AxleSolver axle =
@@ -759,6 +1019,98 @@ void TestKinematics::theShippedTemplateSolvesTheCornerItDescribes()
         QVERIFY(std::abs(distance(*outer, frontPivot) - toFront) < 1e-6);
         QVERIFY(std::abs(distance(*outer, rearPivot) - toRear) < 1e-6);
     }
+}
+
+void TestKinematics::aTravelAndAnIncrementBecomeARangeAndAStepCount()
+{
+    SweepSettings settings;
+    settings.bumpTravel = 30.0;
+    settings.reboundTravel = 20.0;
+    settings.bumpIncrement = 1.0;
+
+    const SweepSpec spec = settings.specFor(SweepKind::Bump);
+    QCOMPARE(spec.kind, SweepKind::Bump);
+    QCOMPARE(spec.from, -20.0);
+    QCOMPARE(spec.to, 30.0);
+    // Fifty millimetres at one millimetre a step is fifty steps, which is
+    // fifty-one positions: both ends are solved.
+    QCOMPARE(spec.steps, 51);
+    QCOMPARE(spec.inputAt(0), -20.0);
+    QCOMPARE(spec.inputAt(spec.steps - 1), 30.0);
+    QVERIFY(std::abs(spec.inputAt(20) - 0.0) < 1e-12);
+}
+
+void TestKinematics::bumpAndReboundAreNotAssumedToBeEqual()
+{
+    // A rebound written with the minus sign already in it still means downward.
+    SweepSettings settings;
+    settings.bumpTravel = 33.0;
+    settings.reboundTravel = -17.0;
+    settings.bumpIncrement = 1.0;
+
+    const SweepSpec spec = settings.specFor(SweepKind::Bump);
+    QCOMPARE(spec.from, -17.0);
+    QCOMPARE(spec.to, 33.0);
+    QCOMPARE(spec.steps, 51);
+}
+
+void TestKinematics::eachKindKeepsItsOwnTravelInItsOwnUnit()
+{
+    // The whole reason the settings hold all three at once: switching from a
+    // bump sweep to a roll sweep used to carry twenty-five millimetres of wheel
+    // travel across as twenty-five degrees of body roll, which is not a corner
+    // any car takes.
+    SweepSettings settings;
+    settings.bumpTravel = 25.0;
+    settings.reboundTravel = 25.0;
+    settings.bumpIncrement = 1.0;
+    settings.rollAngle = 1.2;
+    settings.rollIncrement = 0.25;
+    settings.steerTravel = 35.0;
+    settings.steerIncrement = 2.0;
+
+    const SweepSpec bump = settings.specFor(SweepKind::Bump);
+    const SweepSpec roll = settings.specFor(SweepKind::Roll);
+    const SweepSpec steer = settings.specFor(SweepKind::Steer);
+
+    QCOMPARE(bump.to, 25.0);
+    QCOMPARE(roll.to, 1.2);
+    QCOMPARE(roll.from, -1.2);
+    QCOMPARE(steer.to, 35.0);
+
+    // And each is solved as finely as it was asked to be, not as finely as its
+    // neighbour.
+    QCOMPARE(bump.steps, 51);
+    QCOMPARE(roll.steps, 11);
+    QCOMPARE(steer.steps, 36);
+
+    QCOMPARE(sweepInputUnit(SweepKind::Bump), QStringLiteral("mm"));
+    QCOMPARE(sweepInputUnit(SweepKind::Roll), QStringLiteral("deg"));
+}
+
+void TestKinematics::anIncrementThatWouldNeverEndIsBoundedNotObeyed()
+{
+    SweepSettings settings;
+    settings.rollAngle = 3.0;
+
+    // A field cleared to nothing is a range with no step in it. It comes back
+    // as the two ends rather than as an unbounded solve.
+    settings.rollIncrement = 0.0;
+    QCOMPARE(settings.specFor(SweepKind::Roll).steps, 2);
+
+    // And a step small enough to ask for millions of positions stops at what a
+    // plot can hold.
+    settings.rollIncrement = 1e-6;
+    QCOMPARE(settings.specFor(SweepKind::Roll).steps, kMaxSweepSteps);
+
+    // A travel of nothing is a sweep that stands still, not one that divides by
+    // zero.
+    settings.rollAngle = 0.0;
+    settings.rollIncrement = 0.25;
+    const SweepSpec still = settings.specFor(SweepKind::Roll);
+    QCOMPARE(still.steps, 2);
+    QCOMPARE(still.inputAt(0), 0.0);
+    QCOMPARE(still.inputAt(1), 0.0);
 }
 
 QTEST_MAIN(TestKinematics)

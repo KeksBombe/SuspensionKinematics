@@ -6,6 +6,7 @@
 #include "app/MirrorDialog.h"
 #include "app/ProjectLauncher.h"
 #include "app/RecentProjects.h"
+#include "app/SteeringDialog.h"
 #include "app/WheelDialog.h"
 #include "geom/MeshTopology.h"
 #include "io/LinkageTemplate.h"
@@ -18,14 +19,17 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QDockWidget>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImage>
 #include <QLabel>
 #include <QLocale>
+#include <QMatrix3x3>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QQuaternion>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QSaveFile>
@@ -33,6 +37,7 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
 #include <utility>
 
 namespace suspkin {
@@ -209,6 +214,10 @@ void MainWindow::buildAnalysisDock()
         markDirty();
     });
     connect(m_analysisPanel, &AnalysisPanel::measureChanged, this, [this] { markDirty(); });
+    // How fast the animation runs and whether the parameters window is open
+    // change nothing about the curve, but they are still the user's arrangement
+    // and the project keeps them.
+    connect(m_analysisPanel, &AnalysisPanel::playbackChanged, this, [this] { markDirty(); });
     connect(m_analysisPanel, &AnalysisPanel::exportCsvRequested, this,
             &MainWindow::exportSweepCsv);
 
@@ -327,6 +336,12 @@ void MainWindow::buildActions()
     m_resetLinkageAction = new QAction(tr("&Reset to Built-in Template"), this);
     connect(m_resetLinkageAction, &QAction::triggered, this, &MainWindow::resetLinkageTemplate);
 
+    m_steeringAction = new QAction(tr("&Steering..."), this);
+    m_steeringAction->setStatusTip(
+        tr("Say which axle the steering rack drives. An axle that drives none is not offered a "
+           "steer sweep."));
+    connect(m_steeringAction, &QAction::triggered, this, &MainWindow::steeringDialog);
+
     m_addWheelsAction = new QAction(tr("Add &Wheels..."), this);
     m_addWheelsAction->setEnabled(false);
     m_addWheelsAction->setStatusTip(
@@ -388,6 +403,7 @@ void MainWindow::buildMenus()
     partsMenu->addSeparator();
     partsMenu->addAction(m_importLinkageAction);
     partsMenu->addAction(m_resetLinkageAction);
+    partsMenu->addAction(m_steeringAction);
     auto* revealTemplateAction = partsMenu->addAction(tr("Show &Template File"));
     revealTemplateAction->setStatusTip(
         tr("Open the project's template in whatever edits JSON on this machine."));
@@ -401,6 +417,12 @@ void MainWindow::buildMenus()
     analysisMenu->addAction(m_analysisDock->toggleViewAction());
     m_analysisDock->toggleViewAction()->setText(tr("Show &Analysis"));
     m_analysisDock->toggleViewAction()->setShortcut(QKeySequence(QStringLiteral("Ctrl+K")));
+    auto* parametersAction = analysisMenu->addAction(tr("Sweep &Parameters..."));
+    parametersAction->setStatusTip(
+        tr("How far each sweep travels and how finely it is solved."));
+    parametersAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+P")));
+    connect(parametersAction, &QAction::triggered, m_analysisPanel,
+            &AnalysisPanel::showParameters);
     analysisMenu->addSeparator();
     auto* exportSweepAction = analysisMenu->addAction(tr("Export Sweep as &CSV..."));
     exportSweepAction->setStatusTip(
@@ -664,8 +686,117 @@ bool MainWindow::loadLinkageTemplateFromProject()
     }
 
     m_linkageTemplate = *result.templ;
+    adoptTemplateSteering();
     rebuildLinkage();
     return true;
+}
+
+void MainWindow::steeringDialog()
+{
+    if (m_linkageTemplate.isEmpty() || m_linkageTemplate.corners.empty()) return;
+
+    SteeringDialog dialog(m_linkageTemplate, m_project.mirror(), m_hardpointModel->table(), this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const std::vector<CornerSpec> corners = dialog.corners();
+    bool changed = corners.size() != m_linkageTemplate.corners.size();
+    for (std::size_t i = 0; !changed && i < corners.size(); ++i) {
+        changed = corners[i].steeringRack != m_linkageTemplate.corners[i].steeringRack
+                  || corners[i].steeringStated != m_linkageTemplate.corners[i].steeringStated;
+    }
+    if (!changed) return;
+
+    const QString relative = m_project.linkageTemplate().relativePath;
+    const QString path = m_project.absolutePath(relative);
+    QFile file(path);
+    QString error;
+    QByteArray patched;
+    // Patched rather than rewritten, the same way a workbook is: this file is
+    // the user's, and anything in it this version does not model -- a note, a
+    // part, a key from a later release -- has to come out the other side.
+    if (file.open(QIODevice::ReadOnly))
+        patched = setTemplateSteering(file.readAll(), corners, &error);
+    if (patched.isEmpty() || !m_project.writeFile(relative, patched, &error)) {
+        QMessageBox::warning(this, tr("Cannot write the linkage template"),
+                             tr("The steering could not be saved:\n\n%1")
+                                 .arg(error.isEmpty() ? tr("The template could not be read.")
+                                                      : error));
+        return;
+    }
+
+    // Read back rather than patched in memory, so what the solver sees is what
+    // the file says -- the same re-read Overwrite Workbook does, and for the
+    // same reason.
+    loadLinkageTemplateFromProject();
+    markDirty();
+    statusBar()->showMessage(tr("Steering written to the linkage template."), 5000);
+}
+
+void MainWindow::adoptTemplateSteering()
+{
+    m_steeringNote.clear();
+    if (m_linkageTemplate.isEmpty() || m_linkageTemplate.steeringDeclared()) return;
+
+    // A template written before steering was a role says nothing about it, and
+    // every axle then steers -- which is how a rear toe link ends up being
+    // dragged sideways by a rack the car has not got.
+    //
+    // If the file is recognisably the built-in template, the answer is known and
+    // is written in. If it is somebody's own, nothing is touched: the same rule
+    // the reader already follows for a template it cannot parse.
+    const LinkageTemplate builtin = builtinLinkageTemplate();
+    bool recognised = !builtin.corners.empty() && !builtin.mechanism.tieRodInboard.isEmpty()
+                      && m_linkageTemplate.mechanism.tieRodInboard
+                             == builtin.mechanism.tieRodInboard
+                      && m_linkageTemplate.corners.size() == builtin.corners.size();
+    std::vector<CornerSpec> corners = m_linkageTemplate.corners;
+    if (recognised) {
+        for (CornerSpec& corner : corners) {
+            const auto match = std::find_if(builtin.corners.begin(), builtin.corners.end(),
+                                            [&corner](const CornerSpec& known) {
+                                                return known.token == corner.token;
+                                            });
+            if (match == builtin.corners.end()) {
+                recognised = false;
+                break;
+            }
+            corner.steeringRack = match->steeringRack;
+        }
+    }
+
+    if (!recognised) {
+        m_steeringNote = tr("This project's template does not say which axle the steering rack "
+                            "drives, so every axle can be steered. Parts > Steering says which "
+                            "one does.");
+        return;
+    }
+
+    const QString relative = m_project.linkageTemplate().relativePath;
+    const QString path = m_project.absolutePath(relative);
+    QFile file(path);
+    QString error;
+    QByteArray patched;
+    if (file.open(QIODevice::ReadOnly))
+        patched = setTemplateSteering(file.readAll(), corners, &error);
+    if (patched.isEmpty() || !m_project.writeFile(relative, patched, &error)) {
+        // Not worth a dialog: the project still works, it just still says
+        // nothing about steering.
+        m_steeringNote = tr("This project's template does not say which axle the steering rack "
+                            "drives, so every axle can be steered. Parts > Steering says which "
+                            "one does.");
+        return;
+    }
+
+    m_linkageTemplate.corners = corners;
+    QStringList steered;
+    for (const CornerSpec& corner : corners) {
+        if (!corner.steeringRack.isEmpty())
+            steered << (corner.label.isEmpty() ? corner.token : corner.label);
+    }
+    m_steeringNote = tr("This project's template did not say which axle is steered, so the "
+                        "built-in answer was written into it: %1. Parts > Steering changes it.")
+                         .arg(steered.isEmpty() ? tr("none") : steered.join(QStringLiteral(", ")));
+    markDirty();
 }
 
 void MainWindow::rebuildLinkage()
@@ -799,15 +930,18 @@ void MainWindow::applyViewState()
         m_hardpointPanel->setSelectedRow(view.selectedHardpoint);
     }
 
-    // The axle has to be set after the spec, because the spec is what decides
-    // the range the position is allowed to take.
+    // The travel and the kind have to be set before the position, because
+    // between them they decide the range the position is allowed to take.
     const SimulationState& simulation = view.simulation;
-    m_analysisPanel->setSpec(simulation.sweep);
+    m_analysisPanel->setSettings(simulation.sweep);
+    m_analysisPanel->setKind(simulation.kind);
     if (!simulation.axle.isEmpty()) m_analysisPanel->setAxle(simulation.axle);
     if (!simulation.measure.isEmpty())
         m_analysisPanel->setMeasure(sweepMeasureFromKey(simulation.measure));
     m_analysisPanel->setPosition(simulation.position);
     m_analysisPanel->setMovesAllAxles(simulation.allAxles);
+    m_analysisPanel->setAnimationSeconds(simulation.animationSeconds);
+    m_analysisPanel->setParametersVisible(simulation.parametersOpen);
     m_analysisPanel->setSimulating(simulation.active);
     refreshSweep();
     applySimulation();
@@ -840,11 +974,14 @@ void MainWindow::collectViewState()
     SimulationState& simulation = view.simulation;
     simulation.active = m_analysisPanel->simulating();
     simulation.axle = m_analysisPanel->axle();
-    simulation.sweep = m_analysisPanel->spec();
+    simulation.kind = m_analysisPanel->kind();
+    simulation.sweep = m_analysisPanel->settings();
     simulation.position = m_analysisPanel->position();
     simulation.measure = sweepMeasureKey(m_analysisPanel->measure());
     simulation.animating = m_analysisPanel->animating();
+    simulation.animationSeconds = m_analysisPanel->animationSeconds();
     simulation.allAxles = m_analysisPanel->movesAllAxles();
+    simulation.parametersOpen = m_analysisPanel->parametersVisible();
 
     m_project.setView(view);
 
@@ -1380,28 +1517,39 @@ void MainWindow::rebuildSolvers()
     const HardpointTable& table = m_hardpointModel->table();
 
     // A template written before the solver existed still draws perfectly well;
-    // it simply does not say which point plays which role. The built-in block is
-    // the right guess -- such a template is almost certainly a copy of it -- and
-    // guessing out loud beats a dock that silently does nothing.
-    MechanismTemplate mechanism = m_linkageTemplate.mechanism;
-    if (mechanism.isEmpty() && !m_linkageTemplate.isEmpty()) {
-        mechanism = builtinMechanismTemplate();
+    // it simply does not say which point plays which role. The reader fills that
+    // in from the built-in block so that everything reading a template sees the
+    // same roles -- the solve here, and what each hardpoint is for in the
+    // configuration table. All that is left to do is say so.
+    const MechanismTemplate& mechanism = m_linkageTemplate.mechanism;
+    if (m_linkageTemplate.mechanismAssumed) {
         m_solverNote = tr("This project's template does not say which hardpoint plays which role, "
-                          "so the built-in mechanism is being used. Parts > Reset to Built-in "
-                          "Template writes it into the file.");
+                          "so the built-in mechanism is being used, here and in the hardpoint "
+                          "table. Parts > Reset to Built-in Template writes it into the file.");
+    }
+    if (!m_steeringNote.isEmpty()) {
+        m_solverNote = m_solverNote.isEmpty()
+                           ? m_steeringNote
+                           : m_solverNote + QLatin1Char('\n') + m_steeringNote;
     }
 
-    QList<QPair<QString, QString>> axles;
+    QList<AxleEntry> axles;
     if (!mechanism.isEmpty() && !table.isEmpty()) {
         std::vector<CornerSpec> corners = m_linkageTemplate.corners;
         // A template with no corners spells its point names out in full, which
         // is one axle rather than none.
         if (corners.empty()) corners.push_back(CornerSpec{});
+        // Whether the template says anything at all about steering. It is asked
+        // once, for the whole file: a template that says nothing leaves every
+        // axle steered, which is what every project made before the role existed
+        // has always done.
+        const bool steeringDeclared = m_linkageTemplate.steeringDeclared();
         for (const CornerSpec& corner : corners) {
-            AxleSolver axle = AxleSolver::build(mechanism, corner, table, m_project.mirror());
+            AxleSolver axle =
+                AxleSolver::build(mechanism, corner, table, m_project.mirror(), steeringDeclared);
             if (axle.isEmpty()) continue;
             const QString label = axle.label().isEmpty() ? tr("Suspension") : axle.label();
-            axles.append({ axle.cornerToken(), label });
+            axles.append(AxleEntry{ axle.cornerToken(), label, axle.isSteered() });
             m_axles.push_back(std::move(axle));
         }
     }
@@ -1535,11 +1683,38 @@ void MainWindow::exportSweepCsv()
     statusBar()->showMessage(tr("Sweep written to %1").arg(QDir::toNativeSeparators(path)), 5000);
 }
 
+WheelRotations MainWindow::wheelRotations() const
+{
+    WheelRotations rotations;
+    for (const AxleSample& sample : m_poses)
+        for (const CornerPose* pose : { &sample.left, &sample.right }) {
+            if (!pose->valid || pose->wheelCenterName.isEmpty()) continue;
+            // Rigid keeps its rotation as rows -- r[i] dotted with a point gives
+            // component i of the answer -- which is a row-major matrix, and that
+            // is what QMatrix3x3 reads.
+            const Rigid& motion = pose->uprightMotion;
+            const float values[9] = {
+                static_cast<float>(motion.r[0].x), static_cast<float>(motion.r[0].y),
+                static_cast<float>(motion.r[0].z), static_cast<float>(motion.r[1].x),
+                static_cast<float>(motion.r[1].y), static_cast<float>(motion.r[1].z),
+                static_cast<float>(motion.r[2].x), static_cast<float>(motion.r[2].y),
+                static_cast<float>(motion.r[2].z),
+            };
+            rotations.insert(pose->wheelCenterName,
+                             QQuaternion::fromRotationMatrix(QMatrix3x3(values)));
+        }
+    return rotations;
+}
+
 void MainWindow::rebuildWheels()
 {
     const WheelsRef& wheels = m_project.wheels();
     m_wheelPlacements = wheels.isEmpty() ? std::vector<WheelPlacement>{}
                                          : resolveWheels(wheels.spec, posedTable());
+    // A wheel is bolted to its upright, so it goes where the upright goes and
+    // turns the way the upright turns. Without this the models slide about the
+    // car on steering lock without ever pointing anywhere.
+    orientWheels(m_wheelPlacements, wheelRotations());
     m_viewport->setWheelPlacements(m_wheelPlacements, wheels.spec.alignToCenter);
     updateActionState(); // which refreshes the status line too
 }
@@ -1742,6 +1917,10 @@ void MainWindow::updateActionState()
 {
     const bool loaded = m_hardpointModel->rowCount() > 0;
     m_linksAction->setEnabled(!m_linkage.isEmpty());
+    // A template with no corners has no axle to ask about, and one that failed
+    // to load has nothing to write into.
+    m_steeringAction->setEnabled(!m_linkageTemplate.isEmpty()
+                                 && !m_linkageTemplate.corners.empty());
     m_wheelsAction->setEnabled(!m_wheelPlacements.empty());
     m_addWheelsAction->setEnabled(loaded);
     m_removeWheelsAction->setEnabled(!m_project.wheels().isEmpty());

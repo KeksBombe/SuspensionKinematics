@@ -55,8 +55,11 @@ Its parameter set is the 2025 car (track 1220, wheelbase 1530, CoG at 300 mm,
    their own workbook.
 3. **Names come from the project's `mechanism` block, not from the generator.**
    The generator produces *roles* -- lower front pivot, upper outer ball joint,
-   tie rod inboard -- and the names are looked up in the template that is
-   already open. A team whose template says `FL_LOA_front` gets that, and the
+   tie rod inboard, **the point on the wheel's own axis** -- and the names are
+   looked up in the template that is already open. A role the template does not
+   name is simply not written: a project whose template has no `contactPatch` --
+   which is now the sensible way to write one -- gets no contact patch point,
+   because the solver computes that from the wheel axis anyway. A team whose template says `FL_LOA_front` gets that, and the
    generator never hardcodes a vocabulary. This is the same relationship
    `CornerSolver` has with `MechanismTemplate`, run backwards.
 4. **One side, one corner, then mirror.** The generator writes the corner the
@@ -88,18 +91,19 @@ static camber, `lambda` kingpin inclination, `sigma` caster angle.
 | # | Point | How |
 |---|---|---|
 | 1 | **Wheel centre** | `x` from the CoG and the weight distribution along the wheelbase; `y = s * track/2`; `z` = the loaded tyre radius. |
-| 2 | **Contact patch** | `R = z_wc / cos(gamma)`; `y_cp = y_wc - s * R * sin(gamma)`, `z = 0`. Negative camber walks the patch outboard, which is the point of computing it rather than dropping a perpendicular. |
-| 3 | **Steering axis** | Its ground pierce point is the contact patch moved forward by the mechanical trail and inboard by the scrub radius. Its direction is `z_hat` leaned top-rearward by `sigma` and top-inboard by `lambda`. |
-| 4 | **Ball joints** | Both on that axis, at the heights the rim packaging allows: `h = (z_wc +/- rim_radius) / d_z`. This is what keeps the joints inside the wheel. |
-| 5 | **Front-view instant centre** | From the target roll-centre height `h_rc` and the front-view swing arm length `L`: `y = y_cp - s * L`, `z = h_rc * L / |y_cp|`. Measured off the contact patch's real `y`, not off `track/2`. |
-| 6 | **Side-view instant centre** | From the anti-dive (or anti-lift) target and the brake bias: `tan(theta) = (anti/100) * h_cg / (wheelbase * bias)`, then walked out from the contact patch along that line by the side-view swing arm length. |
-| 7 | **Wishbone planes** | An arm's plane contains its outboard ball joint and **both** instant centres -- that is what fixes a wishbone's motion. Normal is `(IC_roll - out) x (IC_pitch - out)`. |
-| 8 | **Inboard pivot rays** | In that plane, each leg leaves the ball joint at its own planform angle (four of them per axle: upper/lower x forward/rearward). Phase C stops at a given arm length; Phase E casts the ray at the chassis. |
-| 9 | **Tie rod outboard** | Offset from the wheel centre by the steering arm length (sign selects front or rear steer), at a height on the rim packaging circle, `y` interpolated on the steering axis, plus the Ackermann offset. |
-| 10 | **Tie rod inboard** | Three of the four wishbone inboards define a plane; the tie-rod inboard is where the line from the tie-rod outboard toward the front-view IC pierces it. `x` is then set from the outboard plus an offset. |
-| 11 | **Coplanarity advice** | The fourth wishbone inboard is reported with the position that *would* put it on that plane. Not applied -- shown, as "move this point here and the bump steer goes away". |
+| 2 | **Wheel axis** | A point an axle's length outboard of the wheel centre along `n = (sin(tau)*cos(gamma), s*cos(tau)*cos(gamma), -sin(gamma))` -- static toe `tau` and camber `gamma` in one direction. This is what the solver reads the wheel's attitude off (`mechanism.upright.wheelAxis`), it is the only way a generated table can state **toe** at all, and it is what turns the wheel model with the steering. |
+| 3 | **Contact patch** | `contactPatchFor(wc, n, R)` with `R = tireRadiusToGround(wc, n, 0)` -- the solver's own functions from `SuspensionSolver.h`, not a second derivation, so generator and solver cannot drift apart. `R = z_wc / cos(gamma)` is that same drop with toe left out. Steps 4, 6 and 7 build off the patch; it is only *written into the table* when the template names a `contactPatch`, because with a wheel axis the solver computes it. Negative camber walks it outboard, which is the point of computing it rather than dropping a perpendicular. |
+| 4 | **Steering axis** | Its ground pierce point is the contact patch moved forward by the mechanical trail and inboard by the scrub radius. Its direction is `z_hat` leaned top-rearward by `sigma` and top-inboard by `lambda`. |
+| 5 | **Ball joints** | Both on that axis, at the heights the rim packaging allows: `h = (z_wc +/- rim_radius) / d_z`. This is what keeps the joints inside the wheel. |
+| 6 | **Front-view instant centre** | From the target roll-centre height `h_rc` and the front-view swing arm length `L`: `y = y_cp - s * L`, `z = h_rc * L / abs(y_cp)`. Measured off the contact patch's real `y`, not off `track/2`. |
+| 7 | **Side-view instant centre** | From the anti-dive (or anti-lift) target and the brake bias: `tan(theta) = (anti/100) * h_cg / (wheelbase * bias)`, then walked out from the contact patch along that line by the side-view swing arm length. |
+| 8 | **Wishbone planes** | An arm's plane contains its outboard ball joint and **both** instant centres -- that is what fixes a wishbone's motion. Normal is `(IC_roll - out) x (IC_pitch - out)`. |
+| 9 | **Inboard pivot rays** | In that plane, each leg leaves the ball joint at its own planform angle (four of them per axle: upper/lower x forward/rearward). Phase C stops at a given arm length; Phase E casts the ray at the chassis. |
+| 10 | **Tie rod outboard** | Offset from the wheel centre by the steering arm length (sign selects front or rear steer), at a height on the rim packaging circle, `y` interpolated on the steering axis, plus the Ackermann offset. |
+| 11 | **Tie rod inboard** | Three of the four wishbone inboards define a plane; the tie-rod inboard is where the line from the tie-rod outboard toward the front-view IC pierces it. `x` is then set from the outboard plus an offset. |
+| 12 | **Coplanarity advice** | The fourth wishbone inboard is reported with the position that *would* put it on that plane. Not applied -- shown, as "move this point here and the bump steer goes away". |
 
-Steps 10 and 11 are the sharpest idea in the Python tool and the reason it is
+Steps 11 and 12 are the sharpest idea in the Python tool and the reason it is
 worth porting at all. Zero bump steer wants the tie rod's instantaneous axis to
 share the wishbones' instant centre; four inboard points are never naturally
 coplanar, so the construction picks three, and then says what the fourth would
@@ -122,7 +126,8 @@ Verified by reading `Geo_Math/Math/geo_math.py`:
   steep as the requested percentage.
 - **`:66`** -- camber is hardcoded to `0` in the contact patch and both camber
   parameters are marked "not implemented" in `variables.py`, so the patch is
-  just the wheel centre dropped to the ground. Step 2 above replaces it.
+  just the wheel centre dropped to the ground. Steps 2 and 3 above replace it:
+  the attitude is stated by the axis point, and the patch falls out of it.
 - **`:12`** -- `get_intersect_plane_ray` calls `sympy.solve` on a *linear*
   equation, once per point. It is a dot product. This is most of why the Python
   tool is unusably slow.
@@ -199,14 +204,24 @@ append path that already exists.
 
 - [ ] `src/model/DesignParameters.h` -- the parameter set of section 3, grouped
       vehicle / per-axle, with the units in the field comments and sane
-      defaults. Round-trip helpers for the manifest.
+      defaults. Round-trip helpers for the manifest. **Static camber and static
+      toe are both real parameters here**, not the "not implemented" they are in
+      the Python tool: the wheel axis point is what carries them into the table,
+      and toe has nowhere else to live.
 - [ ] `src/model/HardpointGenerator.h` / `.cpp` -- `generateCorner(const
       DesignParameters&, Axle)` returning roles and coordinates, plus the
       warnings a set of targets can earn (a ball joint outside the rim, a
       steering arm longer than the packaging circle, an unreachable trail).
+- [ ] The **wheel axis** role among them, and the contact patch built with the
+      solver's own `contactPatchFor()` / `tireRadiusToGround()` rather than a
+      second copy of that trigonometry. The two must not be able to drift.
+- [ ] A generated corner writes the **steering** role on the axle it generates a
+      rack for, and explicitly none on the other (`CornerSpec::steeringRack` /
+      `steeringStated`). A generator that leaves it silent hands back a car whose
+      rear axle steers.
 - [ ] Role-to-name binding against the open `MechanismTemplate`, so what comes
       out is a `HardpointTable` in the project's own vocabulary.
-- [ ] The coplanarity advisory of step 11, returned alongside rather than
+- [ ] The coplanarity advisory of step 12, returned alongside rather than
       applied.
 - [ ] `CMakeLists.txt` -- added to `suspkin_core`.
 
@@ -223,7 +238,7 @@ append path that already exists.
 - [ ] `Hardpoints > Generate from Design...`, then mirror through the project's
       `MirrorSpec` for the far side, then `setHardpointTable()` ->
       `rebuildLinkage()` -> solvers, and `markDirty()`.
-- [ ] The advisory from step 11 surfaced on the status bar and in the dialog,
+- [ ] The advisory from step 12 surfaced on the status bar and in the dialog,
       never applied silently.
 
 ### Phase E -- chassis clearance for the inboard points
@@ -248,12 +263,15 @@ load the chassis mesh and today do nothing with it but draw it.
       wheel centre and contact patch at known coordinates; both ball joints
       exactly on the steering axis; the axis reproducing the requested caster
       and kingpin angles when measured back off it; the contact patch walking
-      outboard as camber goes negative; each wishbone plane containing its
-      outboard joint and both instant centres to 1e-9.
+      outboard as camber goes negative; the wheel axis point reproducing the
+      requested camber **and toe**; each wishbone plane containing its outboard
+      joint and both instant centres to 1e-9.
 - [ ] **The round trip that matters**: generate a corner, feed it to
-      `CornerSolver::bind()`, and check the design pose reports back the caster,
-      kingpin, scrub and trail that were asked for. The generator and the solver
-      are inverses; this is the test that proves it.
+      `CornerSolver::bind()`, and check the design pose reports back the camber,
+      toe, caster, kingpin, scrub and trail that were asked for. The generator
+      and the solver are inverses; this is the test that proves it. Camber and
+      toe only close this loop because of the wheel axis point -- before it,
+      toe went in and nothing came back out.
 - [ ] `tests/test_project.cpp` -- `removed` round-trips through `edits.json`
       (already outstanding in `KINEMATICS_PLAN.md`); `DesignParameters`
       round-trips through the manifest.
@@ -302,3 +320,16 @@ stack behind them in one go.
   - The Python tool's generator is ~400 lines of trigonometry with no real
     dependencies; the numpy and sympy in it are doing nothing that a dot product
     would not. Porting it is not a dependency decision.
+
+- **2026-09-09** -- The **wheel's own axis** landed in the solver ahead of this
+  plan (`mechanism.upright.wheelAxis`, `{corner}_WheelAxis`), so section 3 has
+  been renumbered around it. What changes for this work:
+  - The generator emits a **wheel axis point**, and static **toe** becomes a
+    real parameter -- there was previously nowhere in a hardpoint table to put
+    it, which is why the Python tool left camber and toe "not implemented".
+  - The contact patch is no longer necessarily a generated point. The solver
+    computes it (`contactPatchFor()`, a tyre radius down the wheel's own plane
+    onto the ground), and the generator should call those same functions for its
+    internal patch rather than re-deriving them.
+  - The Phase F round trip gets sharper: camber and toe now come back out of
+    `CornerSolver` as well as going in.

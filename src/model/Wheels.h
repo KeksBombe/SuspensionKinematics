@@ -3,7 +3,9 @@
 #include "geom/Aabb.h"
 #include "model/Hardpoint.h"
 
+#include <QHash>
 #include <QMatrix4x4>
+#include <QQuaternion>
 #include <QString>
 #include <QStringList>
 #include <QVector3D>
@@ -82,15 +84,31 @@ struct WheelSpec {
     bool operator!=(const WheelSpec& other) const { return !(*this == other); }
 };
 
-/// One placed copy of the models: which corner it is, and where.
+/// One placed copy of the models: which corner it is, where, and which way it
+/// points.
 struct WheelPlacement {
     WheelCorner corner = WheelCorner::FrontLeft;
     QString pointName;
     QVector3D center;
+    /// How far the upright has turned from the design position -- the steering
+    /// angle and the camber the solve produced, together. Identity is the wheel
+    /// as the CAD file drew it, which is what a project that is not simulating
+    /// anything sees.
+    ///
+    /// A rotation and not a whole transform on purpose: where the wheel is comes
+    /// from @ref center, which is the hardpoint, so the two cannot disagree
+    /// about it.
+    QQuaternion rotation;
     /// Drawn as the mirror image of the model, because this corner is on the
     /// side the model was not drawn for.
     bool mirrored = false;
 };
+
+/// How far each wheel has turned, by the name of the hardpoint it is centred on.
+///
+/// Keyed by name for the same reason the poses are laid over the table that way:
+/// neither the solver nor the wheels have to know the other's ordering.
+using WheelRotations = QHash<QString, QQuaternion>;
 
 /// The placements @p spec asks for that @p table can supply.
 ///
@@ -100,9 +118,20 @@ struct WheelPlacement {
 std::vector<WheelPlacement> resolveWheels(const WheelSpec& spec, const HardpointTable& table,
                                           QStringList* warnings = nullptr);
 
+/// Turn each placement by the rotation @p rotations gives for the hardpoint it
+/// is centred on. A placement nobody named is left as it was, which is the
+/// design position -- a corner the solver could not reach should stand still,
+/// not snap to somebody else's angle.
+void orientWheels(std::vector<WheelPlacement>& placements, const WheelRotations& rotations);
+
 /// Model to world for one placement: the model's anchor -- the centre of
-/// @p modelBounds, or its own origin -- moved onto the wheel centre, mirrored
-/// across the plane through that anchor when the placement is on the far side.
+/// @p modelBounds, or its own origin -- moved onto the wheel centre, turned by
+/// the placement's rotation and mirrored across the plane through that anchor
+/// when the placement is on the far side.
+///
+/// The mirror comes first and the rotation after it, because the rotation is a
+/// real one, measured on the car: the far side's wheel turns the way that
+/// upright turns, not the way its mirror image would.
 QMatrix4x4 wheelTransform(const WheelPlacement& placement, const Aabb& modelBounds,
                           bool alignToCenter);
 

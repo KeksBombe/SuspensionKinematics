@@ -158,6 +158,10 @@ car, green is solved for, amber is carried along.
 **None of it has to be typed in to begin with.** The template already knows which
 point is a chassis pivot and which is an outer ball joint, and which parts are
 drawn through each point, so a workbook opens with the table already described.
+Part 1 is always the member the point belongs to and Part 2 what it is attached
+to — a tie rod end reads *tie rod, upright*. A project made before any of this
+existed holds a template that says nothing about roles; it is read with the
+built-in ones assumed, so those tables fill in too, and the analysis dock says so.
 What was worked out for you is yours from that moment: change any of it and the
 change is what gets saved.
 

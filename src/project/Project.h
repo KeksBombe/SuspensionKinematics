@@ -29,14 +29,23 @@ struct SimulationState {
     /// Whether the viewport is showing the mechanism posed rather than at the
     /// coordinates the table holds.
     bool active = false;
-    QString axle; ///< the corner token being swept, e.g. "F"
-    SweepSpec sweep;
+    QString axle;                       ///< the corner token being swept, e.g. "F"
+    SweepKind kind = SweepKind::Bump;   ///< which of the three is being swept
+    /// The travel and increment of all three kinds, not just the one being
+    /// swept: a project that is left in roll and reopened in bump has to come
+    /// back to the wheel travel it was given, not to the roll angle.
+    SweepSettings sweep;
     double position = 0.0; ///< where along that sweep the model stands
     QString measure;       ///< which curve the plot is showing
-    /// Whether it is running through its travel on its own, and whether every
-    /// axle comes along or only the one the curve belongs to.
+    /// Whether it is running through its travel on its own, how long one run of
+    /// the travel takes, and whether every axle comes along or only the one the
+    /// curve belongs to.
     bool animating = false;
+    double animationSeconds = 4.0;
     bool allAxles = true;
+    /// Whether the parameters window was left open. A window the user arranged
+    /// is state like any other, so it comes back the way they left it.
+    bool parametersOpen = false;
 };
 
 /// What the viewport looked like when the project was last saved. Restored

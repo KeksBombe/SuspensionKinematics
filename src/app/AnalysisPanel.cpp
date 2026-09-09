@@ -1,6 +1,7 @@
 #include "app/AnalysisPanel.h"
 
 #include "app/PlotWidget.h"
+#include "app/SweepParametersDialog.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -11,7 +12,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSlider>
-#include <QSpinBox>
+#include <QStandardItemModel>
 #include <QStyle>
 #include <QTableWidget>
 #include <QTimer>
@@ -88,33 +89,10 @@ void AnalysisPanel::buildUi()
     m_kindBox->addItem(tr("Roll"), int(SweepKind::Roll));
     m_kindBox->addItem(tr("Steer"), int(SweepKind::Steer));
     m_kindBox->setToolTip(tr("Bump moves both wheels together, roll moves them opposite ways, "
-                             "steer moves the rack at a fixed ride height."));
+                             "steer moves the rack at a fixed ride height. Each keeps its own "
+                             "travel and increment, set in the parameters window."));
     controls->addWidget(new QLabel(tr("Sweep"), this), 2, 0);
     controls->addWidget(m_kindBox, 2, 1);
-
-    m_fromBox = new QDoubleSpinBox(this);
-    m_fromBox->setRange(-500.0, 500.0);
-    m_fromBox->setDecimals(2);
-    m_fromBox->setValue(-25.0);
-    m_toBox = new QDoubleSpinBox(this);
-    m_toBox->setRange(-500.0, 500.0);
-    m_toBox->setDecimals(2);
-    m_toBox->setValue(25.0);
-    m_stepsBox = new QSpinBox(this);
-    m_stepsBox->setRange(2, 501);
-    m_stepsBox->setValue(41);
-    m_stepsBox->setToolTip(tr("How many positions the sweep solves."));
-    controls->addWidget(m_fromBox, 2, 2);
-    controls->addWidget(m_toBox, 2, 3);
-    controls->addWidget(m_stepsBox, 2, 4);
-
-    m_rackBox = new QDoubleSpinBox(this);
-    m_rackBox->setRange(-200.0, 200.0);
-    m_rackBox->setDecimals(2);
-    m_rackBox->setToolTip(tr("Rack travel held through a bump or roll sweep, so bump steer can be "
-                             "looked at on a wheel that is already turned."));
-    controls->addWidget(new QLabel(tr("Rack held"), this), 3, 0);
-    controls->addWidget(m_rackBox, 3, 1);
 
     m_playButton = new QToolButton(this);
     m_playButton->setCheckable(true);
@@ -123,25 +101,19 @@ void AnalysisPanel::buildUi()
     m_playButton->setText(tr("Play"));
     m_playButton->setToolTip(tr("Run the mechanism back and forth through the sweep so the "
                                 "movement can be watched rather than scrubbed."));
-    controls->addWidget(m_playButton, 3, 2);
+    controls->addWidget(m_playButton, 2, 2);
 
-    m_secondsBox = new QDoubleSpinBox(this);
-    m_secondsBox->setRange(0.2, 60.0);
-    m_secondsBox->setDecimals(1);
-    m_secondsBox->setSingleStep(0.5);
-    m_secondsBox->setValue(4.0);
-    m_secondsBox->setSuffix(tr(" s/cycle"));
-    m_secondsBox->setToolTip(tr("How long one there-and-back run of the travel takes."));
-    controls->addWidget(m_secondsBox, 3, 3);
-
-    m_allAxles = new QCheckBox(tr("All axles"), this);
-    m_allAxles->setChecked(true);
-    m_allAxles->setToolTip(tr("Move every axle together. The curve and the readout still belong "
-                              "to the axle chosen above."));
-    controls->addWidget(m_allAxles, 3, 4);
+    // The travel, the increments and the playback settings live in a window of
+    // their own: three sweeps' worth of numbers do not fit beside a plot, and
+    // they are set once and left rather than reached for every minute.
+    m_parameters = new SweepParametersDialog(this);
+    m_parametersButton = new QPushButton(tr("Parameters..."), this);
+    m_parametersButton->setToolTip(tr("How far each sweep travels and how finely it is solved, "
+                                      "in a window that can be left open beside the viewport."));
+    controls->addWidget(m_parametersButton, 2, 3, 1, 2);
 
     m_exportButton = new QPushButton(tr("Export CSV..."), this);
-    controls->addWidget(m_exportButton, 4, 3, 1, 2);
+    controls->addWidget(m_exportButton, 3, 3, 1, 2);
 
     controls->setColumnStretch(1, 1);
     controls->setColumnStretch(2, 1);
@@ -190,6 +162,7 @@ void AnalysisPanel::buildUi()
     // panel from the project and must not have that read back as a change.
 
     connect(m_axleBox, &QComboBox::currentIndexChanged, this, [this] {
+        syncSteerAvailability();
         if (!m_updating) emit axleChanged();
     });
     connect(m_simulate, &QCheckBox::toggled, this, [this](bool on) {
@@ -204,8 +177,22 @@ void AnalysisPanel::buildUi()
         if (!m_updating) emit measureChanged();
     });
     connect(m_exportButton, &QPushButton::clicked, this, &AnalysisPanel::exportCsvRequested);
-    connect(m_allAxles, &QCheckBox::toggled, this, [this] {
+    connect(m_parametersButton, &QPushButton::clicked, this, &AnalysisPanel::showParameters);
+
+    // The parameters window is live: what it changes is applied as it is typed,
+    // which is the whole reason it is worth leaving open.
+    connect(m_parameters, &SweepParametersDialog::settingsChanged, this, [this] {
+        syncPositionRange();
+        if (!m_updating) emit specChanged();
+    });
+    connect(m_parameters, &SweepParametersDialog::movesAllAxlesChanged, this, [this] {
         if (!m_updating) emit positionChanged(position());
+    });
+    connect(m_parameters, &SweepParametersDialog::animationSecondsChanged, this, [this] {
+        if (!m_updating) emit playbackChanged();
+    });
+    connect(m_parameters, &SweepParametersDialog::closedByUser, this, [this] {
+        if (!m_updating) emit playbackChanged();
     });
 
     m_animation = new QTimer(this);
@@ -247,30 +234,29 @@ void AnalysisPanel::buildUi()
         emit positionChanged(value);
     });
 
-    const auto specEdited = [this] {
-        if (m_updating) return;
-        m_kind = static_cast<SweepKind>(m_kindBox->currentData().toInt());
+    connect(m_kindBox, &QComboBox::currentIndexChanged, this, [this] {
+        m_parameters->setKind(kind());
         syncPositionRange();
-        emit specChanged();
-    };
-    connect(m_kindBox, &QComboBox::currentIndexChanged, this, specEdited);
-    connect(m_fromBox, &QDoubleSpinBox::valueChanged, this, specEdited);
-    connect(m_toBox, &QDoubleSpinBox::valueChanged, this, specEdited);
-    connect(m_stepsBox, &QSpinBox::valueChanged, this, specEdited);
-    connect(m_rackBox, &QDoubleSpinBox::valueChanged, this, specEdited);
+        if (!m_updating) emit specChanged();
+    });
 
     syncPositionRange();
 }
 
-void AnalysisPanel::setAxles(const QList<QPair<QString, QString>>& axles)
+void AnalysisPanel::setAxles(const QList<AxleEntry>& axles)
 {
     const QString wanted = axle();
     m_updating = true;
     m_axleBox->clear();
-    for (const auto& entry : axles) m_axleBox->addItem(entry.second, entry.first);
+    m_steerable.clear();
+    for (const AxleEntry& entry : axles) {
+        m_axleBox->addItem(entry.label, entry.token);
+        m_steerable.insert(entry.token, entry.steered);
+    }
     const int index = m_axleBox->findData(wanted);
     if (index >= 0) m_axleBox->setCurrentIndex(index);
     m_updating = false;
+    syncSteerAvailability();
 
     // Nothing to sweep is not an error state to explain, it is a panel with
     // nothing in it. The window says why in the status line.
@@ -280,14 +266,9 @@ void AnalysisPanel::setAxles(const QList<QPair<QString, QString>>& axles)
     m_positionSlider->setEnabled(usable);
     m_positionBox->setEnabled(usable);
     m_kindBox->setEnabled(usable);
-    m_fromBox->setEnabled(usable);
-    m_toBox->setEnabled(usable);
-    m_stepsBox->setEnabled(usable);
-    m_rackBox->setEnabled(usable);
     m_exportButton->setEnabled(usable);
     m_playButton->setEnabled(usable);
-    m_secondsBox->setEnabled(usable);
-    m_allAxles->setEnabled(usable);
+    m_parametersButton->setEnabled(usable);
     if (!usable) m_playButton->setChecked(false);
 }
 
@@ -300,31 +281,102 @@ void AnalysisPanel::setAxle(const QString& token)
     m_updating = true;
     m_axleBox->setCurrentIndex(index);
     m_updating = false;
+    // Restoring a project happens in this order: the sweep kind first, then the
+    // axle. A project that was left on a steer sweep of an axle with no rack --
+    // which is exactly what the old behaviour let people do -- has to land
+    // somewhere sensible rather than steering a suspension that cannot.
+    syncSteerAvailability();
 }
 
-SweepSpec AnalysisPanel::spec() const
+void AnalysisPanel::syncSteerAvailability()
 {
-    SweepSpec spec;
-    spec.kind = static_cast<SweepKind>(m_kindBox->currentData().toInt());
-    spec.from = m_fromBox->value();
-    spec.to = m_toBox->value();
-    spec.steps = m_stepsBox->value();
-    spec.rackTravel = m_rackBox->value();
-    return spec;
+    const bool steered = m_steerable.value(axle(), true);
+
+    // Greyed out rather than removed: the entry is still the answer to "why can
+    // I not steer this?", and a combo whose items move about under the cursor
+    // is worse than one with a disabled row in it.
+    if (auto* model = qobject_cast<QStandardItemModel*>(m_kindBox->model())) {
+        const int row = m_kindBox->findData(int(SweepKind::Steer));
+        if (QStandardItem* item = row >= 0 ? model->item(row) : nullptr) {
+            item->setEnabled(steered);
+            item->setToolTip(steered ? QString()
+                                     : tr("This axle has no steering: the linkage template names "
+                                          "no hardpoint for a rack to drive. Parts > Steering "
+                                          "names one."));
+        }
+    }
+    m_parameters->setSteeringAvailable(steered);
+
+    if (steered || kind() != SweepKind::Steer) return;
+
+    // Standing on a sweep this axle cannot do. Bump is the one every suspension
+    // can. setKind() guards the signal itself; what it does not do is restore
+    // whatever guard we were already inside, so that is put back by hand.
+    const bool wasUpdating = m_updating;
+    setKind(SweepKind::Bump);
+    m_parameters->setKind(SweepKind::Bump);
+    syncPositionRange();
+    m_updating = wasUpdating;
+    if (!wasUpdating) emit specChanged();
 }
 
-void AnalysisPanel::setSpec(const SweepSpec& spec)
+SweepSettings AnalysisPanel::settings() const { return m_parameters->settings(); }
+
+void AnalysisPanel::setSettings(const SweepSettings& settings)
 {
     m_updating = true;
-    const int kindIndex = m_kindBox->findData(int(spec.kind));
-    if (kindIndex >= 0) m_kindBox->setCurrentIndex(kindIndex);
-    m_kind = spec.kind;
-    m_fromBox->setValue(spec.from);
-    m_toBox->setValue(spec.to);
-    m_stepsBox->setValue(spec.steps);
-    m_rackBox->setValue(spec.rackTravel);
+    m_parameters->setSettings(settings);
     m_updating = false;
     syncPositionRange();
+}
+
+SweepKind AnalysisPanel::kind() const
+{
+    return static_cast<SweepKind>(m_kindBox->currentData().toInt());
+}
+
+void AnalysisPanel::setKind(SweepKind kind)
+{
+    const int index = m_kindBox->findData(int(kind));
+    if (index < 0) return;
+    m_updating = true;
+    m_kindBox->setCurrentIndex(index);
+    m_updating = false;
+    m_parameters->setKind(kind);
+    syncPositionRange();
+}
+
+SweepSpec AnalysisPanel::spec() const { return settings().specFor(kind()); }
+
+double AnalysisPanel::animationSeconds() const { return m_parameters->animationSeconds(); }
+
+void AnalysisPanel::setAnimationSeconds(double seconds)
+{
+    m_updating = true;
+    m_parameters->setAnimationSeconds(seconds);
+    m_updating = false;
+}
+
+bool AnalysisPanel::parametersVisible() const { return m_parameters->isVisible(); }
+
+void AnalysisPanel::setParametersVisible(bool visible)
+{
+    if (m_parameters->isVisible() == visible) return;
+    m_updating = true;
+    if (visible)
+        m_parameters->show();
+    else
+        m_parameters->close();
+    m_updating = false;
+}
+
+void AnalysisPanel::showParameters()
+{
+    const bool wasVisible = m_parameters->isVisible();
+    m_parameters->show();
+    m_parameters->raise();
+    m_parameters->activateWindow();
+    if (!wasVisible && !m_updating) emit playbackChanged();
 }
 
 double AnalysisPanel::position() const { return m_positionBox->value(); }
@@ -370,12 +422,12 @@ void AnalysisPanel::setAnimating(bool animating)
     m_playButton->setChecked(animating);
 }
 
-bool AnalysisPanel::movesAllAxles() const { return m_allAxles->isChecked(); }
+bool AnalysisPanel::movesAllAxles() const { return m_parameters->movesAllAxles(); }
 
 void AnalysisPanel::setMovesAllAxles(bool all)
 {
     m_updating = true;
-    m_allAxles->setChecked(all);
+    m_parameters->setMovesAllAxles(all);
     m_updating = false;
 }
 
@@ -395,7 +447,7 @@ void AnalysisPanel::seedAnimationPhase()
 
 void AnalysisPanel::stepAnimation()
 {
-    const double seconds = std::max(0.2, m_secondsBox->value());
+    const double seconds = std::max(0.2, m_parameters->animationSeconds());
     m_phase = std::fmod(m_phase + (kAnimationIntervalMs / 1000.0) / seconds, 1.0);
 
     // A triangle wave, so the mechanism runs to one end of its travel and back
@@ -453,11 +505,17 @@ void AnalysisPanel::syncPositionRange()
     const SweepSpec current = spec();
     const double low = std::min(current.from, current.to);
     const double high = std::max(current.from, current.to);
+    const double previous = m_positionBox->value();
 
     m_updating = true;
     m_positionUnit->setText(sweepInputUnit(current.kind));
     m_positionBox->setSuffix(QString());
     m_positionBox->setRange(low, high);
+    // A position that means nothing in the new range goes back to the design
+    // position rather than to whichever end of the travel it happened to be
+    // nearest. Twenty millimetres of wheel travel is not twenty degrees of body
+    // roll, and it is not full lock either.
+    if (previous < low || previous > high) m_positionBox->setValue(std::clamp(0.0, low, high));
     m_positionBox->setSingleStep(current.kind == SweepKind::Roll ? 0.1 : 1.0);
     m_positionSlider->setValue(positionToSlider(m_positionBox->value()));
     m_updating = false;

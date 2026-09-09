@@ -1,6 +1,8 @@
 #include "project/Project.h"
 
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -40,6 +42,8 @@ private slots:
     void copiesImportedFilesIn();
     void keepsTheWheelCornersWithoutAnyModels();
     void reimportingTheProjectsOwnCopyKeepsIt();
+    void everySweepsTravelIsRememberedNotJustTheOneBeingSwept();
+    void anOlderProjectsSingleRangeBecomesThatKindsOwnTravel();
 
     void editsAreTheDifferenceFromTheWorkbook();
     void editsRoundTripThroughTheirFile();
@@ -374,6 +378,113 @@ void TestProject::appliedEditsRestoreTheTableExactly()
         for (int axis = 0; axis < 3; ++axis)
             QCOMPARE(restored.points[i].coord[axis], current.points[i].coord[axis]);
     }
+}
+
+void TestProject::everySweepsTravelIsRememberedNotJustTheOneBeingSwept()
+{
+    QTemporaryDir directory;
+    QString error;
+    std::optional<Project> project =
+        Project::create(directory.filePath(QStringLiteral("S")), QStringLiteral("S"), &error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+
+    ViewState view;
+    SimulationState& simulation = view.simulation;
+    simulation.active = true;
+    simulation.axle = QStringLiteral("F");
+    simulation.kind = SweepKind::Roll;
+    simulation.sweep.bumpTravel = 33.0;
+    simulation.sweep.reboundTravel = 17.0;
+    simulation.sweep.bumpIncrement = 1.0;
+    simulation.sweep.rollAngle = 1.2;
+    simulation.sweep.rollIncrement = 0.25;
+    simulation.sweep.steerTravel = 35.0;
+    simulation.sweep.steerIncrement = 2.0;
+    simulation.sweep.rackTravel = 4.0;
+    simulation.position = 0.75;
+    simulation.measure = QStringLiteral("toe");
+    simulation.animating = true;
+    simulation.animationSeconds = 2.5;
+    simulation.allAxles = false;
+    simulation.parametersOpen = true;
+    project->setView(view);
+    QVERIFY2(project->save(&error), qPrintable(error));
+
+    const std::optional<Project> reopened = Project::open(project->manifestPath(), &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    const SimulationState& back = reopened->view().simulation;
+
+    QCOMPARE(back.active, true);
+    QCOMPARE(back.axle, QStringLiteral("F"));
+    QCOMPARE(back.kind, SweepKind::Roll);
+    QCOMPARE(back.position, 0.75);
+    QCOMPARE(back.measure, QStringLiteral("toe"));
+    QCOMPARE(back.animating, true);
+    QCOMPARE(back.animationSeconds, 2.5);
+    QCOMPARE(back.allAxles, false);
+    QCOMPARE(back.parametersOpen, true);
+
+    // The bump travel survives a project that was left in roll. Keeping only
+    // the swept range is what used to make switching back read millimetres of
+    // wheel travel off a roll angle.
+    QCOMPARE(back.sweep.bumpTravel, 33.0);
+    QCOMPARE(back.sweep.reboundTravel, 17.0);
+    QCOMPARE(back.sweep.bumpIncrement, 1.0);
+    QCOMPARE(back.sweep.rollAngle, 1.2);
+    QCOMPARE(back.sweep.rollIncrement, 0.25);
+    QCOMPARE(back.sweep.steerTravel, 35.0);
+    QCOMPARE(back.sweep.steerIncrement, 2.0);
+    QCOMPARE(back.sweep.rackTravel, 4.0);
+    QVERIFY(back.sweep == simulation.sweep);
+}
+
+void TestProject::anOlderProjectsSingleRangeBecomesThatKindsOwnTravel()
+{
+    // What a project written before the three sweeps had their own travel
+    // holds: one range, in whichever unit it was left on.
+    QTemporaryDir directory;
+    QString error;
+    std::optional<Project> project =
+        Project::create(directory.filePath(QStringLiteral("Old")), QStringLiteral("Old"), &error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+    QVERIFY2(project->save(&error), qPrintable(error));
+
+    QFile manifest(project->manifestPath());
+    QVERIFY(manifest.open(QIODevice::ReadOnly));
+    QJsonObject root = QJsonDocument::fromJson(manifest.readAll()).object();
+    manifest.close();
+
+    QJsonObject simulation;
+    simulation.insert(QStringLiteral("active"), true);
+    simulation.insert(QStringLiteral("kind"), QStringLiteral("bump"));
+    simulation.insert(QStringLiteral("from"), -17.0);
+    simulation.insert(QStringLiteral("to"), 33.0);
+    simulation.insert(QStringLiteral("steps"), 51);
+    simulation.insert(QStringLiteral("rack"), 3.0);
+    QJsonObject view = root.value(QStringLiteral("view")).toObject();
+    view.insert(QStringLiteral("simulation"), simulation);
+    root.insert(QStringLiteral("view"), view);
+    QVERIFY(manifest.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    manifest.write(QJsonDocument(root).toJson());
+    manifest.close();
+
+    const std::optional<Project> reopened = Project::open(project->manifestPath(), &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    const SimulationState& back = reopened->view().simulation;
+
+    // The range it was left with comes back as the travel it stood for, so an
+    // older project opens where its owner left it rather than at a default.
+    QCOMPARE(back.kind, SweepKind::Bump);
+    QCOMPARE(back.sweep.reboundTravel, 17.0);
+    QCOMPARE(back.sweep.bumpTravel, 33.0);
+    QCOMPARE(back.sweep.bumpIncrement, 1.0);
+    QCOMPARE(back.sweep.rackTravel, 3.0);
+    QCOMPARE(back.sweep.specFor(SweepKind::Bump).steps, 51);
+
+    // The two it says nothing about keep their defaults, in their own units,
+    // rather than inheriting fifty millimetres of wheel travel.
+    QCOMPARE(back.sweep.rollAngle, SweepSettings{}.rollAngle);
+    QCOMPARE(back.sweep.steerTravel, SweepSettings{}.steerTravel);
 }
 
 QTEST_APPLESS_MAIN(TestProject)

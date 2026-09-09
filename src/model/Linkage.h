@@ -44,6 +44,21 @@ struct PartTemplate {
 struct CornerSpec {
     QString token; ///< what {corner} is replaced with, e.g. "F"
     QString label; ///< what {corner} becomes in a label, e.g. "Front"
+
+    /// The hardpoint the steering rack drives, still carrying {corner}. Empty
+    /// means this axle is not steered, and a steer sweep is not offered for it.
+    ///
+    /// It lives here and not in @ref MechanismTemplate because the mechanism
+    /// block is one block for every corner, and which axle has a rack is exactly
+    /// what differs between them. This is the same answer Lotus gives -- a
+    /// template with no steering attachment point is not a front suspension --
+    /// with the naming left to the project, as every other role here is.
+    QString steeringRack;
+    /// The file said something about this corner's steering, even if what it
+    /// said was "none". Without this, "no axle on this car is steered" would be
+    /// indistinguishable from "this template predates the question", and the
+    /// second of those means the opposite: every axle steers.
+    bool steeringStated = false;
 };
 
 /// The rule for turning a hardpoint table into parts.
@@ -69,8 +84,29 @@ struct LinkageTemplate {
     /// very different rates.
     MechanismTemplate mechanism;
 
+    /// True when the file said nothing about the mechanism and the built-in one
+    /// was assumed for it. A template written before the solver existed draws
+    /// perfectly well but names no roles, and everything downstream -- the
+    /// solve, and what each hardpoint is for -- would otherwise have nothing to
+    /// work from. Worth reporting, because it is a guess rather than the user's
+    /// own statement.
+    bool mechanismAssumed = false;
+
     bool isEmpty() const { return parts.empty(); }
     bool canSimulate() const { return !mechanism.isEmpty(); }
+
+    /// Whether the file says anything at all about which axles are steered.
+    ///
+    /// The whole of the compatibility rule: a template that says nothing leaves
+    /// every axle steerable, which is what every project made before this
+    /// existed relies on. One that says something is taken literally, and an
+    /// axle it does not name cannot be steered.
+    bool steeringDeclared() const
+    {
+        for (const CornerSpec& corner : corners)
+            if (corner.steeringStated || !corner.steeringRack.isEmpty()) return true;
+        return false;
+    }
 };
 
 /// A chain with its hardpoints found: indices into the table it was resolved

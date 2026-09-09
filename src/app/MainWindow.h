@@ -105,6 +105,14 @@ private:
     bool loadLinkageTemplateFromProject();
     /// Write the built-in template into the project and point the project at it.
     bool installBuiltinLinkageTemplate();
+    /// Give a template that predates the steering role an answer to the question
+    /// "which axle has a rack", when the file is recognisably the built-in one.
+    /// Sets @ref m_steeringNote either way; writes nothing to a template that is
+    /// somebody's own work.
+    void adoptTemplateSteering();
+    /// Let the user say which axle the rack drives, and write it into the
+    /// project's own template.
+    void steeringDialog();
     /// Resolve the template against the current table and hand the result to
     /// the viewport. Cheap enough to redo whenever either one changes.
     void rebuildLinkage();
@@ -130,6 +138,10 @@ private:
     /// The table as the viewport should draw it: the design coordinates, or
     /// those coordinates with the solved pose laid over them by name.
     HardpointTable posedTable() const;
+    /// How far each posed upright has turned, by the name of its wheel centre.
+    /// Empty when nothing is being simulated, which leaves every wheel model at
+    /// the attitude its CAD file drew it in.
+    WheelRotations wheelRotations() const;
     /// The axle the panel has selected, or nothing when none can be solved.
     const AxleSolver* currentAxle() const;
 
@@ -195,6 +207,7 @@ private:
     QAction* m_linksAction = nullptr;
     QAction* m_importLinkageAction = nullptr;
     QAction* m_resetLinkageAction = nullptr;
+    QAction* m_steeringAction = nullptr;
     QAction* m_addWheelsAction = nullptr;
     QAction* m_removeWheelsAction = nullptr;
     QAction* m_wheelsAction = nullptr;
@@ -230,6 +243,9 @@ private:
     /// The template is the project's copy, not the built-in one, unless the
     /// project had none and was given one.
     LinkageTemplate m_linkageTemplate;
+    /// What to say about steering in the status line: that it was filled in, or
+    /// that the template says nothing and every axle is therefore steerable.
+    QString m_steeringNote;
     Linkage m_linkage;
 
     /// Where the wheel models are drawn, resolved from the project's own spec
