@@ -170,14 +170,28 @@ jobs:
       - name: Stage install tree
         shell: pwsh
         run: |
-          cmake --install build/windows-ninja --prefix dist
+          # The prefix must be absolute: Qt's deploy script passes it straight to
+          # qt6_deploy_qt_conf, which rejects a relative path outright ("Given
+          # qt.conf path is not an absolute path"). A bare `--prefix dist` fails.
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          cmake --install build/windows-ninja --prefix $dist
+          # pwsh does not stop on a native command's exit code, and the steps
+          # below would happily stage a half-deployed tree on top of a failure.
+          if ($LASTEXITCODE -ne 0) { throw "cmake --install failed ($LASTEXITCODE)" }
+
           # windeployqt knows nothing about OCCT, so its DLLs are copied by hand.
-          Copy-Item occt-install/bin/*.dll dist/bin/ -Force
+          Copy-Item occt-install/bin/*.dll "$dist/bin/" -Force
           # CMakeLists.txt installs the MSVC runtime DLLs app-local, so the
           # 25 MB redist installer windeployqt leaves behind is dead weight --
           # nothing runs it, and nothing needs it.
-          Remove-Item dist/bin/vc_redist.x64.exe -Force -ErrorAction SilentlyContinue
-          Get-ChildItem dist/bin | Select-Object Name, Length
+          Remove-Item "$dist/bin/vc_redist.x64.exe" -Force -ErrorAction SilentlyContinue
+
+          # The platform plugin is what the exe cannot start without, so its
+          # absence should fail here rather than in the smoke test's exit code.
+          if (-not (Test-Path "$dist/plugins/platforms/qwindows.dll")) {
+            throw "windeployqt did not stage the platform plugin"
+          }
+          Get-ChildItem "$dist/bin" | Select-Object Name, Length
 
       - name: Smoke test the binary
         shell: pwsh
