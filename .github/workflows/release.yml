@@ -166,7 +166,8 @@ jobs:
         run: cmake --build --preset windows-ninja
 
       # cmake --install runs windeployqt through the deploy script generated in
-      # CMakeLists.txt, so dist/bin ends up with the Qt runtime beside the exe.
+      # CMakeLists.txt, so dist/ ends up with the Qt runtime and plugins
+      # beside the exe, all in one flat directory.
       - name: Stage install tree
         shell: pwsh
         run: |
@@ -180,51 +181,78 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cmake --install failed ($LASTEXITCODE)" }
 
           # windeployqt knows nothing about OCCT, so its DLLs are copied by hand.
-          Copy-Item occt-install/bin/*.dll "$dist/bin/" -Force
+          Copy-Item occt-install/bin/*.dll "$dist/" -Force
           # CMakeLists.txt installs the MSVC runtime DLLs app-local, so the
           # 25 MB redist installer windeployqt leaves behind is dead weight --
           # nothing runs it, and nothing needs it.
-          Remove-Item "$dist/bin/vc_redist.x64.exe" -Force -ErrorAction SilentlyContinue
+          Remove-Item "$dist/vc_redist.x64.exe" -Force -ErrorAction SilentlyContinue
 
-          # The platform plugin is what the exe cannot start without, so its
-          # absence should fail here rather than in the smoke test's exit code.
-          if (-not (Test-Path "$dist/plugins/platforms/qwindows.dll")) {
-            throw "windeployqt did not stage the platform plugin"
-          }
-          Get-ChildItem "$dist/bin" | Select-Object Name, Length
-
-      - name: Smoke test the binary
-        shell: pwsh
-        run: |
-          # WIN32_EXECUTABLE means --version writes to a message box, not stdout,
-          # so the check is just that the loader resolves every DLL.
-          #
-          # The build runner has Qt and the MSVC runtime on PATH, so launching
-          # normally proves nothing about what a user's machine has -- the tree
-          # once shipped without vcruntime140.dll and this step stayed green.
-          # PATH is therefore cut back to bare Windows and the working directory
-          # moved away from the tree, so anything not sitting beside the exe is
-          # genuinely absent.
-          $si = New-Object System.Diagnostics.ProcessStartInfo
-          $si.FileName = (Resolve-Path dist/bin/suspkin.exe).Path
-          $si.Arguments = '--help'
-          $si.UseShellExecute = $false
-          $si.WorkingDirectory = 'C:\'
-          $si.EnvironmentVariables['PATH'] = 'C:\Windows\system32;C:\Windows'
-          $p = [System.Diagnostics.Process]::Start($si)
-          Start-Sleep -Seconds 10
-          if ($p.HasExited -and $p.ExitCode -ne 0) {
-            $code = '0x{0:X8}' -f $p.ExitCode
-            throw "suspkin.exe exited with $code -- the deployed tree is not self-contained"
-          }
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          # The install lays the app out flat, so a stray bin/ means the layout
+          # regressed and the packaging below would ship half a tree again.
+          if (Test-Path "$dist/bin") { throw "unexpected bin/ in the install tree" }
+          Get-ChildItem $dist | Select-Object Name, Length
 
       - name: Package portable zip
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path out | Out-Null
-          Compress-Archive -Path dist/bin/* `
+          # dist/* not dist/bin/* -- the plugins live beside the exe, and taking
+          # only part of the tree is what once shipped an app with no platform
+          # plugin. Compress-Archive recurses into the directories it is given.
+          Compress-Archive -Path dist/* `
             -DestinationPath "out/SuspensionKinematics-windows-x64.zip"
+
+      # Verifies the artifact that actually ships, unpacked somewhere else --
+      # not the build tree, which has Qt on PATH and the staging directory next
+      # to it, and so cannot tell a complete package from an incomplete one.
+      - name: Smoke test the packaged zip
+        shell: pwsh
+        run: |
+          $tree = Join-Path $env:RUNNER_TEMP 'ziptest'
+          Remove-Item $tree -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive out/SuspensionKinematics-windows-x64.zip -DestinationPath $tree
+
+          # The hard gate. A missing platform plugin is the one failure that
+          # looks like a healthy process -- Qt reports it in a modal dialog, so
+          # the app sits there "running" -- and it is exactly what shipped when
+          # packaging took bin/ alone. Checked structurally, in the zip.
+          foreach ($f in 'suspkin.exe', 'qt.conf', 'plugins/platforms/qwindows.dll') {
+            if (-not (Test-Path (Join-Path $tree $f))) {
+              throw "packaged zip is missing $f"
+            }
+          }
+
+          # Then actually run it, with PATH cut back to bare Windows from an
+          # unrelated directory, so nothing outside the package can be reached.
+          $si = New-Object System.Diagnostics.ProcessStartInfo
+          $si.FileName = Join-Path $tree 'suspkin.exe'
+          $si.UseShellExecute = $false
+          $si.WorkingDirectory = 'C:\'
+          $si.EnvironmentVariables['PATH'] = 'C:\Windows\system32;C:\Windows'
+          $p = [System.Diagnostics.Process]::Start($si)
+
+          $title = ''
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Milliseconds 500
+            if ($p.HasExited) { break }
+            $p.Refresh()
+            if ($p.MainWindowHandle -ne 0) { $title = $p.MainWindowTitle; break }
+          }
+          if ($p.HasExited) {
+            throw ("suspkin.exe exited 0x{0:X8} -- the package is not self-contained" -f $p.ExitCode)
+          }
+          if ($title -and $title -notmatch 'SuspensionKinematics|New project') {
+            # A Qt startup failure puts up a box titled after the exe.
+            throw "suspkin.exe showed '$title' instead of its launcher"
+          }
+          if (-not $title) {
+            # Runners are not always able to show a window; the structural
+            # check above is what this step really rests on, so do not fail.
+            Write-Host "note: no window appeared -- launcher check inconclusive"
+          } else {
+            Write-Host "launcher window: $title"
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 
       - name: Package installer
         shell: pwsh
@@ -236,7 +264,7 @@ jobs:
           & $iscc `
             "/DAppVersion=${{ steps.ver.outputs.full }}" `
             "/DFileVersion=${{ steps.ver.outputs.fileversion }}" `
-            "/DSourceDir=${{ github.workspace }}\dist\bin" `
+            "/DSourceDir=${{ github.workspace }}\dist" `
             "/DOutputDir=${{ github.workspace }}\out" `
             "/DOutputName=SuspensionKinematics-windows-x64-setup" `
             packaging\windows\suspkin.iss

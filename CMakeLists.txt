@@ -214,6 +214,18 @@ set_target_properties(suspkin PROPERTIES WIN32_EXECUTABLE ON)
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
 
+# A Windows app is a folder you unzip and double-click, not a /usr tree. Left at
+# "bin" the install splits in two -- exe and DLLs under bin/, the Qt plugins
+# under plugins/, joined only by a qt.conf saying `Prefix = ..` -- and anything
+# that packages bin/ alone ships an app that cannot find its platform plugin and
+# dies with "no Qt platform plugins could be initialized". Installing at the
+# prefix root keeps the exe, its DLLs and plugins/ in one directory, so there is
+# no way to package half of it. Shadows the cache entry GNUInstallDirs just set,
+# and only here: the Linux PKGBUILD still wants a real bin/.
+if(WIN32)
+    set(CMAKE_INSTALL_BINDIR ".")
+endif()
+
 install(TARGETS suspkin
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     BUNDLE  DESTINATION .)
@@ -231,6 +243,12 @@ if(WIN32)
         OUTPUT_SCRIPT SUSPKIN_DEPLOY_SCRIPT
         NO_TRANSLATIONS
         NO_UNSUPPORTED_PLATFORM_ERROR)
+    # The deploy script reads its layout from QT_DEPLOY_BIN_DIR, which it
+    # defaults to "bin" in its own scope -- CMAKE_INSTALL_BINDIR above does not
+    # reach it. Without this the Qt DLLs land in bin/ while the exe sits at the
+    # root, and qt.conf points at a prefix one level up from the wrong place.
+    # install() runs in order, so setting it here lands before the script.
+    install(CODE "set(QT_DEPLOY_BIN_DIR \".\")")
     install(SCRIPT ${SUSPKIN_DEPLOY_SCRIPT})
 
     # /MD leaves the exe needing vcruntime140.dll and msvcp140.dll, which a

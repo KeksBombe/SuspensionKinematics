@@ -4,7 +4,7 @@
 ; build numbers baked into it:
 ;
 ;   ISCC /DAppVersion=0.1.0-build.7 /DFileVersion=0.1.0.7 ^
-;        /DSourceDir=...\dist\bin /DOutputDir=...\out /DOutputName=... suspkin.iss
+;        /DSourceDir=...\dist /DOutputDir=...\out /DOutputName=... suspkin.iss
 
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
@@ -13,7 +13,7 @@
   #define FileVersion "0.0.0.0"
 #endif
 #ifndef SourceDir
-  #define SourceDir "..\..\dist\bin"
+  #define SourceDir "..\..\dist"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\..\out"
@@ -59,7 +59,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "associate"; Description: "Open .stl, .step and .stp files with {#AppName}"; GroupDescription: "File associations:"
 
 [Files]
-; The whole windeployqt output tree: the exe, the Qt runtime and the OCCT DLLs.
+; The whole install tree: the exe, the Qt runtime, the OCCT DLLs and the
+; plugins/ directory. recursesubdirs matters -- without plugins/platforms the
+; app starts to "no Qt platform plugins could be initialized".
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
