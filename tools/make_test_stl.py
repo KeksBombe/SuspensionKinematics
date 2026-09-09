@@ -108,7 +108,7 @@ def ascii_body(tris: list[Tri], zero_normals: bool = False) -> str:
 
 def write_ascii(path: pathlib.Path, tris: list[Tri], name: str = "test") -> None:
     path.write_text("solid %s\n%sendsolid %s\n" % (name, ascii_body(tris), name),
-                    encoding="ascii")
+                    encoding="ascii", newline="")
 
 
 def write_binary(path: pathlib.Path, tris: list[Tri], header: bytes,
@@ -163,7 +163,7 @@ def write_overflow_ascii(path: pathlib.Path, tris: list[Tri]) -> bool:
                 name[80 - name_offset + i] = chr(byte)
             final = prefix + "".join(name) + "\n" + body + "endsolid\n" + " " * pad
             assert len(final) == size, "padding solve drifted"
-            path.write_text(final, encoding="ascii")
+            path.write_text(final, encoding="ascii", newline="")
             return True
     return False
 
@@ -193,7 +193,7 @@ def main() -> int:
     # recomputed rather than trusted.
     (out / "zero_normals.stl").write_text(
         "solid zeroed\n%sendsolid zeroed\n" % ascii_body(box, zero_normals=True),
-        encoding="ascii")
+        encoding="ascii", newline="")
 
     # Header claims 200 triangles, only 6 are present.
     write_binary(out / "truncated.stl", box[:6], b"truncated binary", claim_count=200)
