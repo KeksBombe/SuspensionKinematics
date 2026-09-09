@@ -213,6 +213,21 @@ void ViewportWidget::moveHardpoint(int index, const QVector3D& position)
     update();
 }
 
+void ViewportWidget::setHardpointPositions(const std::vector<QVector3D>& positions)
+{
+    if (positions.size() != m_hardpoints.size()) return;
+    m_hardpoints = positions;
+
+    m_hardpointBounds = Aabb{};
+    for (const QVector3D& p : m_hardpoints) m_hardpointBounds.expand(p);
+
+    m_pointsUploadPending = true;
+    // The parts are indices into the same table, so they still name the right
+    // points -- but the vertex buffer holds copies of the coordinates.
+    rebuildLinkageVertices();
+    update();
+}
+
 void ViewportWidget::setLinkage(const Linkage& linkage)
 {
     m_linkage = linkage;

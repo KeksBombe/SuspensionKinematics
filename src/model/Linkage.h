@@ -2,6 +2,7 @@
 
 #include "model/Hardpoint.h"
 #include "model/HardpointMirror.h"
+#include "model/Mechanism.h"
 
 #include <QString>
 #include <QStringList>
@@ -60,7 +61,16 @@ struct LinkageTemplate {
     QString mirroredSideLabel; ///< and for their mirrors
     std::vector<PartTemplate> parts;
 
+    /// Which of those points play which part in the mechanism, for the solver.
+    ///
+    /// @ref parts says what to draw; this says what moves. They are kept apart
+    /// because a template is useful with only the first -- a linkage nobody has
+    /// told the solver about still draws -- and because the two are edited at
+    /// very different rates.
+    MechanismTemplate mechanism;
+
     bool isEmpty() const { return parts.empty(); }
+    bool canSimulate() const { return !mechanism.isEmpty(); }
 };
 
 /// A chain with its hardpoints found: indices into the table it was resolved

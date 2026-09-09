@@ -147,6 +147,26 @@ WheelSpec wheelSpecFromJson(const QJsonObject& object)
     return spec;
 }
 
+QJsonObject configToJson(const HardpointConfig& config)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("type"), pointTypeToString(config.type));
+    if (!config.part1.isEmpty()) object.insert(QStringLiteral("part1"), config.part1);
+    if (!config.part2.isEmpty()) object.insert(QStringLiteral("part2"), config.part2);
+    if (config.bushing != kNoBushing) object.insert(QStringLiteral("bushing"), config.bushing);
+    return object;
+}
+
+HardpointConfig configFromJson(const QJsonObject& object)
+{
+    HardpointConfig config;
+    config.type = pointTypeFromString(object.value(QStringLiteral("type")).toString());
+    config.part1 = object.value(QStringLiteral("part1")).toString();
+    config.part2 = object.value(QStringLiteral("part2")).toString();
+    config.bushing = object.value(QStringLiteral("bushing")).toInt(kNoBushing);
+    return config;
+}
+
 QJsonObject pointToJson(const Hardpoint& point)
 {
     QJsonObject object;
@@ -300,6 +320,9 @@ std::optional<Project> Project::open(const QString& manifestPath, QString* error
         const QJsonObject mirrored = hardpoints.value(QStringLiteral("mirrored")).toObject();
         for (auto it = mirrored.begin(); it != mirrored.end(); ++it)
             project.m_hardpoints.mirrored.insert(it.key(), it.value().toString());
+        const QJsonObject config = hardpoints.value(QStringLiteral("config")).toObject();
+        for (auto it = config.begin(); it != config.end(); ++it)
+            project.m_hardpoints.config.insert(it.key(), configFromJson(it.value().toObject()));
     }
 
     if (root.contains(QStringLiteral("linkage"))) {
@@ -328,6 +351,22 @@ std::optional<Project> Project::open(const QString& manifestPath, QString* error
     project.m_view.linksVisible = view.value(QStringLiteral("links")).toBool(true);
     project.m_view.wheelsVisible = view.value(QStringLiteral("wheels")).toBool(true);
     project.m_view.selectedHardpoint = view.value(QStringLiteral("selected")).toInt(-1);
+
+    const QJsonObject simulation = view.value(QStringLiteral("simulation")).toObject();
+    if (!simulation.isEmpty()) {
+        SimulationState& state = project.m_view.simulation;
+        state.active = simulation.value(QStringLiteral("active")).toBool(false);
+        state.axle = simulation.value(QStringLiteral("axle")).toString();
+        state.position = simulation.value(QStringLiteral("position")).toDouble(0.0);
+        state.measure = simulation.value(QStringLiteral("measure")).toString();
+        state.sweep.kind = sweepKindFromString(simulation.value(QStringLiteral("kind")).toString());
+        state.sweep.from = simulation.value(QStringLiteral("from")).toDouble(state.sweep.from);
+        state.sweep.to = simulation.value(QStringLiteral("to")).toDouble(state.sweep.to);
+        state.sweep.steps = simulation.value(QStringLiteral("steps")).toInt(state.sweep.steps);
+        state.sweep.rackTravel = simulation.value(QStringLiteral("rack")).toDouble(0.0);
+        state.animating = simulation.value(QStringLiteral("animating")).toBool(false);
+        state.allAxles = simulation.value(QStringLiteral("allAxles")).toBool(true);
+    }
 
     const QJsonObject window = root.value(QStringLiteral("window")).toObject();
     project.m_window.geometry =
@@ -368,6 +407,15 @@ bool Project::save(QString* error) const
                 mirrored.insert(it.key(), it.value());
             hardpoints.insert(QStringLiteral("mirrored"), mirrored);
         }
+        if (!m_hardpoints.config.isEmpty()) {
+            // Every entry is written, empty ones included: an entry that exists
+            // and says nothing is a point the user cleared on purpose, which is
+            // not the same as one nobody has got to yet.
+            QJsonObject config;
+            for (auto it = m_hardpoints.config.begin(); it != m_hardpoints.config.end(); ++it)
+                config.insert(it.key(), configToJson(it.value()));
+            hardpoints.insert(QStringLiteral("config"), config);
+        }
         root.insert(QStringLiteral("hardpoints"), hardpoints);
     }
 
@@ -377,7 +425,10 @@ bool Project::save(QString* error) const
         root.insert(QStringLiteral("linkage"), linkage);
     }
 
-    if (!m_wheels.isEmpty()) {
+    // Written when there is either a model or a set of corners: a user who takes
+    // the models out has not thereby said to forget which points their wheels
+    // were on.
+    if (!m_wheels.isEmpty() || !m_wheels.spec.isEmpty()) {
         QJsonObject wheels = wheelSpecToJson(m_wheels.spec);
         if (!m_wheels.wheel.isEmpty())
             wheels.insert(QStringLiteral("wheel"), assetToJson(m_wheels.wheel));
@@ -395,6 +446,22 @@ bool Project::save(QString* error) const
     view.insert(QStringLiteral("links"), m_view.linksVisible);
     view.insert(QStringLiteral("wheels"), m_view.wheelsVisible);
     view.insert(QStringLiteral("selected"), m_view.selectedHardpoint);
+
+    const SimulationState& state = m_view.simulation;
+    QJsonObject simulation;
+    simulation.insert(QStringLiteral("active"), state.active);
+    if (!state.axle.isEmpty()) simulation.insert(QStringLiteral("axle"), state.axle);
+    if (!state.measure.isEmpty()) simulation.insert(QStringLiteral("measure"), state.measure);
+    simulation.insert(QStringLiteral("kind"), sweepKindToString(state.sweep.kind));
+    simulation.insert(QStringLiteral("from"), state.sweep.from);
+    simulation.insert(QStringLiteral("to"), state.sweep.to);
+    simulation.insert(QStringLiteral("steps"), state.sweep.steps);
+    simulation.insert(QStringLiteral("rack"), state.sweep.rackTravel);
+    simulation.insert(QStringLiteral("position"), state.position);
+    simulation.insert(QStringLiteral("animating"), state.animating);
+    simulation.insert(QStringLiteral("allAxles"), state.allAxles);
+    view.insert(QStringLiteral("simulation"), simulation);
+
     root.insert(QStringLiteral("view"), view);
 
     if (!m_window.isEmpty()) {
@@ -502,12 +569,27 @@ HardpointEdits diffHardpoints(const HardpointTable& baseline, const HardpointTab
             && original->coord[1] == point.coord[1] && original->coord[2] == point.coord[2];
         if (!same) edits.changed.push_back(point);
     }
+    // And the other direction: a name the workbook has that the table no longer
+    // does was deleted. The workbook itself is left alone until it is written.
+    for (const Hardpoint& point : baseline.points)
+        if (current.indexOf(point.name) < 0) edits.removed.append(point.name);
     return edits;
 }
 
 HardpointTable applyHardpointEdits(const HardpointTable& baseline, const HardpointEdits& edits)
 {
     HardpointTable table = baseline;
+
+    // Removals first, so a name that was deleted and then re-added comes back as
+    // the addition rather than being taken out again.
+    if (!edits.removed.isEmpty()) {
+        std::vector<Hardpoint> kept;
+        kept.reserve(table.points.size());
+        for (Hardpoint& point : table.points)
+            if (!edits.removed.contains(point.name)) kept.push_back(std::move(point));
+        table.points = std::move(kept);
+    }
+
     for (const Hardpoint& point : edits.changed) {
         const int index = table.indexOf(point.name);
         // A point the workbook no longer has is not dropped: it comes back as an
@@ -550,6 +632,11 @@ bool writeHardpointEdits(const QString& path, const HardpointEdits& edits, QStri
     root.insert(QStringLiteral("formatVersion"), kFormatVersion);
     root.insert(QStringLiteral("changed"), changed);
     root.insert(QStringLiteral("added"), added);
+    if (!edits.removed.isEmpty()) {
+        QJsonArray removed;
+        for (const QString& name : edits.removed) removed.append(name);
+        root.insert(QStringLiteral("removed"), removed);
+    }
 
     return writeAtomically(path, QJsonDocument(root).toJson(QJsonDocument::Indented), error);
 }
@@ -591,6 +678,10 @@ std::optional<HardpointEdits> readHardpointEdits(const QString& path, QString* e
     for (const QJsonValue& value : root.value(QStringLiteral("added")).toArray()) {
         if (const std::optional<Hardpoint> point = pointFromJson(value))
             edits.added.push_back(*point);
+    }
+    for (const QJsonValue& value : root.value(QStringLiteral("removed")).toArray()) {
+        const QString name = value.toString();
+        if (!name.isEmpty()) edits.removed.append(name);
     }
     return edits;
 }

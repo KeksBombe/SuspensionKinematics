@@ -81,6 +81,9 @@ MyCar/
     edits.json         hardpoint changes not yet written into that workbook
   linkage/
     template.json      which parts join which hardpoints
+  wheels/
+    wheel.step         the wheel model, copied in
+    rim.step           the rim model, copied in
 ```
 
 Imported files are **copied into the project** (`Project::importAsset`) so a
@@ -121,6 +124,43 @@ Mirroring itself is pure and testable: `src/model/HardpointMirror.*`. A `MirrorS
 (axis, naming rule, affix or find/replace) is stored in the project because it is
 the user's own naming convention.
 
+## Hardpoints: what each point is *for*
+
+Beside its coordinates, each point carries a `HardpointConfig`
+(`src/model/HardpointConfig.*`): a `PointType` -- the solver constraint -- the two
+bodies that meet there, and a bushing index. The configuration table in the
+hardpoint dock is the one place all of that is edited.
+
+- It is stored **by name** in the manifest, under `hardpoints.config`. Not in the
+  workbook, which has nowhere to put it, and not in `edits.json`, where it would
+  read as a coordinate change the user never made. By name and not by row because
+  mirroring appends rows and a reimported workbook may be in a different order.
+- The bodies a Part column may name come from the project's own linkage template
+  (`bodyCatalog()`), so a project describing a different car offers that car's
+  bodies. The ground body is a fixed, untranslated string: it is written into
+  project files.
+- `inferHardpointConfig()` fills a table in from the template -- types from the
+  `mechanism` block, bodies from the parts the template actually draws through
+  each point -- so the configuration and the linkage cannot disagree about what a
+  corner is made of. `fillMissingConfig()` never touches an entry that already
+  exists, *including an empty one*: that is how "the user cleared this row" is
+  told apart from "nobody has got to it yet".
+- `validateHardpointConfig()` is pure and lives in the core. `HardpointModel::setData()`
+  refuses an **error** before the store changes and reports it through
+  `editRejected()`; a **warning** is stored and shown as a dot on the row, because
+  half-finished is the normal state of a table on its way somewhere. Anything
+  inference produces has to pass without a warning -- there is a test that says so.
+- Nothing in the solver reads this yet. `CornerSolver` takes its roles from the
+  same `mechanism` block the inference does, which is why the two agree; when the
+  solver does start reading it, that is the seam.
+
+The table itself (`src/app/HardpointPanel.*`, `HardpointModel.*`,
+`HardpointDelegates.*`) draws its colours from the palette rather than carrying a
+theme, freezes the number and name columns behind a second view of the same
+model, and puts every chip and dropdown in a **delegate** rather than a widget in
+a cell -- which is what keeps the view virtualised. A row is a fixed height for
+the same reason. Do not reach for `setIndexWidget()` here.
+
 ## Parts: the linkage template
 
 What is drawn between the hardpoints is data, not code. `linkage/template.json`
@@ -147,19 +187,46 @@ as `:/templates/...` so the tests read the same bytes the application ships.
   (`installBuiltinLinkageTemplate()`), so it becomes an ordinary project file the
   user can edit. A template that fails to parse is *not* repaired by overwriting.
 
+## Wheels
+
+**Geometry > Add Wheels** puts a copy of one wheel model and one rim model at
+each of four hardpoints the user picks. The placement is pure and testable:
+`src/model/Wheels.*`.
+
+- The `WheelSpec` the project stores names *hardpoints*, not coordinates, so a
+  wheel centre that gets edited in the table takes its wheel with it
+  (`rebuildWheels()` is called from the coordinate-edit path for that reason).
+- **The corner decides which side a copy is on, not the sign of y.** The user
+  says which point is the front left one. `WheelModelSide` says which side the
+  models were drawn for, and the copies on the other side are mirrored in Y --
+  a rim is dished, so one model cannot simply be dropped onto all four centres.
+- The anchor that lands on the hardpoint is the centre of the model's *own*
+  bounding box, computed per body, because the wheel and the rim are two
+  different boxes. `alignToCenter = false` places by the model's own origin
+  instead, for a model already positioned in vehicle coordinates.
+- Both models are copied into `wheels/` under fixed names (`wheel.<ext>`,
+  `rim.<ext>`) through `Project::importAssetAs`, because two files that happen
+  to be called the same thing would otherwise be one file.
+- The viewport keeps the models and the placements apart: `setWheelModels()`
+  re-uploads meshes, `setWheelPlacements()` is a handful of matrices. One mesh
+  is uploaded once and drawn per corner with its own model matrix, so four
+  wheels cost four draw calls rather than four buffers.
+
 ## Layout and layering
 
 ```
 src/geom/     Aabb, TriMesh, vertex welding and edge extraction
-src/model/    Hardpoint, HardpointTable, hardpoint mirroring, and the linkage
-              a template resolves to
+src/model/    Hardpoint, HardpointTable, hardpoint mirroring, what each point
+              is for and the rules that check it, the linkage a template
+              resolves to, and where the wheel models are placed
 src/io/       STL and STEP readers behind importMeshFile(), a minimal ZIP
               reader/rewriter, the hardpoint workbook reader/writer, and the
               linkage template reader/writer
 src/project/  the project format: manifest, assets, view state, hardpoint edits
 src/render/   Camera, GPU buffers, the OpenGL viewport, gizmo, mode selector
 src/app/      MainWindow, AppController, the project launcher, the mirror dialog,
-              the hardpoint table model and dock
+              the hardpoint configuration table -- its model, its delegates and
+              its dock
 ```
 
 `suspkin_core` is a static library with **no OpenGL and no widgets** — geometry,

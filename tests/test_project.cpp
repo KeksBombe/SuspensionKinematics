@@ -38,6 +38,7 @@ private slots:
     void opensByDirectoryAsWellAsByFile();
     void rejectsSomethingThatIsNotAProject();
     void copiesImportedFilesIn();
+    void keepsTheWheelCornersWithoutAnyModels();
     void reimportingTheProjectsOwnCopyKeepsIt();
 
     void editsAreTheDifferenceFromTheWorkbook();
@@ -117,6 +118,16 @@ void TestProject::roundTripsEverythingItHolds()
     hardpoints.workbook.relativePath = QStringLiteral("hardpoints/points.xlsx");
     hardpoints.sheetName = QStringLiteral("Geometry");
     hardpoints.mirrored.insert(QStringLiteral("F_LCA_O_R"), QStringLiteral("F_LCA_O"));
+    HardpointConfig ballJoint;
+    ballJoint.type = PointType::Solved;
+    ballJoint.part1 = QStringLiteral("Lower wishbone");
+    ballJoint.part2 = QStringLiteral("Upright");
+    ballJoint.bushing = 12;
+    hardpoints.config.insert(QStringLiteral("F_LCA_O"), ballJoint);
+    // A row the user cleared on purpose. It has to come back as an entry that
+    // says nothing, not as no entry at all, or the next open would infer it
+    // again and undo the clearing.
+    hardpoints.config.insert(QStringLiteral("F_LCA_IF"), HardpointConfig{});
     project->setHardpoints(hardpoints);
 
     AssetRef linkage;
@@ -168,7 +179,34 @@ void TestProject::roundTripsEverythingItHolds()
     // A workbook cannot say which points are mirrors, so the project must.
     QCOMPARE(reopened->hardpoints().mirrored.value(QStringLiteral("F_LCA_O_R")),
              QStringLiteral("F_LCA_O"));
+    // Nor can it say what a point is for, or which bushing acts at it.
+    QCOMPARE(reopened->hardpoints().config.value(QStringLiteral("F_LCA_O")), ballJoint);
+    QVERIFY(reopened->hardpoints().config.contains(QStringLiteral("F_LCA_IF")));
+    QVERIFY(reopened->hardpoints().config.value(QStringLiteral("F_LCA_IF")).isEmpty());
     QCOMPARE(reopened->lastGeometryDirectory(), QStringLiteral("/tmp/cad"));
+}
+
+void TestProject::keepsTheWheelCornersWithoutAnyModels()
+{
+    QTemporaryDir directory;
+    QString error;
+    std::optional<Project> project =
+        Project::create(directory.filePath(QStringLiteral("P")), QStringLiteral("P"), &error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+
+    // Taking the models out is not the same as saying the wheels were never on
+    // these points, so the corners have to survive a save with nothing to draw.
+    WheelsRef wheels;
+    wheels.spec.setPoint(WheelCorner::FrontLeft, QStringLiteral("F_WheelCenter"));
+    QVERIFY(wheels.isEmpty());
+    project->setWheels(wheels);
+    QVERIFY2(project->save(&error), qPrintable(error));
+
+    const std::optional<Project> reopened = Project::open(project->manifestPath(), &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    QCOMPARE(reopened->wheels().spec.point(WheelCorner::FrontLeft),
+             QStringLiteral("F_WheelCenter"));
+    QVERIFY(reopened->wheels().isEmpty());
 }
 
 void TestProject::opensByDirectoryAsWellAsByFile()
