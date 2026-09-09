@@ -81,6 +81,7 @@ endif()
 add_library(suspkin_core STATIC
     src/geom/Aabb.h
     src/geom/TriMesh.h
+    src/geom/Vec3.h
     src/geom/MeshTopology.h
     src/geom/MeshTopology.cpp
     src/io/MeshLoadResult.h
@@ -102,6 +103,24 @@ add_library(suspkin_core STATIC
     # without a window.
     src/model/Linkage.h
     src/model/Linkage.cpp
+    # What the user says about each hardpoint besides where it is: which body
+    # holds it, which bodies meet there, which bushing acts at it. Pure data
+    # with a validation layer over it, so the rules can be tested without a
+    # table in front of them.
+    src/model/HardpointConfig.h
+    src/model/HardpointConfig.cpp
+    # The kinematics: closed-form geometry, the roles a corner's hardpoints play,
+    # the solve itself and the sweeps over it. All of it is arithmetic over a
+    # hardpoint table, so all of it is testable without a window -- which is the
+    # whole reason the core library exists.
+    src/model/GeomSolve.h
+    src/model/GeomSolve.cpp
+    src/model/Mechanism.h
+    src/model/Mechanism.cpp
+    src/model/SuspensionSolver.h
+    src/model/SuspensionSolver.cpp
+    src/model/Sweep.h
+    src/model/Sweep.cpp
     src/io/LinkageTemplate.h
     src/io/LinkageTemplate.cpp
     src/io/XlsxHardpoints.h
@@ -159,6 +178,11 @@ qt_add_executable(suspkin
     src/app/MainWindow.cpp
     src/app/HardpointModel.h
     src/app/HardpointModel.cpp
+    # How the configuration table draws itself: the constraint chips, the body
+    # dropdowns, the bushing spinner. All delegates rather than widgets in
+    # cells, which is what keeps the table virtualised.
+    src/app/HardpointDelegates.h
+    src/app/HardpointDelegates.cpp
     src/app/HardpointPanel.h
     src/app/HardpointPanel.cpp
     src/app/ProjectLauncher.h
@@ -171,6 +195,13 @@ qt_add_executable(suspkin
     src/app/UpdateChecker.cpp
     src/app/WheelDialog.h
     src/app/WheelDialog.cpp
+    # The analysis dock: the travel slider that poses the mechanism, the sweep
+    # controls, the readout, and the curve the sweep produces. The maths is all
+    # in the core library; these two only draw it.
+    src/app/PlotWidget.h
+    src/app/PlotWidget.cpp
+    src/app/AnalysisPanel.h
+    src/app/AnalysisPanel.cpp
     src/app/AppController.h
     src/app/AppController.cpp
     src/render/GpuMesh.h

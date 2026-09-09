@@ -29,6 +29,12 @@ LinkageTemplateLoadResult readLinkageTemplateFile(const QString& path);
 /// template is: this file is meant to be opened and edited by hand.
 QByteArray writeLinkageTemplate(const LinkageTemplate& templ);
 
+/// The roles the built-in template gives a corner's hardpoints.
+///
+/// What a template written before the solver existed falls back to, so that a
+/// project made last month simulates without anybody hand-editing a file.
+MechanismTemplate builtinMechanismTemplate();
+
 /// The template the application ships: a pushrod-actuated double wishbone corner.
 /// It is what a project gets when it does not have one of its own yet.
 QByteArray builtinLinkageTemplateBytes();

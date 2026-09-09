@@ -1,7 +1,9 @@
 #pragma once
 
 #include "model/Hardpoint.h"
+#include "model/HardpointConfig.h"
 #include "model/HardpointMirror.h"
+#include "model/Sweep.h"
 #include "model/Wheels.h"
 #include "render/Camera.h"
 #include "render/DisplayMode.h"
@@ -16,6 +18,26 @@
 #include <vector>
 
 namespace suspkin {
+
+/// Where the solver has the suspension standing, and what it is being asked.
+///
+/// This is view state rather than model state on purpose. Posing the mechanism
+/// changes nothing about the hardpoints -- the table keeps the coordinates the
+/// workbook gave it -- so keeping the pose here is what stops it leaking into
+/// the edits file as changes the user never made.
+struct SimulationState {
+    /// Whether the viewport is showing the mechanism posed rather than at the
+    /// coordinates the table holds.
+    bool active = false;
+    QString axle; ///< the corner token being swept, e.g. "F"
+    SweepSpec sweep;
+    double position = 0.0; ///< where along that sweep the model stands
+    QString measure;       ///< which curve the plot is showing
+    /// Whether it is running through its travel on its own, and whether every
+    /// axle comes along or only the one the curve belongs to.
+    bool animating = false;
+    bool allAxles = true;
+};
 
 /// What the viewport looked like when the project was last saved. Restored
 /// wholesale on open, so reopening a project puts the user back in front of the
@@ -35,6 +57,9 @@ struct ViewState {
     /// default, for the same reason: they were imported to be looked at.
     bool wheelsVisible = true;
     int selectedHardpoint = -1;
+    /// Where the solver had the suspension standing, so reopening a project puts
+    /// the user back mid-travel if that is where they left it.
+    SimulationState simulation;
 };
 
 /// The window's own layout: its size and position, and where the docks sit.
@@ -70,6 +95,15 @@ struct HardpointRef {
     /// the tool unable to tell a mirrored point from an original one, and a
     /// second mirror pass would start producing mirrors of mirrors.
     QHash<QString, QString> mirrored;
+
+    /// What each point is for, keyed by point name: its solver constraint, the
+    /// two bodies that meet at it, the bushing that acts there.
+    ///
+    /// It lives here rather than in the workbook for the same reason the edits
+    /// do: the workbook is the user's file and stays exactly as it was
+    /// imported. It is keyed by name rather than by row because mirroring
+    /// appends rows and a reimported workbook may be in a different order.
+    HardpointConfigMap config;
 
     bool isEmpty() const { return workbook.isEmpty(); }
 };
@@ -215,9 +249,15 @@ private:
 struct HardpointEdits {
     std::vector<Hardpoint> changed; ///< in the workbook, but with different numbers
     std::vector<Hardpoint> added;   ///< not in the workbook at all
+    /// In the workbook, and deleted since. Names rather than points: there is
+    /// nothing left of them but which rows to leave out.
+    QStringList removed;
 
-    bool isEmpty() const { return changed.empty() && added.empty(); }
-    int count() const { return static_cast<int>(changed.size() + added.size()); }
+    bool isEmpty() const { return changed.empty() && added.empty() && removed.isEmpty(); }
+    int count() const
+    {
+        return static_cast<int>(changed.size() + added.size()) + int(removed.size());
+    }
 };
 
 /// The difference between @p current and the @p baseline the workbook holds.

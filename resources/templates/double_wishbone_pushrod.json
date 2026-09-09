@@ -9,7 +9,9 @@
         "The other side of the car is not written out. Each part is instantiated a second time with every point name put through the project's own mirror rule (Hardpoints > Mirror), so whatever naming convention the workbook uses is the one used here. {side} in a label becomes the matching entry from 'sides'.",
         "'optional': true on a part or a chain means 'say nothing when these points are absent'. Use it for anything a car may not have -- an anti-roll bar, a rocker axis point.",
         "Point names that do not exist in the table are reported once per part; the rest of the part is still drawn.",
-        "INTERPRETATION WORTH CHECKING: in this workbook {corner}_PushRod_O sits 21 mm (front) and 31 mm (rear) off the plane of the upper wishbone and 37-80 mm from its outer ball joint, so the pushrod is taken to pick up on the UPPER WISHBONE. The 'pushRodPickup' part below draws that link. If the pushrod is actually mounted on the upright, delete that part and add {corner}_PushRod_O to the 'upright' part's first chain instead."
+        "INTERPRETATION WORTH CHECKING: in this workbook {corner}_PushRod_O sits 21 mm (front) and 31 mm (rear) off the plane of the upper wishbone and 37-80 mm from its outer ball joint, so the pushrod is taken to pick up on the UPPER WISHBONE. The 'pushRodPickup' part below draws that link, and 'mechanism.pushrod.mount' below says the same thing to the solver. If the pushrod is actually mounted on the upright, change that to 'upright', delete the pushRodPickup part, and add {corner}_PushRod_O to the 'upright' part's first chain instead.",
+        "'parts' above says what to DRAW. 'mechanism' below says what MOVES: which hardpoint plays which role, so the corner can be solved through its travel. Both use {corner} and both take the far side from your own mirror rule, so neither is written twice.",
+        "The mechanism has one degree of freedom: the lower wishbone's rotation about its own pivot axis. Everything else follows -- the upper wishbone from the upright being rigid, the tie rod end from being rigid with both ball joints, the wheel from the three of them together, and the rocker from the pushrod's length. Leave out 'rocker', 'damper' or 'antiRollBar' and what remains is still solved; leave out a wishbone and there is nothing to solve."
     ],
     "corners": [
         { "token": "F", "label": "Front" },
@@ -18,6 +20,45 @@
     "sides": {
         "base": "left",
         "mirrored": "right"
+    },
+    "mechanism": {
+        "lowerWishbone": {
+            "front": "{corner}_LCA_IF",
+            "rear": "{corner}_LCA_IR",
+            "outer": "{corner}_LCA_O"
+        },
+        "upperWishbone": {
+            "front": "{corner}_UCA_IF",
+            "rear": "{corner}_UCA_IR",
+            "outer": "{corner}_UCA_O"
+        },
+        "tieRod": {
+            "inboard": "{corner}_TieRod_I",
+            "outboard": "{corner}_TieRod_O"
+        },
+        "upright": {
+            "wheelCenter": "{corner}_WheelCenter",
+            "contactPatch": "{corner}_ContactPatch",
+            "carries": []
+        },
+        "pushrod": {
+            "mount": "upperArm",
+            "outer": "{corner}_PushRod_O",
+            "inner": "{corner}_PushRod_I"
+        },
+        "rocker": {
+            "pivot": "{corner}_Rocker_Center",
+            "axis": "{corner}_Rocker_AxisPoint"
+        },
+        "damper": {
+            "inboard": "{corner}_Damper_I",
+            "outboard": "{corner}_Damper_O"
+        },
+        "antiRollBar": {
+            "rocker": "{corner}_AntiRoll_O",
+            "armOuter": "{corner}_AntiRoll_I",
+            "armPivot": "{corner}_AntiRoll_Center"
+        }
     },
     "parts": [
         {

@@ -52,6 +52,106 @@ QJsonObject chainToJson(const ChainTemplate& chain)
     return object;
 }
 
+/// One named string out of a sub-object, e.g. mechanism.lowerWishbone.outer.
+QString roleName(const QJsonObject& parent, const char* group, const char* key)
+{
+    return parent.value(QLatin1String(group)).toObject().value(QLatin1String(key)).toString();
+}
+
+/// The mechanism block: which hardpoint plays which role, grouped by the part it
+/// belongs to so the file reads like the suspension it describes.
+MechanismTemplate mechanismFromJson(const QJsonObject& root)
+{
+    MechanismTemplate mechanism;
+    if (!root.contains(QStringLiteral("mechanism"))) return mechanism;
+    const QJsonObject object = root.value(QStringLiteral("mechanism")).toObject();
+
+    mechanism.lowerFront = roleName(object, "lowerWishbone", "front");
+    mechanism.lowerRear = roleName(object, "lowerWishbone", "rear");
+    mechanism.lowerOuter = roleName(object, "lowerWishbone", "outer");
+    mechanism.upperFront = roleName(object, "upperWishbone", "front");
+    mechanism.upperRear = roleName(object, "upperWishbone", "rear");
+    mechanism.upperOuter = roleName(object, "upperWishbone", "outer");
+    mechanism.tieRodInboard = roleName(object, "tieRod", "inboard");
+    mechanism.tieRodOutboard = roleName(object, "tieRod", "outboard");
+    mechanism.wheelCenter = roleName(object, "upright", "wheelCenter");
+    mechanism.contactPatch = roleName(object, "upright", "contactPatch");
+    mechanism.carried = stringList(
+        object.value(QStringLiteral("upright")).toObject().value(QStringLiteral("carries")));
+    mechanism.pushrodMount = pushrodMountFromString(
+        object.value(QStringLiteral("pushrod")).toObject().value(QStringLiteral("mount")).toString());
+    mechanism.pushrodOuter = roleName(object, "pushrod", "outer");
+    mechanism.pushrodInner = roleName(object, "pushrod", "inner");
+    mechanism.rockerPivot = roleName(object, "rocker", "pivot");
+    mechanism.rockerAxis = roleName(object, "rocker", "axis");
+    mechanism.damperInboard = roleName(object, "damper", "inboard");
+    mechanism.damperOutboard = roleName(object, "damper", "outboard");
+    mechanism.antiRollRocker = roleName(object, "antiRollBar", "rocker");
+    mechanism.antiRollArmOuter = roleName(object, "antiRollBar", "armOuter");
+    mechanism.antiRollArmPivot = roleName(object, "antiRollBar", "armPivot");
+    return mechanism;
+}
+
+/// A group of roles, left out entirely when none of them is named -- a corner
+/// with no anti-roll bar should not carry three empty strings about.
+void insertGroup(QJsonObject& parent, const char* group,
+                 std::initializer_list<std::pair<const char*, const QString*>> roles)
+{
+    QJsonObject object;
+    for (const auto& role : roles)
+        if (!role.second->isEmpty()) object.insert(QLatin1String(role.first), *role.second);
+    if (!object.isEmpty()) parent.insert(QLatin1String(group), object);
+}
+
+QJsonObject mechanismToJson(const MechanismTemplate& mechanism)
+{
+    QJsonObject object;
+    insertGroup(object, "lowerWishbone",
+                { { "front", &mechanism.lowerFront },
+                  { "rear", &mechanism.lowerRear },
+                  { "outer", &mechanism.lowerOuter } });
+    insertGroup(object, "upperWishbone",
+                { { "front", &mechanism.upperFront },
+                  { "rear", &mechanism.upperRear },
+                  { "outer", &mechanism.upperOuter } });
+    insertGroup(object, "tieRod",
+                { { "inboard", &mechanism.tieRodInboard },
+                  { "outboard", &mechanism.tieRodOutboard } });
+
+    QJsonObject upright;
+    if (!mechanism.wheelCenter.isEmpty())
+        upright.insert(QStringLiteral("wheelCenter"), mechanism.wheelCenter);
+    if (!mechanism.contactPatch.isEmpty())
+        upright.insert(QStringLiteral("contactPatch"), mechanism.contactPatch);
+    if (!mechanism.carried.isEmpty()) {
+        QJsonArray carries;
+        for (const QString& name : mechanism.carried) carries.append(name);
+        upright.insert(QStringLiteral("carries"), carries);
+    }
+    if (!upright.isEmpty()) object.insert(QStringLiteral("upright"), upright);
+
+    if (!mechanism.pushrodOuter.isEmpty() || !mechanism.pushrodInner.isEmpty()) {
+        QJsonObject pushrod;
+        pushrod.insert(QStringLiteral("mount"), pushrodMountToString(mechanism.pushrodMount));
+        if (!mechanism.pushrodOuter.isEmpty())
+            pushrod.insert(QStringLiteral("outer"), mechanism.pushrodOuter);
+        if (!mechanism.pushrodInner.isEmpty())
+            pushrod.insert(QStringLiteral("inner"), mechanism.pushrodInner);
+        object.insert(QStringLiteral("pushrod"), pushrod);
+    }
+
+    insertGroup(object, "rocker",
+                { { "pivot", &mechanism.rockerPivot }, { "axis", &mechanism.rockerAxis } });
+    insertGroup(object, "damper",
+                { { "inboard", &mechanism.damperInboard },
+                  { "outboard", &mechanism.damperOutboard } });
+    insertGroup(object, "antiRollBar",
+                { { "rocker", &mechanism.antiRollRocker },
+                  { "armOuter", &mechanism.antiRollArmOuter },
+                  { "armPivot", &mechanism.antiRollArmPivot } });
+    return object;
+}
+
 } // namespace
 
 LinkageTemplateLoadResult readLinkageTemplate(const QByteArray& bytes, const QString& label)
@@ -100,6 +200,8 @@ LinkageTemplateLoadResult readLinkageTemplate(const QByteArray& bytes, const QSt
     const QJsonObject sides = root.value(QStringLiteral("sides")).toObject();
     templ.baseSideLabel = sides.value(QStringLiteral("base")).toString();
     templ.mirroredSideLabel = sides.value(QStringLiteral("mirrored")).toString();
+
+    templ.mechanism = mechanismFromJson(root);
 
     for (const QJsonValue& value : root.value(QStringLiteral("parts")).toArray()) {
         const QJsonObject object = value.toObject();
@@ -208,6 +310,9 @@ QByteArray writeLinkageTemplate(const LinkageTemplate& templ)
     }
     root.insert(QStringLiteral("parts"), parts);
 
+    const QJsonObject mechanism = mechanismToJson(templ.mechanism);
+    if (!mechanism.isEmpty()) root.insert(QStringLiteral("mechanism"), mechanism);
+
     return QJsonDocument(root).toJson(QJsonDocument::Indented);
 }
 
@@ -229,6 +334,8 @@ LinkageTemplate builtinLinkageTemplate()
         builtinLinkageTemplateBytes(), QStringLiteral("the built-in linkage template"));
     return result.ok() ? *result.templ : LinkageTemplate{};
 }
+
+MechanismTemplate builtinMechanismTemplate() { return builtinLinkageTemplate().mechanism; }
 
 QString linkageTemplateRelativePath() { return QStringLiteral("linkage/template.json"); }
 

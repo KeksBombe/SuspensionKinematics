@@ -2,6 +2,7 @@
 
 #include "io/LinkageTemplate.h"
 #include "io/XlsxHardpoints.h"
+#include "model/Sweep.h"
 #include "project/Project.h"
 #include "render/Camera.h"
 #include "render/ViewportWidget.h"
@@ -19,6 +20,7 @@ class QTimer;
 
 namespace suspkin {
 
+class AnalysisPanel;
 class HardpointModel;
 class HardpointPanel;
 class UpdateChecker;
@@ -83,6 +85,7 @@ private slots:
     void resetLinkageTemplate();
     void addWheelsDialog();
     void removeWheels();
+    void exportSweepCsv();
     void newProject();
     void openProject();
 
@@ -90,6 +93,7 @@ private:
     void buildActions();
     void buildMenus();
     void buildHardpointDock();
+    void buildAnalysisDock();
     void refreshRecentProjectsMenu();
 
     /// Wire up the update checker and, unless the user has turned it off, ask
@@ -114,6 +118,30 @@ private:
     /// Resolve the template against the current table and hand the result to
     /// the viewport. Cheap enough to redo whenever either one changes.
     void rebuildLinkage();
+
+    /// Hand the configuration table the bodies its Part columns may name, and
+    /// fill in what the template implies for any point that has none yet. Both
+    /// come from the linkage template, so this follows the template and the
+    /// points wherever either changes.
+    void refreshHardpointConfig();
+    /// Fold what the table holds back into the project, which is what is saved.
+    /// Called from the edit path, so a configuration is never only in a widget.
+    void captureHardpointConfig();
+
+    /// Bind the template's mechanism against the current table, once per axle.
+    /// Cheap -- it resolves names and measures link lengths -- so anything that
+    /// changes a coordinate can call it.
+    void rebuildSolvers();
+    /// Run the sweep the panel is asking for and hand the curve over.
+    void refreshSweep();
+    /// Put the mechanism where the panel says, or back at the coordinates the
+    /// table holds. Nothing here touches the table itself.
+    void applySimulation();
+    /// The table as the viewport should draw it: the design coordinates, or
+    /// those coordinates with the solved pose laid over them by name.
+    HardpointTable posedTable() const;
+    /// The axle the panel has selected, or nothing when none can be solved.
+    const AxleSolver* currentAxle() const;
 
     /// Read the wheel and rim models the project holds and hand them to the
     /// viewport, then place them. The expensive half of the two.
@@ -189,6 +217,24 @@ private:
     HardpointModel* m_hardpointModel = nullptr;
     HardpointPanel* m_hardpointPanel = nullptr;
     QDockWidget* m_hardpointDock = nullptr;
+
+    AnalysisPanel* m_analysisPanel = nullptr;
+    QDockWidget* m_analysisDock = nullptr;
+
+    /// One per corner the template names, whether or not the table holds it.
+    /// Rebuilt whenever the table or the template changes, because both of them
+    /// are what a solver is bound to.
+    std::vector<AxleSolver> m_axles;
+    /// The curve on the plot.
+    SweepResult m_sweep;
+    /// Why there is no curve, when there is none: a template that does not name
+    /// the mechanism, a table with no complete axle in it.
+    QString m_solverNote;
+    /// Where the mechanism is standing, one entry per axle being posed -- the
+    /// selected one first, then the others when they are along for the ride.
+    /// Empty unless the panel says it is simulating; the table is never changed
+    /// to match any of it.
+    std::vector<AxleSample> m_poses;
 
     /// The workbook the points came from, kept whole so saving can rewrite the
     /// value cells and copy every other byte through unchanged.

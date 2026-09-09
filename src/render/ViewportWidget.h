@@ -54,6 +54,16 @@ public:
     /// path taken while a coordinate is being typed, so it has to stay cheap.
     void moveHardpoint(int index, const QVector3D& position);
 
+    /// Move every marker at once, keeping the names, the selection and the parts.
+    ///
+    /// This is how the solver puts the suspension somewhere other than where the
+    /// workbook has it: the table is the same table, only posed. Going through
+    /// setHardpoints() instead would drop the linkage and the selection on every
+    /// frame of a travel slider, which is exactly what must not happen.
+    /// @p positions has to be as long as the table that was set; a mismatch is
+    /// ignored rather than half-applied.
+    void setHardpointPositions(const std::vector<QVector3D>& positions);
+
     /// Replace the parts drawn between the markers. The indices it holds are
     /// into the hardpoint table, so it has to be set after the points it refers
     /// to, never before.

@@ -47,9 +47,27 @@ qt_add_executable(test_wheels test_wheels.cpp)
 target_link_libraries(test_wheels PRIVATE suspkin_core Qt6::Test)
 add_test(NAME wheels COMMAND test_wheels)
 
+qt_add_executable(test_hardpoint_config test_hardpoint_config.cpp)
+target_link_libraries(test_hardpoint_config PRIVATE suspkin_core Qt6::Test)
+add_test(NAME hardpoint_config COMMAND test_hardpoint_config)
+
+# The table model is application code, but it holds no widgets -- it is a
+# QAbstractTableModel over the core types -- so the store and its validation
+# boundary are testable the same way everything under it is.
+qt_add_executable(test_hardpoint_model
+    test_hardpoint_model.cpp
+    ../src/app/HardpointModel.cpp)
+target_link_libraries(test_hardpoint_model PRIVATE suspkin_core Qt6::Test)
+target_include_directories(test_hardpoint_model PRIVATE ../src)
+add_test(NAME hardpoint_model COMMAND test_hardpoint_model)
+
 qt_add_executable(test_linkage test_linkage.cpp)
 target_link_libraries(test_linkage PRIVATE suspkin_core Qt6::Test)
 add_test(NAME linkage COMMAND test_linkage)
+
+qt_add_executable(test_kinematics test_kinematics.cpp)
+target_link_libraries(test_kinematics PRIVATE suspkin_core Qt6::Test)
+add_test(NAME kinematics COMMAND test_kinematics)
 
 qt_add_executable(test_project test_project.cpp)
 target_link_libraries(test_project PRIVATE suspkin_core Qt6::Test)

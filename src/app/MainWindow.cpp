@@ -1,5 +1,6 @@
 #include "app/MainWindow.h"
 
+#include "app/AnalysisPanel.h"
 #include "app/HardpointModel.h"
 #include "app/HardpointPanel.h"
 #include "app/MirrorDialog.h"
@@ -29,6 +30,8 @@
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QSaveFile>
+#include <QTextStream>
 #include <QTimer>
 #include <QUrl>
 
@@ -106,6 +109,7 @@ MainWindow::MainWindow(Project project, QWidget* parent)
 
     buildActions();
     buildHardpointDock();
+    buildAnalysisDock();
     buildMenus();
 
     // The overlay buttons and the menu entries are two views of one mode.
@@ -159,11 +163,69 @@ void MainWindow::buildHardpointDock()
         const HardpointTable& table = m_hardpointModel->table();
         if (row < 0 || row >= static_cast<int>(table.points.size())) return;
         m_viewport->moveHardpoint(row, table.points[static_cast<std::size_t>(row)].toVector());
-        // A wheel centre that is being typed takes its wheel with it.
-        rebuildWheels();
+        // A coordinate is a link length, so the mechanism has to be measured
+        // again. applySimulation() re-poses it and takes the wheels with it.
+        rebuildSolvers();
+        refreshSweep();
+        applySimulation();
         markDirty();
         updateWindowTitle();
         updateActionState();
+    });
+
+    // What a point is for is project state like everything else, so an accepted
+    // edit is in the project before this lambda returns. The model has already
+    // refused anything that could not mean something.
+    connect(m_hardpointModel, &HardpointModel::configChanged, this, [this](int) {
+        captureHardpointConfig();
+        markDirty();
+    });
+}
+
+void MainWindow::buildAnalysisDock()
+{
+    m_analysisPanel = new AnalysisPanel(this);
+
+    m_analysisDock = new QDockWidget(tr("Analysis"), this);
+    // Named so QMainWindow::saveState() can put it back where the user left it.
+    m_analysisDock->setObjectName(QStringLiteral("analysisDock"));
+    m_analysisDock->setWidget(m_analysisPanel);
+    m_analysisDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea
+                                    | Qt::BottomDockWidgetArea);
+    addDockWidget(Qt::RightDockWidgetArea, m_analysisDock);
+    m_analysisDock->hide(); // nothing to solve until hardpoints are imported
+
+    // Which axle, and how far it is being asked to move, are both things the
+    // project remembers, so every one of these ends in markDirty().
+    connect(m_analysisPanel, &AnalysisPanel::axleChanged, this, [this] {
+        refreshSweep();
+        applySimulation();
+        markDirty();
+    });
+    connect(m_analysisPanel, &AnalysisPanel::specChanged, this, [this] {
+        refreshSweep();
+        applySimulation();
+        markDirty();
+    });
+    connect(m_analysisPanel, &AnalysisPanel::positionChanged, this, [this] {
+        applySimulation();
+        // A position that is moving thirty times a second is not worth writing
+        // out thirty times a second. Stopping is what saves where it stopped.
+        if (!m_analysisPanel->animating()) markDirty();
+    });
+    connect(m_analysisPanel, &AnalysisPanel::animatingChanged, this, [this] { markDirty(); });
+    connect(m_analysisPanel, &AnalysisPanel::simulatingChanged, this, [this] {
+        applySimulation();
+        markDirty();
+    });
+    connect(m_analysisPanel, &AnalysisPanel::measureChanged, this, [this] { markDirty(); });
+    connect(m_analysisPanel, &AnalysisPanel::exportCsvRequested, this,
+            &MainWindow::exportSweepCsv);
+
+    // The sweep is skipped while the dock is shut, so opening it is what asks
+    // for one. Reopening a project restores the dock, and this catches that too.
+    connect(m_analysisDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+        if (visible && m_sweep.isEmpty()) refreshSweep();
     });
 }
 
@@ -345,6 +407,16 @@ void MainWindow::buildMenus()
             QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     });
 
+    QMenu* analysisMenu = menuBar()->addMenu(tr("&Analysis"));
+    analysisMenu->addAction(m_analysisDock->toggleViewAction());
+    m_analysisDock->toggleViewAction()->setText(tr("Show &Analysis"));
+    m_analysisDock->toggleViewAction()->setShortcut(QKeySequence(QStringLiteral("Ctrl+K")));
+    analysisMenu->addSeparator();
+    auto* exportSweepAction = analysisMenu->addAction(tr("Export Sweep as &CSV..."));
+    exportSweepAction->setStatusTip(
+        tr("Write the sweep on screen out as a spreadsheet, one row per position."));
+    connect(exportSweepAction, &QAction::triggered, this, &MainWindow::exportSweepCsv);
+
     QMenu* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(m_fitAction);
     viewMenu->addSeparator();
@@ -352,6 +424,7 @@ void MainWindow::buildMenus()
     viewMenu->addAction(m_linksAction);
     viewMenu->addAction(m_wheelsAction);
     viewMenu->addAction(m_hardpointDock->toggleViewAction());
+    viewMenu->addAction(m_analysisDock->toggleViewAction());
     viewMenu->addSeparator();
 
     for (const PresetSpec& spec : kPresets) {
@@ -736,9 +809,53 @@ void MainWindow::rebuildLinkage()
 {
     m_linkage = buildLinkage(m_linkageTemplate, m_hardpointModel->table(), m_project.mirror());
     m_viewport->setLinkage(m_linkage);
+
+    // The configuration table is resolved against the same two things the parts
+    // are, so whatever changed here changed that too.
+    refreshHardpointConfig();
+
+    // The mechanism is bound to the same two things the parts are -- this
+    // template and this table -- so it is rebound in the same breath. Doing it
+    // here rather than at each call site is what keeps it independent of the
+    // order a project happens to load its pieces in: the points are read before
+    // the template, so binding at the point the table arrives would bind against
+    // a template that is not there yet.
+    rebuildSolvers();
+    refreshSweep();
+    // Which also places the wheels, posed or not.
+    applySimulation();
+
     // updateActionState() ends by refreshing the status line, which is where the
     // part count is shown.
     updateActionState();
+}
+
+void MainWindow::refreshHardpointConfig()
+{
+    // What the Part columns may name comes from the template: a project that
+    // describes a different car offers that car's bodies.
+    m_hardpointModel->setBodyCatalog(bodyCatalog(m_linkageTemplate));
+
+    HardpointConfigMap config = m_project.hardpoints().config;
+    const int filled = fillMissingConfig(
+        config,
+        inferHardpointConfig(m_hardpointModel->table(), m_linkageTemplate, m_project.mirror()));
+    m_hardpointModel->setConfig(config);
+    if (filled == 0) return;
+
+    // What was inferred is the user's from the moment it is in front of them --
+    // they are the ones who will correct it -- so it is saved like any other
+    // edit rather than worked out again on every open.
+    captureHardpointConfig();
+    markDirty();
+}
+
+void MainWindow::captureHardpointConfig()
+{
+    HardpointRef reference = m_project.hardpoints();
+    if (reference.config == m_hardpointModel->config()) return;
+    reference.config = m_hardpointModel->config();
+    m_project.setHardpoints(reference);
 }
 
 void MainWindow::importLinkageTemplateDialog()
@@ -818,6 +935,22 @@ void MainWindow::applyViewState()
         m_viewport->setSelectedHardpoint(view.selectedHardpoint);
         m_hardpointPanel->setSelectedRow(view.selectedHardpoint);
     }
+
+    // The axle has to be set after the spec, because the spec is what decides
+    // the range the position is allowed to take.
+    const SimulationState& simulation = view.simulation;
+    m_analysisPanel->setSpec(simulation.sweep);
+    if (!simulation.axle.isEmpty()) m_analysisPanel->setAxle(simulation.axle);
+    if (!simulation.measure.isEmpty())
+        m_analysisPanel->setMeasure(sweepMeasureFromKey(simulation.measure));
+    m_analysisPanel->setPosition(simulation.position);
+    m_analysisPanel->setMovesAllAxles(simulation.allAxles);
+    m_analysisPanel->setSimulating(simulation.active);
+    refreshSweep();
+    applySimulation();
+    // Last, because starting it turns the simulation on and moves the model,
+    // and both of those have to be settled first.
+    m_analysisPanel->setAnimating(simulation.animating && simulation.active);
 }
 
 // ---------------------------------------------------------------------------
@@ -840,6 +973,16 @@ void MainWindow::collectViewState()
     view.linksVisible = m_viewport->linkageVisible();
     view.wheelsVisible = m_viewport->wheelsVisible();
     view.selectedHardpoint = m_viewport->selectedHardpoint();
+
+    SimulationState& simulation = view.simulation;
+    simulation.active = m_analysisPanel->simulating();
+    simulation.axle = m_analysisPanel->axle();
+    simulation.sweep = m_analysisPanel->spec();
+    simulation.position = m_analysisPanel->position();
+    simulation.measure = sweepMeasureKey(m_analysisPanel->measure());
+    simulation.animating = m_analysisPanel->animating();
+    simulation.allAxles = m_analysisPanel->movesAllAxles();
+
     m_project.setView(view);
 
     WindowState window;
@@ -1106,10 +1249,9 @@ void MainWindow::setHardpointTable(HardpointTable table, bool refit)
     m_viewport->setHardpoints(m_hardpointModel->table());
     // setHardpoints() drops the parts, because they are indices into the table
     // that has just been replaced. Resolving them again is what puts them back.
+    // Which rebinds the mechanism and places the wheels as well: all three are
+    // resolved against the table that has just been replaced.
     rebuildLinkage();
-    // The wheels are pinned to points by name, so a new table can move them,
-    // take them away, or bring them back.
-    rebuildWheels();
     // Only reframe when the hardpoints are all there is. With a mesh on screen
     // the user has already chosen a view, and moving it would be rude.
     if (refit) m_viewport->fitToView();
@@ -1366,12 +1508,175 @@ bool MainWindow::loadWheelsFromProject()
     return !m_wheelPlacements.empty();
 }
 
+void MainWindow::rebuildSolvers()
+{
+    m_axles.clear();
+    m_solverNote.clear();
+    if (!m_analysisPanel) return;
+
+    const HardpointTable& table = m_hardpointModel->table();
+
+    // A template written before the solver existed still draws perfectly well;
+    // it simply does not say which point plays which role. The built-in block is
+    // the right guess -- such a template is almost certainly a copy of it -- and
+    // guessing out loud beats a dock that silently does nothing.
+    MechanismTemplate mechanism = m_linkageTemplate.mechanism;
+    if (mechanism.isEmpty() && !m_linkageTemplate.isEmpty()) {
+        mechanism = builtinMechanismTemplate();
+        m_solverNote = tr("This project's template does not say which hardpoint plays which role, "
+                          "so the built-in mechanism is being used. Parts > Reset to Built-in "
+                          "Template writes it into the file.");
+    }
+
+    QList<QPair<QString, QString>> axles;
+    if (!mechanism.isEmpty() && !table.isEmpty()) {
+        std::vector<CornerSpec> corners = m_linkageTemplate.corners;
+        // A template with no corners spells its point names out in full, which
+        // is one axle rather than none.
+        if (corners.empty()) corners.push_back(CornerSpec{});
+        for (const CornerSpec& corner : corners) {
+            AxleSolver axle = AxleSolver::build(mechanism, corner, table, m_project.mirror());
+            if (axle.isEmpty()) continue;
+            const QString label = axle.label().isEmpty() ? tr("Suspension") : axle.label();
+            axles.append({ axle.cornerToken(), label });
+            m_axles.push_back(std::move(axle));
+        }
+    }
+
+    m_analysisPanel->setAxles(axles);
+    if (axles.isEmpty())
+        m_solverNote = table.isEmpty()
+                           ? tr("Import hardpoints to simulate.")
+                           : tr("No axle in this table resolves to a complete mechanism. The "
+                                "solver needs both wishbones, the tie rod and a wheel centre.");
+}
+
+const AxleSolver* MainWindow::currentAxle() const
+{
+    if (m_axles.empty()) return nullptr;
+    const QString token = m_analysisPanel ? m_analysisPanel->axle() : QString();
+    for (const AxleSolver& axle : m_axles)
+        if (axle.cornerToken() == token) return &axle;
+    return &m_axles.front();
+}
+
+void MainWindow::refreshSweep()
+{
+    if (!m_analysisPanel) return;
+
+    // A sweep is the most expensive thing this window does, and there is nothing
+    // to draw a curve on while the dock is shut. It is run again when it opens.
+    const bool wanted = !m_analysisDock || m_analysisDock->isVisible();
+    const AxleSolver* axle = currentAxle();
+    m_sweep = (wanted && axle) ? runSweep(*axle, m_analysisPanel->spec()) : SweepResult{};
+    m_analysisPanel->setResult(m_sweep);
+
+    QStringList lines;
+    if (!m_solverNote.isEmpty()) lines << m_solverNote;
+    // runSweep already carries the axle's own warnings, so they are not added
+    // here a second time.
+    lines += m_sweep.warnings;
+    m_analysisPanel->setStatus(lines.join(QStringLiteral("\n")));
+}
+
+void MainWindow::applySimulation()
+{
+    if (!m_analysisPanel) return;
+
+    m_poses.clear();
+
+    const AxleSolver* selected = currentAxle();
+    if (m_analysisPanel->simulating() && selected) {
+        const SweepSpec spec = m_analysisPanel->spec();
+        const double input = m_analysisPanel->position();
+        m_poses.push_back(sampleAxleAt(*selected, spec.kind, input, spec.rackTravel));
+        m_analysisPanel->setReadout(m_poses.front(), spec.kind);
+
+        // The other axles ride along, so the car heaves and rolls as a car
+        // rather than as one axle with the rest of it left behind. Steering is
+        // the exception: a rack belongs to one axle, and pushing a rear toe link
+        // with it would be inventing a rear-steer this car has not got.
+        if (m_analysisPanel->movesAllAxles() && spec.kind != SweepKind::Steer) {
+            for (const AxleSolver& axle : m_axles) {
+                if (&axle == selected) continue;
+                m_poses.push_back(sampleAxleAt(axle, spec.kind, input, spec.rackTravel));
+            }
+        }
+    } else {
+        m_analysisPanel->clearReadout();
+    }
+
+    // The table itself never moves. What the viewport is given is a copy of it
+    // with the solved positions laid over the points the mechanism owns, so
+    // nothing here can reach the edits file or a workbook.
+    const HardpointTable table = posedTable();
+    std::vector<QVector3D> positions;
+    positions.reserve(table.points.size());
+    for (const Hardpoint& point : table.points) positions.push_back(point.toVector());
+    m_viewport->setHardpointPositions(positions);
+
+    // A wheel centre that the solver moved takes its wheel with it.
+    rebuildWheels();
+}
+
+HardpointTable MainWindow::posedTable() const
+{
+    HardpointTable table = m_hardpointModel->table();
+    for (const AxleSample& sample : m_poses)
+    for (const CornerPose* pose : { &sample.left, &sample.right }) {
+        if (!pose->valid) continue;
+        for (const PosedPoint& posed : pose->points) {
+            const int index = table.indexOf(posed.name);
+            if (index < 0) continue;
+            Hardpoint& point = table.points[static_cast<std::size_t>(index)];
+            point.coord[0] = posed.position.x;
+            point.coord[1] = posed.position.y;
+            point.coord[2] = posed.position.z;
+        }
+    }
+    return table;
+}
+
+void MainWindow::exportSweepCsv()
+{
+    const AxleSolver* axle = currentAxle();
+    if (!axle) {
+        QMessageBox::information(this, tr("Export Sweep"),
+                                 tr("There is no axle to sweep yet. Import hardpoints, and check "
+                                    "that the linkage template names the mechanism."));
+        return;
+    }
+
+    const SweepSpec spec = m_analysisPanel->spec();
+    const SweepResult result = runSweep(*axle, spec);
+
+    const QString suggested =
+        QDir(m_project.rootPath())
+            .filePath(QStringLiteral("%1-%2-%3.csv")
+                          .arg(m_project.name().isEmpty() ? QStringLiteral("sweep")
+                                                          : m_project.name(),
+                               axle->label().isEmpty() ? axle->cornerToken() : axle->label(),
+                               sweepKindToString(spec.kind)));
+    const QString path = QFileDialog::getSaveFileName(this, tr("Export Sweep as CSV"), suggested,
+                                                      tr("CSV files (*.csv);;All files (*)"));
+    if (path.isEmpty()) return;
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(sweepToCsv(result)) < 0
+        || !file.commit()) {
+        QMessageBox::warning(this, tr("Export Sweep"),
+                             tr("Could not write %1: %2")
+                                 .arg(QDir::toNativeSeparators(path), file.errorString()));
+        return;
+    }
+    statusBar()->showMessage(tr("Sweep written to %1").arg(QDir::toNativeSeparators(path)), 5000);
+}
+
 void MainWindow::rebuildWheels()
 {
     const WheelsRef& wheels = m_project.wheels();
-    m_wheelPlacements = wheels.isEmpty()
-                            ? std::vector<WheelPlacement>{}
-                            : resolveWheels(wheels.spec, m_hardpointModel->table());
+    m_wheelPlacements = wheels.isEmpty() ? std::vector<WheelPlacement>{}
+                                         : resolveWheels(wheels.spec, posedTable());
     m_viewport->setWheelPlacements(m_wheelPlacements, wheels.spec.alignToCenter);
     updateActionState(); // which refreshes the status line too
 }
@@ -1438,6 +1743,7 @@ void MainWindow::applyWheels(const WheelSpec& spec, const QString& wheelPath,
         return;
     }
 
+    QString importedFrom;
     for (Slot& slot : models) {
         if (slot.chosen.isEmpty()) {
             // Cleared in the dialog: the copy inside the project goes with it.
@@ -1469,11 +1775,14 @@ void MainWindow::applyWheels(const WheelSpec& spec, const QString& wheelPath,
         if (!slot.asset->isEmpty() && slot.asset->relativePath != asset->relativePath)
             QFile::remove(m_project.absolutePath(slot.asset->relativePath));
         *slot.asset = *asset;
+        importedFrom = slot.chosen;
     }
 
     m_project.setWheels(wheels);
-    m_project.setLastGeometryDirectory(
-        QFileInfo(wheelPath.isEmpty() ? rimPath : wheelPath).absolutePath());
+    // Only when something actually came in from outside: keeping a model the
+    // project already had says nothing about where the user keeps their CAD.
+    if (!importedFrom.isEmpty())
+        m_project.setLastGeometryDirectory(QFileInfo(importedFrom).absolutePath());
     markDirty();
 
     // Read back out of the copies the project now holds, so what is on screen is

@@ -5,8 +5,9 @@ Native suspension-kinematics tool for Bremergy, running on Linux and Windows.
 Import geometry and inspect it, as a shaded solid or as its triangle mesh, with a
 camera that behaves the way a CAD user expects; import the suspension hardpoints
 from the spreadsheet they already live in, see them in the viewport, edit them,
-mirror them to the other side, and write them straight back. Bump/roll sweeps and
-camber/toe plots build on top of it.
+mirror them to the other side, and write them straight back; hang real wheels and
+rims off the wheel centres. Bump/roll sweeps and camber/toe plots build on top
+of it.
 
 Work lives in a **project**: the tool opens with a list of them, and everything
 you do from then on — the files you import, the coordinates you change, the view
@@ -67,6 +68,7 @@ so its normals come from the real surface and a bore shades as the cylinder it i
 | `Ctrl+M` | Mirror hardpoints to the other side |
 | `Ctrl+Shift+S` / `Ctrl+E` | Overwrite the workbook / Export a workbook |
 | `Ctrl+L` | Show or hide the hardpoint labels |
+| `Ctrl+Shift+W` | Show or hide the wheels |
 
 Display mode and the navigation gizmo also sit in the viewport's top-right corner.
 
@@ -88,9 +90,12 @@ Bremergy26/
     upright.step         a copy of the geometry you imported
   hardpoints/
     hardpoints.xlsx      a copy of the workbook you imported, as imported
-    edits.json           your changes, until you write them into a workbook
+    edits.json           your coordinate changes, until you write them into a workbook
   linkage/
     template.json        which parts join which hardpoints
+  wheels/
+    wheel.step           a copy of the wheel model you imported
+    rim.step             and of the rim
 ```
 
 Imported files are **copied into the project**, so it still opens when the
@@ -100,8 +105,9 @@ The path it came from is remembered, but only as a note to you.
 Everything else you do is kept there too, and written out on its own a moment
 after you stop: which geometry and which workbook are loaded, every coordinate
 you have changed, the mirroring rule you last used, the camera position, solid or
-triangles, whether labels and parts are drawn, which hardpoint is selected, and
-the size and layout of the window itself. Reopening a project puts you back where you were.
+triangles, whether labels and parts are drawn, which hardpoint is selected, what
+each point is for and which bushing acts at it, and the size and layout of the
+window itself. Reopening a project puts you back where you were.
 
 There is no *Save* prompt on the way out, because there is nothing unsaved.
 `Ctrl+S` is there for when you want to be sure, and **File ▸ Show Project Folder**
@@ -132,6 +138,38 @@ behind geometry still shows through, dimmed, because that is usually the moment
 somebody goes looking for it. Labels that would collide are dropped, except for
 the one under the cursor and the one that is selected. Selecting in the table and
 selecting in the viewport are the same selection.
+
+### The configuration table
+
+The hardpoint dock is where the model itself is defined. Every point carries its
+number, its name and its three coordinates, and four things you set:
+
+| Column | What it is |
+|---|---|
+| **Point Type** | what the solver does with the point. **To Body/Ground** holds it to the chassis, **Solved** lets the linkage work it out as the wheel moves, **Dependent** carries it along with a body that does move — a wheel centre on the upright, a sensor bracket |
+| **Part 1**, **Part 2** | the two bodies that meet at that joint: the lower wishbone and the upright, a damper and the chassis |
+| **Bushing** | which compliance bushing acts there, by index into your own stiffness and damping map. `—` is a rigid joint |
+
+The dropdowns offer exactly the bodies your project's linkage template describes,
+so a car that is not a pushrod double wishbone offers its own parts rather than
+ours. The type is a coloured chip rather than a coloured row: blue is held to the
+car, green is solved for, amber is carried along.
+
+**None of it has to be typed in to begin with.** The template already knows which
+point is a chassis pivot and which is an outer ball joint, and which parts are
+drawn through each point, so a workbook opens with the table already described.
+What was worked out for you is yours from that moment: change any of it and the
+change is what gets saved.
+
+An edit that could not mean anything — the same body on both sides of one joint, a
+bushing index out of range — is refused, and the reason appears under the table.
+One that is merely unfinished is kept and the row is marked with a dot: a point
+typed *Solved* but held to the chassis, a bushing with only one body to act
+between. Hovering the row says what is wrong with it.
+
+The number and the name stay put when you scroll sideways, the header stays put
+when you scroll down, any header sorts, and the box above the table filters by
+name. It follows your desktop's light or dark theme.
 
 ### Mirroring
 
@@ -236,6 +274,40 @@ edits JSON on your machine.
 > joint. If yours is mounted on the upright instead, delete the `pushRodPickup`
 > part and add `{corner}_PushRod_O` to the upright's first chain.
 
+## Wheels
+
+**Geometry ▸ Add Wheels** draws a real wheel and rim at the corners, which is
+what turns a cloud of points into something recognisable as a car. One dialog:
+pick the hardpoint each of the four wheels is centred on, and pick a wheel model
+and a rim model — STEP or STL, whatever this build can import. Both are copied
+into the project like every other asset, and both are optional: a rim on its own
+is a perfectly good way to see where the wheels sit.
+
+The four corners are guessed for you from the table when you open the dialog on a
+project that has no wheels yet. Names are matched loosely — anything that reads
+like a wheel centre, in English or German — and which corner each one belongs to
+comes from where the point actually is, since **+X is forward and +Y is left**.
+Check it and move on.
+
+Two settings decide how a model lands on its hardpoint:
+
+- **The models are drawn for** the left side, the right side, or neither. A rim
+  is dished, so the same model cannot simply be dropped onto all four corners:
+  the copies on the far side are drawn as its mirror image, in `y` as always. It
+  is the corner you assigned that decides this, not the sign of the coordinate,
+  so a workbook measured in somebody else's frame still comes out facing the
+  right way.
+- **Put the centre of each model on its hardpoint** — on for a wheel modelled on
+  its own, wherever its origin happens to sit; off for one already positioned in
+  vehicle coordinates, which is then placed by its own origin. The wheel and the
+  rim are measured separately, so they do not have to share an origin.
+
+Everything here lives in the project: the two models, the four hardpoint names,
+how they are placed, and whether they are drawn at all. A wheel centre you edit
+in the table takes its wheel with it as you type. **Geometry ▸ Remove Wheels**
+deletes the copies from the project folder; the files they came from are not
+touched.
+
 ## Building
 
 Requires **Qt 6.5+**, **CMake 3.24+** and a C++20 compiler.
@@ -303,14 +375,15 @@ identical builds.
 ```
 src/geom/    Aabb, TriMesh, vertex welding and edge extraction
 src/model/   Hardpoint and HardpointTable -- the coordinates themselves -- the
-             mirroring rules, and the linkage a template resolves to
+             mirroring rules, the linkage a template resolves to, and where the
+             wheel models are placed
 src/io/      STL and STEP readers behind one importMeshFile() entry point,
              a minimal ZIP reader/rewriter, the hardpoint workbook reader, and
              the linkage template reader/writer
 src/project/ the project format: manifest, copied assets, view state, edits
 src/render/  Camera, GPU buffers, the OpenGL viewport, gizmo and mode selector
 src/app/     MainWindow and the controller that owns it, the project launcher,
-             the mirror dialog, menus, the hardpoint table and dock
+             the mirror and wheel dialogs, menus, the hardpoint table and dock
 tests/       Qt Test suites; STL and XLSX fixtures are generated, STEP committed
 tools/       make_test_stl.py, make_test_xlsx.py -- stdlib-only fixture generators
 ```

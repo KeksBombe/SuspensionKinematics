@@ -1,4 +1,5 @@
 #include "io/LinkageTemplate.h"
+#include "model/Mechanism.h"
 #include "model/Linkage.h"
 
 #include <QTemporaryDir>
@@ -73,6 +74,10 @@ private slots:
     void chainsShorthandAndLongFormMeanTheSame();
     void aTemplateRoundTripsThroughItsFile();
     void somethingThatIsNotATemplateIsRejected();
+
+    void theBuiltinTemplateSaysWhichPointsMakeTheMechanism();
+    void theMechanismSurvivesAWriteAndAReadBack();
+    void aTemplateWithoutAMechanismStillLoads();
 };
 
 void TestLinkage::theBuiltInTemplateIsReadable()
@@ -291,6 +296,71 @@ void TestLinkage::somethingThatIsNotATemplateIsRejected()
                  QStringLiteral("x"))
                  .ok());
     QVERIFY(!readLinkageTemplateFile(QStringLiteral("/nowhere/at/all.json")).ok());
+}
+
+void TestLinkage::theBuiltinTemplateSaysWhichPointsMakeTheMechanism()
+{
+    const LinkageTemplate templ = builtinLinkageTemplate();
+    QVERIFY(templ.canSimulate());
+
+    const MechanismTemplate& mechanism = templ.mechanism;
+    QCOMPARE(mechanism.lowerFront, QStringLiteral("{corner}_LCA_IF"));
+    QCOMPARE(mechanism.upperOuter, QStringLiteral("{corner}_UCA_O"));
+    QCOMPARE(mechanism.tieRodOutboard, QStringLiteral("{corner}_TieRod_O"));
+    QCOMPARE(mechanism.wheelCenter, QStringLiteral("{corner}_WheelCenter"));
+    QVERIFY(mechanism.hasRocker());
+    QVERIFY(mechanism.hasAntiRoll());
+
+    // The workbook this was written against mounts the pushrod on the upper
+    // wishbone, and the solver has to be told the same thing the drawing is.
+    QCOMPARE(mechanism.pushrodMount, PushrodMount::UpperArm);
+
+    // Every name the mechanism asks for is one the parts already draw, so a
+    // table that draws also solves.
+    const Linkage linkage = buildLinkage(templ, tableOf(frontCornerNames()), suffixMirror());
+    QVERIFY(!linkage.isEmpty());
+    for (const QString& name : mechanism.allNames())
+        QVERIFY2(frontCornerNames().contains(QString(name).replace(QStringLiteral("{corner}"),
+                                                                   QStringLiteral("F"))),
+                 qPrintable(name));
+}
+
+void TestLinkage::theMechanismSurvivesAWriteAndAReadBack()
+{
+    const LinkageTemplate original = builtinLinkageTemplate();
+    const LinkageTemplateLoadResult reloaded =
+        readLinkageTemplate(writeLinkageTemplate(original), QStringLiteral("round trip"));
+    QVERIFY2(reloaded.ok(), qPrintable(reloaded.error));
+
+    const MechanismTemplate& before = original.mechanism;
+    const MechanismTemplate& after = reloaded.templ->mechanism;
+    QCOMPARE(after.allNames(), before.allNames());
+    QCOMPARE(after.pushrodMount, before.pushrodMount);
+    QCOMPARE(after.lowerRear, before.lowerRear);
+    QCOMPARE(after.antiRollArmPivot, before.antiRollArmPivot);
+    QCOMPARE(after.contactPatch, before.contactPatch);
+}
+
+void TestLinkage::aTemplateWithoutAMechanismStillLoads()
+{
+    // The block is additive: a template written before the solver existed is a
+    // perfectly good template, it just cannot be simulated until it says which
+    // point is which.
+    const QByteArray bare = R"({
+        "format": "suspkin-linkage-template",
+        "formatVersion": 1,
+        "name": "drawing only",
+        "parts": [ { "id": "link", "points": ["A", "B"] } ]
+    })";
+    const LinkageTemplateLoadResult result =
+        readLinkageTemplate(bare, QStringLiteral("bare template"));
+    QVERIFY2(result.ok(), qPrintable(result.error));
+    QVERIFY(!result.templ->isEmpty());
+    QVERIFY(!result.templ->canSimulate());
+    QVERIFY(result.templ->mechanism.isEmpty());
+
+    // And there is somewhere to fall back to.
+    QVERIFY(!builtinMechanismTemplate().isEmpty());
 }
 
 QTEST_MAIN(TestLinkage)
