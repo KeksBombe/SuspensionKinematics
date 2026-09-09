@@ -21,7 +21,14 @@ env:
   # Must track the Qt developers build against: 6.9 onwards exports
   # QT_USE_QSTRINGBUILDER from its CMake targets, and the XLSX reader
   # concatenates u"" literals, which only compiles with that operator+ present.
-  QT_VERSION: 6.11.1
+  #
+  # Held at 6.9.x rather than the newest release: aqtinstall -- which is what
+  # install-qt-action drives -- can no longer resolve 6.10+ from Qt's public
+  # mirrors ("Failed to locate XML data for Qt version"), because those builds
+  # moved behind the account-gated repository. Every run since this workflow
+  # was written failed on exactly that. Raise this only after confirming
+  # `aqt list-qt windows desktop --arch <version>` actually answers.
+  QT_VERSION: 6.9.3
   # Open CASCADE 7.8 renamed the STEP libraries to TKDESTEP, which is what
   # CMakeLists.txt links against, so 7.9.x is the floor here as well.
   OCCT_TAG: V7_9_3
@@ -166,6 +173,10 @@ jobs:
           cmake --install build/windows-ninja --prefix dist
           # windeployqt knows nothing about OCCT, so its DLLs are copied by hand.
           Copy-Item occt-install/bin/*.dll dist/bin/ -Force
+          # CMakeLists.txt installs the MSVC runtime DLLs app-local, so the
+          # 25 MB redist installer windeployqt leaves behind is dead weight --
+          # nothing runs it, and nothing needs it.
+          Remove-Item dist/bin/vc_redist.x64.exe -Force -ErrorAction SilentlyContinue
           Get-ChildItem dist/bin | Select-Object Name, Length
 
       - name: Smoke test the binary
@@ -173,10 +184,24 @@ jobs:
         run: |
           # WIN32_EXECUTABLE means --version writes to a message box, not stdout,
           # so the check is just that the loader resolves every DLL.
-          $p = Start-Process -FilePath dist/bin/suspkin.exe -ArgumentList '--help' -PassThru
-          Start-Sleep -Seconds 5
+          #
+          # The build runner has Qt and the MSVC runtime on PATH, so launching
+          # normally proves nothing about what a user's machine has -- the tree
+          # once shipped without vcruntime140.dll and this step stayed green.
+          # PATH is therefore cut back to bare Windows and the working directory
+          # moved away from the tree, so anything not sitting beside the exe is
+          # genuinely absent.
+          $si = New-Object System.Diagnostics.ProcessStartInfo
+          $si.FileName = (Resolve-Path dist/bin/suspkin.exe).Path
+          $si.Arguments = '--help'
+          $si.UseShellExecute = $false
+          $si.WorkingDirectory = 'C:\'
+          $si.EnvironmentVariables['PATH'] = 'C:\Windows\system32;C:\Windows'
+          $p = [System.Diagnostics.Process]::Start($si)
+          Start-Sleep -Seconds 10
           if ($p.HasExited -and $p.ExitCode -ne 0) {
-            throw "suspkin.exe exited with $($p.ExitCode) -- a DLL is probably missing"
+            $code = '0x{0:X8}' -f $p.ExitCode
+            throw "suspkin.exe exited with $code -- the deployed tree is not self-contained"
           }
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 

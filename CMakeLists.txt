@@ -232,6 +232,19 @@ if(WIN32)
         NO_TRANSLATIONS
         NO_UNSUPPORTED_PLATFORM_ERROR)
     install(SCRIPT ${SUSPKIN_DEPLOY_SCRIPT})
+
+    # /MD leaves the exe needing vcruntime140.dll and msvcp140.dll, which a
+    # machine that has never had Visual Studio or a C++ app on it does not have.
+    # windeployqt drops vc_redist.x64.exe in the tree for that, but running a
+    # 25 MB system installer is a heavy way to supply two DLLs -- and nothing
+    # actually runs it. Copying them next to the exe instead is app-local
+    # deployment, which Microsoft supports explicitly, and it is what makes the
+    # portable tree genuinely portable: no install, no admin, no redist.
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ${CMAKE_INSTALL_BINDIR})
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP ON)
+    include(InstallRequiredSystemLibraries)
+    install(FILES ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+            DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
 # ---------------------------------------------------------------------------
