@@ -78,3 +78,16 @@ Root: HKA; Subkey: "Software\Classes\{#AppName}.Model\shell\open\command"; Value
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; The in-application updater runs this installer silently, and `skipifsilent`
+; above means the ordinary post-install launch does not happen then -- an update
+; that never came back would look like the application had crashed. It asks for
+; the relaunch explicitly with /RELAUNCH=1, which nothing else passes, so a
+; plain silent install (CI's smoke test, an unattended rollout) still starts
+; nothing.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: RelaunchRequested
+
+[Code]
+function RelaunchRequested(): Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;

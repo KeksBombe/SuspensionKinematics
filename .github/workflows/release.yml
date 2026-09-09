@@ -160,6 +160,7 @@ jobs:
         run: |
           cmake --preset windows-ninja `
             -DSUSPKIN_BUILD_TESTS=OFF `
+            -DSUSPKIN_BUILD_NUMBER=${{ github.run_number }} `
             -DOpenCASCADE_DIR="${{ github.workspace }}/occt-install/lib/cmake/opencascade"
 
       - name: Build
@@ -358,6 +359,40 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      # What the in-application updater reads. It is a plain asset rather than
+      # the releases API: no token, no rate limit, and the rolling tag means
+      # .../releases/latest/download/version.json is a URL that never changes.
+      #
+      # The digest is what makes the updater safe -- it downloads and executes
+      # this installer, and will not run a file that does not hash to what is
+      # published here.
+      - name: Write the update manifest
+        run: |
+          set -Eeuo pipefail
+          setup="SuspensionKinematics-windows-x64-setup.exe"
+          test -f "artifacts/$setup" || { echo "no $setup to describe"; exit 1; }
+
+          version=$(grep -m1 -oP '^\s*VERSION \K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)
+          sha=$(sha256sum "artifacts/$setup" | cut -d' ' -f1)
+          size=$(stat -c%s "artifacts/$setup")
+          base="${{ github.server_url }}/${{ github.repository }}/releases"
+
+          cat > artifacts/version.json <<JSON
+          {
+            "version": "$version",
+            "build": ${{ github.run_number }},
+            "commit": "${GITHUB_SHA}",
+            "releaseUrl": "$base/tag/latest",
+            "windows": {
+              "name": "$setup",
+              "url": "$base/download/latest/$setup",
+              "sha256": "$sha",
+              "size": $size
+            }
+          }
+          JSON
+          cat artifacts/version.json
 
       - name: Publish
         env:

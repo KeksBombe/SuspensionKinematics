@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Network)
 qt_standard_project_setup()
 
 # Warnings that catch real portability bugs. Not -Werror: GCC 16 is new enough
@@ -110,6 +110,10 @@ add_library(suspkin_core STATIC
     # so opening and saving a project can be tested without a window.
     src/project/Project.h
     src/project/Project.cpp
+    # What a release says about itself. Parsing and comparing it is pure, so
+    # it is tested here rather than against the network.
+    src/update/UpdateManifest.h
+    src/update/UpdateManifest.cpp
     # Camera is pure math with no GL dependency, so it lives here where the
     # tests can reach it.
     src/render/Camera.h
@@ -163,6 +167,8 @@ qt_add_executable(suspkin
     src/app/MirrorDialog.cpp
     src/app/RecentProjects.h
     src/app/RecentProjects.cpp
+    src/app/UpdateChecker.h
+    src/app/UpdateChecker.cpp
     src/app/WheelDialog.h
     src/app/WheelDialog.cpp
     src/app/AppController.h
@@ -182,12 +188,20 @@ qt_add_executable(suspkin
 )
 target_link_libraries(suspkin PRIVATE
     suspkin_core
+    Qt6::Network
     Qt6::Widgets
     Qt6::OpenGL
     Qt6::OpenGLWidgets
     suspkin_warnings
 )
-target_compile_definitions(suspkin PRIVATE SUSPKIN_VERSION="${PROJECT_VERSION}")
+# The release workflow's run number, which only ever goes up. It is what the
+# updater compares against, because the rolling release keeps one tag and the
+# project version rarely moves. 0 means "not built by the workflow": a local
+# build, which never reports itself as out of date.
+set(SUSPKIN_BUILD_NUMBER "0" CACHE STRING "Monotonic build number from CI")
+target_compile_definitions(suspkin PRIVATE
+    SUSPKIN_VERSION="${PROJECT_VERSION}"
+    SUSPKIN_BUILD=${SUSPKIN_BUILD_NUMBER})
 
 # Shaders are embedded rather than shipped loose: one self-contained binary, no
 # runtime path resolution, and it still works from any working directory.

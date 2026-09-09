@@ -5,6 +5,7 @@
 #include "app/MirrorDialog.h"
 #include "app/ProjectLauncher.h"
 #include "app/RecentProjects.h"
+#include "app/UpdateChecker.h"
 #include "app/WheelDialog.h"
 #include "geom/MeshTopology.h"
 #include "io/LinkageTemplate.h"
@@ -24,6 +25,7 @@
 #include <QLocale>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -55,6 +57,10 @@ const char kRimStem[] = "rim";
 /// orbit drag is one save rather than two hundred, short enough that closing the
 /// lid on a laptop a second later loses nothing.
 constexpr int kAutoSaveDelayMs = 1200;
+// Long enough that the window is up and the project loaded before the
+// network is touched, short enough that the answer arrives while the user
+// is still at the start of a session.
+constexpr int kUpdateCheckDelayMs = 2500;
 
 struct PresetSpec {
     ViewPreset preset;
@@ -117,6 +123,10 @@ MainWindow::MainWindow(Project project, QWidget* parent)
 
     resize(1280, 820);
     openProjectContents();
+
+    // After the project is in, so a slow or failing network never delays the
+    // window being usable.
+    setUpdateCheckerUp();
 }
 
 MainWindow::~MainWindow() = default;
@@ -352,6 +362,133 @@ void MainWindow::buildMenus()
         viewMenu->addAction(action);
         addAction(action); // keep the shortcut live even when the menu is closed
     }
+
+    QMenu* helpMenu = menuBar()->addMenu(tr("&Help"));
+
+    m_checkUpdatesAction = new QAction(tr("Check for &Updates..."), this);
+    // Disabled rather than hidden for a portable or developer build, so the
+    // absence is visible and the tooltip can say why.
+    m_checkUpdatesAction->setEnabled(UpdateChecker::updatesSupported());
+    if (!UpdateChecker::updatesSupported()) {
+        m_checkUpdatesAction->setToolTip(
+            tr("Only a copy put here by the installer can update itself."));
+    }
+    connect(m_checkUpdatesAction, &QAction::triggered, this, [this] {
+        if (m_updates) m_updates->check(/*userAsked=*/true);
+    });
+    helpMenu->addAction(m_checkUpdatesAction);
+
+    m_autoUpdateAction = new QAction(tr("Check for Updates on Start&up"), this);
+    m_autoUpdateAction->setCheckable(true);
+    m_autoUpdateAction->setChecked(UpdateChecker::checkOnStartup());
+    m_autoUpdateAction->setEnabled(UpdateChecker::updatesSupported());
+    connect(m_autoUpdateAction, &QAction::toggled, this,
+            [](bool on) { UpdateChecker::setCheckOnStartup(on); });
+    helpMenu->addAction(m_autoUpdateAction);
+
+    helpMenu->addSeparator();
+    helpMenu->addAction(tr("&About SuspensionKinematics"), this, [this] {
+        const int build = UpdateChecker::currentBuild();
+        const QString version =
+            build > 0 ? tr("Version %1 (build %2)")
+                            .arg(QCoreApplication::applicationVersion())
+                            .arg(build)
+                      : tr("Version %1 (local build)")
+                            .arg(QCoreApplication::applicationVersion());
+        QMessageBox::about(
+            this, tr("About SuspensionKinematics"),
+            tr("<h3>SuspensionKinematics</h3><p>%1</p>"
+               "<p>Suspension kinematics for Bremergy: CAD geometry and a hardpoint "
+               "workbook in one 3D viewport.</p>")
+                .arg(version));
+    });
+}
+
+void MainWindow::setUpdateCheckerUp()
+{
+    if (!UpdateChecker::updatesSupported()) return;
+
+    m_updates = new UpdateChecker(this);
+    connect(m_updates, &UpdateChecker::updateAvailable, this, &MainWindow::offerUpdate);
+    connect(m_updates, &UpdateChecker::upToDate, this, [this] {
+        QMessageBox::information(this, tr("No update"),
+                                 tr("This is the newest build."));
+    });
+    connect(m_updates, &UpdateChecker::failed, this,
+            [this](const QString& message, bool userAsked) {
+                // A background check on a machine that is offline, or behind a
+                // proxy that blocks GitHub, must not put a dialog in front of
+                // someone who never asked about updates.
+                if (userAsked) QMessageBox::warning(this, tr("Update"), message);
+                else qInfo("Update check: %s", qPrintable(message));
+            });
+
+    if (!UpdateChecker::checkOnStartup()) return;
+    // Not during construction: the window should be up and usable first, and a
+    // project still opening should not compete with the network for attention.
+    QTimer::singleShot(kUpdateCheckDelayMs, this,
+                       [this] { m_updates->check(/*userAsked=*/false); });
+}
+
+void MainWindow::offerUpdate(const UpdateRelease& release, bool userAsked)
+{
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(tr("Update available"));
+    box.setText(tr("<b>Build %1 is available.</b>").arg(release.build));
+    box.setInformativeText(
+        tr("This copy is build %1. The update is about %2 MB and installs itself; "
+           "the application restarts when it is done.")
+            .arg(UpdateChecker::currentBuild())
+            .arg(QString::number(release.assetSize / (1024.0 * 1024.0), 'f', 1)));
+
+    QPushButton* update = box.addButton(tr("Update Now"), QMessageBox::AcceptRole);
+    box.addButton(tr("Not Now"), QMessageBox::RejectRole);
+    // Only worth offering when the application raised this by itself; asking
+    // from the menu and being told "never mind this one" would be odd.
+    QPushButton* skip =
+        userAsked ? nullptr : box.addButton(tr("Skip This Build"), QMessageBox::DestructiveRole);
+    box.setDefaultButton(update);
+    box.exec();
+
+    if (box.clickedButton() == skip) {
+        UpdateChecker::skipBuild(release.build);
+        return;
+    }
+    if (box.clickedButton() != update) return;
+
+    // The project is written out before anything replaces the binary, so an
+    // update can never be what loses someone's work.
+    saveProject();
+
+    auto* progress = new QProgressDialog(tr("Downloading the update..."), tr("Cancel"), 0,
+                                         100, this);
+    progress->setWindowTitle(tr("Update"));
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    progress->setValue(0);
+
+    connect(m_updates, &UpdateChecker::downloadProgress, progress,
+            [progress](qint64 received, qint64 total) {
+                if (total <= 0) return;
+                progress->setMaximum(100);
+                progress->setValue(static_cast<int>(received * 100 / total));
+            });
+    connect(m_updates, &UpdateChecker::installerStarted, progress, [this, progress] {
+        progress->close();
+        progress->deleteLater();
+        // The installer is waiting for this process to let go of its files.
+        QCoreApplication::quit();
+    });
+    connect(m_updates, &UpdateChecker::failed, progress, [progress] {
+        progress->close();
+        progress->deleteLater();
+    });
+    connect(progress, &QProgressDialog::canceled, progress, &QProgressDialog::close);
+
+    m_updates->downloadAndInstall(release);
 }
 
 void MainWindow::refreshRecentProjectsMenu()
