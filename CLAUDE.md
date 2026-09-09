@@ -91,7 +91,10 @@ project stays openable when the original moves or its share is unmounted. The
 manifest keeps `importedFrom` for reference only — never load from it.
 
 The one piece of state that cannot live in a project is the list of projects, in
-`src/app/RecentProjects.*` (QSettings, paths only).
+`src/app/RecentProjects.*` (QSettings, paths only). The updater's two settings --
+whether to check on startup, and which build the user said to stop asking about --
+are in QSettings for the same reason: they are about this installation, not about
+any project, and they have to outlive every project the user opens.
 
 ## Hardpoints: baseline, edits, workbook
 
@@ -268,6 +271,41 @@ each of four hardpoints the user picks. The placement is pure and testable:
   is uploaded once and drawn per corner with its own model matrix, so four
   wheels cost four draw calls rather than four buffers.
 
+## Updating itself
+
+An installed copy checks GitHub on startup and offers to replace itself. Three
+pieces have to agree, and they are in three different files:
+
+- The exe carries `SUSPKIN_BUILD`, the release workflow's run number, passed in
+  as `-DSUSPKIN_BUILD_NUMBER=`. It is **0** for a local build, and build 0 is
+  never out of date — otherwise a developer's own build would offer to overwrite
+  itself with a release one.
+- The release publishes `version.json` beside the binaries, written by the
+  workflow's "Write the update manifest" step. It is fetched from
+  `releases/latest/download/version.json`, which is a fixed URL because the tag
+  is rolling. No API call, so no token and no rate limit.
+- `packaging/windows/suspkin.iss` has a `[Run]` entry gated on `/RELAUNCH=1`.
+  The updater runs the installer with `/SILENT`, which makes Inno skip the
+  ordinary post-install launch, and a silent update that never came back would
+  look like a crash. Nothing else passes that switch, so an unattended install
+  still starts nothing.
+
+The build number is what is compared, not the version: the tag is always
+`latest` and `VERSION` in CMakeLists barely moves, so neither can answer "is
+this newer than what I am".
+
+**The installer is downloaded and executed, so it is verified first.** The
+manifest carries a SHA-256 and a size; `UpdateChecker` refuses anything that
+does not match, and `parseUpdateManifest()` refuses a manifest whose URL is not
+HTTPS on a GitHub host. Do not relax either — they are the whole reason this is
+an updater rather than a way to run what the network hands over.
+
+Only `InstallKind::Installed` ever updates, detected by the `unins*.exe` the
+installer leaves beside the exe. A portable unzip never even asks the network:
+Windows holds its own files open, so nothing can overwrite them from inside, and
+there is no uninstaller to repair a half-finished swap. Linux is packaged by
+pacman, which owns those files.
+
 ## Layout and layering
 
 ```
@@ -279,6 +317,9 @@ src/io/       STL and STEP readers behind importMeshFile(), a minimal ZIP
               reader/rewriter, the hardpoint workbook reader/writer, and the
               linkage template reader/writer
 src/project/  the project format: manifest, assets, view state, hardpoint edits
+src/update/   what a release says about itself: parsing and comparing the
+              version.json a release publishes. Pure, so it is tested without
+              the network
 src/render/   Camera, GPU buffers, the OpenGL viewport, gizmo, mode selector
 src/app/      MainWindow, AppController, the project launcher, the mirror dialog,
               the hardpoint configuration table -- its model, its delegates and

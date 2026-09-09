@@ -6,6 +6,7 @@
 #include "project/Project.h"
 #include "render/Camera.h"
 #include "render/ViewportWidget.h"
+#include "update/UpdateManifest.h"
 
 #include <QMainWindow>
 #include <QString>
@@ -22,6 +23,7 @@ namespace suspkin {
 class AnalysisPanel;
 class HardpointModel;
 class HardpointPanel;
+class UpdateChecker;
 
 /// The application window, which always has exactly one project open.
 ///
@@ -93,6 +95,14 @@ private:
     void buildHardpointDock();
     void buildAnalysisDock();
     void refreshRecentProjectsMenu();
+
+    /// Wire up the update checker and, unless the user has turned it off, ask
+    /// GitHub once shortly after the window is up. Does nothing for a portable
+    /// or developer build -- see UpdateChecker.
+    void setUpdateCheckerUp();
+    /// Offer the release to the user and, if they accept, download and install
+    /// it. `userAsked` distinguishes the startup check from the menu item.
+    void offerUpdate(const UpdateRelease& release, bool userAsked);
 
     /// Load what the project already holds: its geometry copy, its workbook copy
     /// and edits file, its view and its window layout.
@@ -213,6 +223,9 @@ private:
     QAction* m_wheelsAction = nullptr;
     QActionGroup* m_modeGroup = nullptr;
     QMenu* m_recentProjectsMenu = nullptr;
+    QAction* m_checkUpdatesAction = nullptr;
+    QAction* m_autoUpdateAction = nullptr;
+    UpdateChecker* m_updates = nullptr;
 
     HardpointModel* m_hardpointModel = nullptr;
     HardpointPanel* m_hardpointPanel = nullptr;

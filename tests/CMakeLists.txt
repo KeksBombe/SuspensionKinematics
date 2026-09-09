@@ -77,6 +77,10 @@ qt_add_executable(test_camera test_camera.cpp)
 target_link_libraries(test_camera PRIVATE suspkin_core Qt6::Test)
 add_test(NAME camera COMMAND test_camera)
 
+qt_add_executable(test_update test_update.cpp)
+target_link_libraries(test_update PRIVATE suspkin_core Qt6::Test)
+add_test(NAME update COMMAND test_update)
+
 # STEP fixtures are committed rather than generated: producing one needs Open
 # CASCADE, which not every build has.
 if(SUSPKIN_STEP_ENABLED)
