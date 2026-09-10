@@ -408,9 +408,12 @@ unit-testable headlessly.
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE.md). Anyone may use, change and share
-SuspensionKinematics for any noncommercial purpose: personal projects, study,
-research, schools, universities and other noncommercial organisations. Using it
-to make money is not permitted; for commercial use, ask Bremergy.
+Copyright 2026 Bremergy.
+
+SuspensionKinematics is free software, released under the [GNU General Public
+License v3.0](LICENSE) or, at your option, any later version. Anyone may use it,
+change it and sell it. Whoever passes it on, changed or not, has to pass it on
+under the same license together with its source code, so nobody can turn it
+into a closed product. It comes without any warranty.
 
 Qt and Open CASCADE, which the Windows builds bundle, keep their own licenses.
