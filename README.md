@@ -405,3 +405,12 @@ unit-testable headlessly.
 - `--mode solid|triangles` sets the initial display mode.
 - `--import <file>` imports into the open project on startup, dispatched by
   extension, so `--import chassis.step --import hardpoints.xlsx` does both.
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE.md). Anyone may use, change and share
+SuspensionKinematics for any noncommercial purpose: personal projects, study,
+research, schools, universities and other noncommercial organisations. Using it
+to make money is not permitted; for commercial use, ask Bremergy.
+
+Qt and Open CASCADE, which the Windows builds bundle, keep their own licenses.

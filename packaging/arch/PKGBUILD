@@ -9,7 +9,7 @@ pkgrel=1
 pkgdesc="Suspension kinematics tool for Bremergy - 3D viewport for STL and STEP geometry"
 arch=('x86_64')
 url="https://github.com/KeksBombe/SuspensionKinematics"
-license=('LicenseRef-unknown')
+license=('PolyForm-Noncommercial-1.0.0')
 depends=('qt6-base' 'opencascade' 'hicolor-icon-theme')
 makedepends=('cmake' 'ninja' 'python')
 # Without this makepkg splits out a -debug package, which would show up as a
@@ -38,4 +38,7 @@ check() {
 
 package() {
     DESTDIR="$pkgdir" cmake --install build
+    # Arch expects a license outside its common set to ship with the package.
+    install -Dm644 "$srcdir/$pkgname-$pkgver/LICENSE.md" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
 }
