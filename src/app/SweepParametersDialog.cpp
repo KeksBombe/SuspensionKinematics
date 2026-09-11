@@ -106,8 +106,10 @@ SweepParametersDialog::SweepParametersDialog(QWidget* parent) : QDialog(parent)
     m_seconds = addNumber(commonForm, tr("Animation (s/cycle)"), 0.2, 60.0, 1, 0.5,
                           tr("How long one there-and-back run of the travel takes."));
     m_allAxles = new QCheckBox(tr("Move all axles"), this);
-    m_allAxles->setToolTip(tr("Move every axle together. The curve and the readout still belong "
-                              "to the axle chosen in the analysis panel."));
+    m_allAxles->setToolTip(tr("Move every axle together, which is also what lets the body roll "
+                              "about the roll axis in a roll sweep: with one axle moving, the "
+                              "chassis stays put. The curve and the readout still belong to the "
+                              "axle chosen in the analysis panel."));
     commonForm->addRow(QString(), m_allAxles);
     layout->addWidget(commonGroup);
 

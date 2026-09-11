@@ -144,6 +144,29 @@ CornerSpec unsteeredCorner()
     return corner;
 }
 
+/// A rear axle for the same car, a wheelbase behind the front one. Its lower
+/// wishbone is mounted 20 mm higher on the chassis, which tilts that arm down
+/// towards the wheel and lifts the roll centre: a car whose roll axis climbs
+/// towards the back, the way most of them do.
+HardpointTable rearAxle()
+{
+    HardpointTable corner = frontLeftCorner();
+    for (Hardpoint& point : corner.points) {
+        point.name.replace(0, 1, QStringLiteral("R"));
+        point.coord[0] -= 1550.0;
+        if (point.name.startsWith(QLatin1String("R_LCA_I"))) point.coord[2] += 20.0;
+    }
+    return mirrorHardpoints(corner, {}, MirrorSpec{}).table;
+}
+
+CornerSpec rearCorner()
+{
+    CornerSpec corner;
+    corner.token = QStringLiteral("R");
+    corner.label = QStringLiteral("Rear");
+    return corner;
+}
+
 CornerSolver bindTo(const HardpointTable& table)
 {
     QString error;
@@ -210,6 +233,9 @@ private slots:
     void aBumpSweepMovesBothWheelsTheSameWay();
     void aRollSweepMovesThemOppositeWaysAndTwistsTheBar();
     void theRollCentreIsOnTheCentrelineWhenTheAxleIsSymmetric();
+    void theRollAxisRunsThroughEveryAxlesRollCentre();
+    void rollingTheBodyAboutItLeavesTheTyresWhereTheyStand();
+    void aRolledBodyLeansItsWheelsWithIt();
     void aSteerSweepChangesToeAndNotRideHeight();
     void theCsvHasOneRowPerStepAndSaysNothingAboutWhatDidNotSolve();
     void theShippedTemplateSolvesTheCornerItDescribes();
@@ -892,6 +918,132 @@ void TestKinematics::theRollCentreIsOnTheCentrelineWhenTheAxleIsSymmetric()
     // double wishbone puts it.
     QVERIFY(sample.rollCenterHeight > 0.0);
     QVERIFY(sample.rollCenterHeight < sample.left.wheelCenter.z);
+}
+
+void TestKinematics::theRollAxisRunsThroughEveryAxlesRollCentre()
+{
+    const AxleSolver front =
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{});
+    const AxleSolver rear =
+        AxleSolver::build(cornerMechanism(), rearCorner(), rearAxle(), MirrorSpec{});
+    QVERIFY(front.hasBothSides() && rear.hasBothSides());
+
+    const std::optional<Vec3> frontCentre = front.designRollCentre();
+    const std::optional<Vec3> rearCentre = rear.designRollCentre();
+    QVERIFY(frontCentre && rearCentre);
+
+    // As a point it is the same roll centre the sweep reports -- that height
+    // over the ground the patches stand on, at the axle, on the centreline of
+    // a mirrored car.
+    SweepSpec design;
+    design.from = 0.0;
+    design.to = 0.0;
+    design.steps = 2;
+    const AxleSample atDesign = runSweep(front, design).samples.front();
+    QVERIFY(std::abs(frontCentre->z - atDesign.rollCenterHeight) < 1e-9);
+    QVERIFY(std::abs(frontCentre->y) < 1e-6);
+    QVERIFY(std::abs(frontCentre->x - 0.0) < 1e-9);
+    QVERIFY(std::abs(rearCentre->x + 1550.0) < 1e-9);
+    // The rear's higher lower wishbone is what lifts its roll centre.
+    QVERIFY(rearCentre->z > frontCentre->z + 10.0);
+
+    const RollAxis axis = rollAxisThrough({ front, rear });
+    QVERIFY(axis.valid);
+    QVERIFY(std::abs(axis.direction.length() - 1.0) < 1e-12);
+    // Forward, so positive roll means what it means in the sweep.
+    QVERIFY(axis.direction.x > 0.0);
+    const Axis line{ axis.origin, axis.direction };
+    QVERIFY(line.distanceTo(*frontCentre) < 1e-9);
+    QVERIFY(line.distanceTo(*rearCentre) < 1e-9);
+    // Climbing towards the back, which is falling towards the front.
+    QVERIFY(axis.direction.z < -1e-3);
+
+    // With one axle there is one roll centre, and the axis runs straight along
+    // the car through it.
+    const RollAxis alone = rollAxisThrough({ front });
+    QVERIFY(alone.valid);
+    QVERIFY(distance(alone.origin, *frontCentre) < 1e-12);
+    QVERIFY(distance(alone.direction, Vec3(1, 0, 0)) < 1e-12);
+
+    QVERIFY(!rollAxisThrough({}).valid);
+    // An invalid axis moves nothing.
+    const Rigid still = bodyRollMotion(RollAxis{}, 3.0);
+    QVERIFY(distance(still.map(Vec3(100, 200, 300)), Vec3(100, 200, 300)) < 1e-12);
+}
+
+void TestKinematics::rollingTheBodyAboutItLeavesTheTyresWhereTheyStand()
+{
+    const std::vector<AxleSolver> axles = {
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{}),
+        AxleSolver::build(cornerMechanism(), rearCorner(), rearAxle(), MirrorSpec{}),
+    };
+    const RollAxis axis = rollAxisThrough(axles);
+    QVERIFY(axis.valid);
+    // What the car would be doing if it rolled about the ground under its
+    // centreline instead: the axis a roll sweep tilts the ground about.
+    RollAxis atGround;
+    atGround.direction = Vec3(1, 0, 0);
+    atGround.valid = true;
+
+    for (const double degrees : { -2.0, -0.5, 0.5, 2.0 }) {
+        const Rigid body = bodyRollMotion(axis, degrees);
+        const Rigid dragged = bodyRollMotion(atGround, degrees);
+
+        for (const AxleSolver& axle : axles) {
+            // The roll centres are on the axis, so they stay put.
+            const Vec3 centre = *axle.designRollCentre();
+            QVERIFY(distance(body.map(centre), centre) < 1e-9);
+
+            const AxleSample sample = sampleAxleAt(axle, SweepKind::Roll, degrees, 0.0);
+            for (const std::optional<CornerSolver>* side : { &axle.left(), &axle.right() }) {
+                const CornerPose& pose = side == &axle.left() ? sample.left : sample.right;
+                QVERIFY(pose.valid);
+                const Vec3& design = (*side)->designPose().contactPatch;
+                const Vec3 onRoad = body.map(pose.contactPatch);
+                // Still on the road...
+                QVERIFY(std::abs(onRoad.z - design.z) < 0.25);
+                // ...and not dragged across it. What is left is second order
+                // in the roll -- the roll centre moves as the car rolls -- where
+                // turning about the ground drags the tyre by the roll centre's
+                // height times the angle.
+                const double slide = std::abs(onRoad.y - design.y);
+                const double dragging = std::abs(dragged.map(pose.contactPatch).y - design.y);
+                QVERIFY2(slide < 0.25 && slide < 0.2 * dragging,
+                         qPrintable(QStringLiteral("%1 at %2 deg: %3 mm against %4 mm")
+                                        .arg(axle.label())
+                                        .arg(degrees)
+                                        .arg(slide)
+                                        .arg(dragging)));
+            }
+        }
+    }
+}
+
+void TestKinematics::aRolledBodyLeansItsWheelsWithIt()
+{
+    const std::vector<AxleSolver> axles = {
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{}),
+        AxleSolver::build(cornerMechanism(), rearCorner(), rearAxle(), MirrorSpec{}),
+    };
+    const RollAxis axis = rollAxisThrough(axles);
+
+    const double degrees = 2.0;
+    const Rigid body = bodyRollMotion(axis, degrees);
+    const AxleSample sample = sampleAxleAt(axles.front(), SweepKind::Roll, degrees, 0.0);
+    const auto camberToRoad = [&body](const CornerPose& pose) {
+        return -std::asin(body.rotate(pose.spinAxis).z) * 180.0 / M_PI;
+    };
+
+    // Positive roll lifts the left of the car, so the body leans right, the
+    // way it does in a left-hand corner. Everything on it leans the same way:
+    // the inside wheel's top goes towards the car and the outside wheel's away
+    // from it, by the roll less whatever the wishbones win back -- which is
+    // the body-relative camber the sweep reports.
+    QVERIFY(std::abs(camberToRoad(sample.left) - (sample.left.camber - degrees)) < 0.01);
+    QVERIFY(std::abs(camberToRoad(sample.right) - (sample.right.camber + degrees)) < 0.01);
+    // And the wishbones do win some back, but nowhere near all of it.
+    QVERIFY(sample.left.camber > 0.0);
+    QVERIFY(camberToRoad(sample.left) < 0.0);
 }
 
 void TestKinematics::aSteerSweepChangesToeAndNotRideHeight()

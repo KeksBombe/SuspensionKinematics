@@ -16,6 +16,7 @@
 #include <QOpenGLFunctions_3_3_Core>
 #include <QOpenGLWidget>
 #include <QImage>
+#include <QMatrix4x4>
 #include <QPoint>
 #include <QRectF>
 #include <QString>
@@ -43,6 +44,12 @@ public:
     void setMesh(TriMesh mesh, EdgeSet edges);
     void clearMesh();
     bool hasMesh() const { return !m_mesh.isEmpty(); }
+
+    /// Draw the imported geometry moved by @p transform rather than where its
+    /// file put it. It is the chassis, so when the body rolls it goes with it;
+    /// identity the rest of the time. The mesh itself is untouched -- this is a
+    /// model matrix, so a live slider costs nothing but a repaint.
+    void setMeshTransform(const QMatrix4x4& transform);
 
     /// Replace the hardpoints on screen. Selection is dropped, because the
     /// indices it refers to belong to the previous set.
@@ -168,6 +175,7 @@ private:
     EdgeSet m_edges;
     GpuMesh m_gpu;
     bool m_uploadPending = false;
+    QMatrix4x4 m_meshTransform;
 
     /// One kind of part's worth of segment endpoints inside m_linkVertices.
     struct LinkRange {

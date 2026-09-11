@@ -255,6 +255,17 @@ each of four hardpoints the user picks. The placement is pure and testable:
 - The mirror comes *before* the rotation in `wheelTransform()`. The rotation is
   a real one, measured on that corner of the car; mirroring it would steer the
   far wheel the wrong way.
+- **In a roll the body rolls, and takes the wheels with it.** A roll sweep is
+  solved in the car's own coordinates with the road tilted under it, which is
+  where its numbers belong, and they stay there. The viewport draws the other
+  picture: a level road, and the monocoque turned about the roll axis through
+  the axles' design roll centres (`rollAxisThrough()`, `bodyRollMotion()`),
+  because turning about the roll centres is what leaves the contact patches
+  where they were. `MainWindow::m_bodyMotion` moves every point in
+  `posedTable()`, the geometry through `ViewportWidget::setMeshTransform()`, and
+  each wheel after its upright's own turn. Only when every axle is posed: a body
+  cannot roll with one left behind, so with "Move all axles" off the chassis
+  stays put.
 - **The corner decides which side a copy is on, not the sign of y.** The user
   says which point is the front left one. `WheelModelSide` says which side the
   models were drawn for, and the copies on the other side are mirrored in Y --

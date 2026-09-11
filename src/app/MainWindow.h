@@ -146,7 +146,8 @@ private:
     /// table holds. Nothing here touches the table itself.
     void applySimulation();
     /// The table as the viewport should draw it: the design coordinates, or
-    /// those coordinates with the solved pose laid over them by name.
+    /// those coordinates with the solved pose laid over them by name -- and,
+    /// while the body is rolled, every point of it moved with the body.
     HardpointTable posedTable() const;
     /// How far each posed upright has turned, by the name of its wheel centre.
     /// Empty when nothing is being simulated, which leaves every wheel model at
@@ -248,6 +249,12 @@ private:
     /// Empty unless the panel says it is simulating; the table is never changed
     /// to match any of it.
     std::vector<AxleSample> m_poses;
+    /// Where the body is, seen from the road, while it rolls: turned about the
+    /// roll axis, taking the geometry, the points and the wheels with it.
+    /// Nothing the rest of the time, which is the body where the table has it.
+    /// Like the poses it is derived, from them and the panel, so there is
+    /// nothing of it to save.
+    std::optional<Rigid> m_bodyMotion;
 
     /// The workbook the points came from, kept whole so saving can rewrite the
     /// value cells and copy every other byte through unchanged.

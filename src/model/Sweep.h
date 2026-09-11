@@ -64,6 +64,13 @@ public:
     const std::optional<CornerSolver>& left() const { return m_left; }
     const std::optional<CornerSolver>& right() const { return m_right; }
 
+    /// Where this axle's roll centre is at the design position, as a point in
+    /// the car's own coordinates: across the car where the two construction
+    /// lines cross, along it where the contact patches are. Nothing when there
+    /// is no instant centre to construct one from -- two wishbones parallel in
+    /// the front view.
+    std::optional<Vec3> designRollCentre() const;
+
 private:
     QString m_token;
     QString m_label;
@@ -71,6 +78,38 @@ private:
     std::optional<CornerSolver> m_right;
     QStringList m_warnings;
 };
+
+/// The line the body rolls about: through the roll centre of each axle.
+///
+/// A roll sweep is solved in the car's own coordinates, with the ground tilted
+/// underneath it, because that is where the suspension's own numbers live. Seen
+/// from the road it is the other way round -- the road stays level and the
+/// monocoque turns about this line, taking every wheel with it -- and the roll
+/// centres are what make the two pictures agree: turning the body about them
+/// is the one motion that leaves the contact patches where they are on the
+/// road, to first order, rather than dragging them sideways.
+struct RollAxis {
+    Vec3 origin;    ///< a point on it: a roll centre, or the ground under the centreline
+    Vec3 direction; ///< unit, pointing forward, so positive roll is right-handed about it
+    bool valid = false;
+};
+
+/// The roll axis of a car with these axles.
+///
+/// Through the front-most and the rear-most roll centres, and so inclined
+/// whenever the two are at different heights, which on most cars they are.
+/// With only one axle in the table it runs along x through that axle's roll
+/// centre. With not one roll centre it runs along x through the ground under the
+/// centreline -- which is the axis a roll sweep tilts the ground about -- and
+/// with no axle at all it is invalid.
+RollAxis rollAxisThrough(const std::vector<AxleSolver>& axles);
+
+/// Where @p degrees of roll puts the body, as seen from the road: every point
+/// of the car -- chassis, suspension and wheels, as a roll sweep solved them --
+/// goes to @c map(p). Positive roll is the sweep's own sense, right-handed about
+/// the forward-pointing axis, so the left of the car rises and its left wheel
+/// is the one in droop. Identity for an invalid axis.
+Rigid bodyRollMotion(const RollAxis& axis, double degrees);
 
 /// What to sweep, and how finely.
 ///

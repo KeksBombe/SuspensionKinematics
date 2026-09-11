@@ -166,6 +166,13 @@ void ViewportWidget::clearMesh()
     update();
 }
 
+void ViewportWidget::setMeshTransform(const QMatrix4x4& transform)
+{
+    if (transform == m_meshTransform) return;
+    m_meshTransform = transform;
+    update();
+}
+
 void ViewportWidget::setHardpoints(const HardpointTable& table)
 {
     m_hardpoints.clear();
@@ -539,11 +546,16 @@ void ViewportWidget::renderScene()
     const bool wireframe = (m_mode == DisplayMode::Triangles);
 
     if (m_gpu.isValid()) {
+        // The geometry has a model matrix of its own, the way each wheel does:
+        // it is the chassis, and a rolled body takes it along.
+        const QMatrix4x4 meshModelView = view * m_meshTransform;
+        const QMatrix4x4 meshMvp = mvp * m_meshTransform;
+
         if (!wireframe && m_solidProgram) {
             m_solidProgram->bind();
-            m_solidProgram->setUniformValue("uMvp", mvp);
-            m_solidProgram->setUniformValue("uModelView", view);
-            m_solidProgram->setUniformValue("uNormalMatrix", view.normalMatrix());
+            m_solidProgram->setUniformValue("uMvp", meshMvp);
+            m_solidProgram->setUniformValue("uModelView", meshModelView);
+            m_solidProgram->setUniformValue("uNormalMatrix", meshModelView.normalMatrix());
             m_solidProgram->setUniformValue("uBaseColor", kSurfaceColor);
             m_gpu.drawSolid(*this);
             m_solidProgram->release();
@@ -553,7 +565,7 @@ void ViewportWidget::renderScene()
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             m_lineProgram->bind();
-            m_lineProgram->setUniformValue("uMvp", mvp);
+            m_lineProgram->setUniformValue("uMvp", meshMvp);
             m_lineProgram->setUniformValue("uColor", kEdgeColor);
             m_gpu.drawLines(*this);
             m_lineProgram->release();

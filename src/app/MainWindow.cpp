@@ -27,6 +27,7 @@
 #include <QLabel>
 #include <QLocale>
 #include <QMatrix3x3>
+#include <QMatrix4x4>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QProgressDialog>
@@ -87,6 +88,35 @@ constexpr PresetSpec kPresets[] = {
     { ViewPreset::Bottom,    "&Bottom",     "6" },
     { ViewPreset::Isometric, "&Isometric",  "7" },
 };
+
+/// The turn a rigid motion makes, for the renderer. Rigid keeps its rotation as
+/// rows -- r[i] dotted with a point gives component i of the answer -- which is
+/// a row-major matrix, and that is what QMatrix3x3 reads.
+QQuaternion rotationOf(const Rigid& motion)
+{
+    const float values[9] = {
+        static_cast<float>(motion.r[0].x), static_cast<float>(motion.r[0].y),
+        static_cast<float>(motion.r[0].z), static_cast<float>(motion.r[1].x),
+        static_cast<float>(motion.r[1].y), static_cast<float>(motion.r[1].z),
+        static_cast<float>(motion.r[2].x), static_cast<float>(motion.r[2].y),
+        static_cast<float>(motion.r[2].z),
+    };
+    return QQuaternion::fromRotationMatrix(QMatrix3x3(values));
+}
+
+/// The whole of it, turn and translation, as a model matrix. QMatrix4x4 takes
+/// its values a row at a time as well.
+QMatrix4x4 matrixOf(const Rigid& motion)
+{
+    return QMatrix4x4(
+        static_cast<float>(motion.r[0].x), static_cast<float>(motion.r[0].y),
+        static_cast<float>(motion.r[0].z), static_cast<float>(motion.t.x),
+        static_cast<float>(motion.r[1].x), static_cast<float>(motion.r[1].y),
+        static_cast<float>(motion.r[1].z), static_cast<float>(motion.t.y),
+        static_cast<float>(motion.r[2].x), static_cast<float>(motion.r[2].y),
+        static_cast<float>(motion.r[2].z), static_cast<float>(motion.t.z),
+        0.0f, 0.0f, 0.0f, 1.0f);
+}
 
 } // namespace
 
@@ -1732,6 +1762,7 @@ void MainWindow::applySimulation()
     if (!m_analysisPanel) return;
 
     m_poses.clear();
+    m_bodyMotion.reset();
 
     const AxleSolver* selected = currentAxle();
     if (m_analysisPanel->simulating() && selected) {
@@ -1750,9 +1781,20 @@ void MainWindow::applySimulation()
                 m_poses.push_back(sampleAxleAt(axle, spec.kind, input, spec.rackTravel));
             }
         }
+
+        // The sweep has the road tilting under a car that stays put, which is
+        // right for its numbers and wrong to look at: a car in a corner rolls
+        // on a level road. So the whole of it -- monocoque, every point, every
+        // wheel -- is drawn turned about the roll axis, which is what keeps
+        // the tyres on the road where they were. Only when every axle is
+        // following, though: a body cannot roll with an axle left behind, and
+        // drawing it would put that axle's wheels through the road.
+        if (spec.kind == SweepKind::Roll && m_poses.size() == m_axles.size())
+            m_bodyMotion = bodyRollMotion(rollAxisThrough(m_axles), input);
     } else {
         m_analysisPanel->clearReadout();
     }
+    m_viewport->setMeshTransform(m_bodyMotion ? matrixOf(*m_bodyMotion) : QMatrix4x4());
 
     // The table itself never moves. What the viewport is given is a copy of it
     // with the solved positions laid over the points the mechanism owns, so
@@ -1780,6 +1822,17 @@ HardpointTable MainWindow::posedTable() const
             point.coord[0] = posed.position.x;
             point.coord[1] = posed.position.y;
             point.coord[2] = posed.position.z;
+        }
+    }
+    // Everything, not only what the solve moved: the chassis pickups are on the
+    // body too, and the parts are drawn between the two.
+    if (m_bodyMotion) {
+        for (Hardpoint& point : table.points) {
+            const Vec3 moved =
+                m_bodyMotion->map(Vec3(point.coord[0], point.coord[1], point.coord[2]));
+            point.coord[0] = moved.x;
+            point.coord[1] = moved.y;
+            point.coord[2] = moved.z;
         }
     }
     return table;
@@ -1826,19 +1879,7 @@ WheelRotations MainWindow::wheelRotations() const
     for (const AxleSample& sample : m_poses)
         for (const CornerPose* pose : { &sample.left, &sample.right }) {
             if (!pose->valid || pose->wheelCenterName.isEmpty()) continue;
-            // Rigid keeps its rotation as rows -- r[i] dotted with a point gives
-            // component i of the answer -- which is a row-major matrix, and that
-            // is what QMatrix3x3 reads.
-            const Rigid& motion = pose->uprightMotion;
-            const float values[9] = {
-                static_cast<float>(motion.r[0].x), static_cast<float>(motion.r[0].y),
-                static_cast<float>(motion.r[0].z), static_cast<float>(motion.r[1].x),
-                static_cast<float>(motion.r[1].y), static_cast<float>(motion.r[1].z),
-                static_cast<float>(motion.r[2].x), static_cast<float>(motion.r[2].y),
-                static_cast<float>(motion.r[2].z),
-            };
-            rotations.insert(pose->wheelCenterName,
-                             QQuaternion::fromRotationMatrix(QMatrix3x3(values)));
+            rotations.insert(pose->wheelCenterName, rotationOf(pose->uprightMotion));
         }
     return rotations;
 }
@@ -1852,6 +1893,14 @@ void MainWindow::rebuildWheels()
     // turns the way the upright turns. Without this the models slide about the
     // car on steering lock without ever pointing anywhere.
     orientWheels(m_wheelPlacements, wheelRotations());
+    // And a rolled body leans all four with it. The upright's turn is measured
+    // in the body, so it comes first and the body's after it. Their centres are
+    // already where the body put them: they came out of posedTable().
+    if (m_bodyMotion) {
+        const QQuaternion body = rotationOf(*m_bodyMotion);
+        for (WheelPlacement& placement : m_wheelPlacements)
+            placement.rotation = body * placement.rotation;
+    }
     m_viewport->setWheelPlacements(m_wheelPlacements, wheels.spec.alignToCenter);
     updateActionState(); // which refreshes the status line too
 }

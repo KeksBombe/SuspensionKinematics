@@ -335,7 +335,106 @@ double installationRatio(const CornerPose& before, const CornerPose& after)
     return (after.damperTravel - before.damperTravel) / travel;
 }
 
+/// Where the ground is under an axle at design, and how far along the car the
+/// axle is: the mean of its contact patches. False for an axle with no side that
+/// assembled.
+bool axleFootprint(const AxleSolver& axle, double* x, double* ground)
+{
+    double sumX = 0.0;
+    double sumZ = 0.0;
+    int count = 0;
+    for (const std::optional<CornerSolver>* side : { &axle.left(), &axle.right() }) {
+        if (!*side) continue;
+        const Vec3& patch = (*side)->designPose().contactPatch;
+        sumX += patch.x;
+        sumZ += patch.z;
+        ++count;
+    }
+    if (count == 0) return false;
+    *x = sumX / count;
+    *ground = sumZ / count;
+    return true;
+}
+
 } // namespace
+
+std::optional<Vec3> AxleSolver::designRollCentre() const
+{
+    AxleSample sample;
+    if (m_left) sample.left = m_left->designPose();
+    if (m_right) sample.right = m_right->designPose();
+    computeRollCentre(&sample);
+
+    double x = 0.0;
+    double ground = 0.0;
+    if (!sample.rollCenterValid || !axleFootprint(*this, &x, &ground)) return std::nullopt;
+    // The construction gives a height above the ground the patches stand on and
+    // an offset from the centreline; as a point it is those two, at the axle.
+    return Vec3(x, sample.rollCenterLateral, ground + sample.rollCenterHeight);
+}
+
+RollAxis rollAxisThrough(const std::vector<AxleSolver>& axles)
+{
+    std::vector<Vec3> centres;
+    for (const AxleSolver& axle : axles)
+        if (const std::optional<Vec3> centre = axle.designRollCentre()) centres.push_back(*centre);
+
+    RollAxis axis;
+    if (centres.empty()) {
+        // Nothing to construct one from, so the car rolls about the line the
+        // sweep itself tilts the ground about: the centreline, at the ground.
+        double sumX = 0.0;
+        double sumZ = 0.0;
+        int count = 0;
+        for (const AxleSolver& axle : axles) {
+            double x = 0.0;
+            double ground = 0.0;
+            if (!axleFootprint(axle, &x, &ground)) continue;
+            sumX += x;
+            sumZ += ground;
+            ++count;
+        }
+        if (count == 0) return axis;
+        axis.origin = Vec3(sumX / count, 0.0, sumZ / count);
+        axis.direction = Vec3(1.0, 0.0, 0.0);
+        axis.valid = true;
+        return axis;
+    }
+
+    // The front-most and the rear-most, which on anything with two axles is
+    // simply both of them.
+    const auto byX = [](const Vec3& a, const Vec3& b) { return a.x < b.x; };
+    const Vec3 rear = *std::min_element(centres.begin(), centres.end(), byX);
+    const Vec3 front = *std::max_element(centres.begin(), centres.end(), byX);
+
+    axis.origin = front;
+    axis.direction = Vec3(1.0, 0.0, 0.0);
+    // Two roll centres at the same station are one axle's worth of information,
+    // not a line across the car: the axis would come out sideways and the body
+    // would pitch instead of roll.
+    if (front.x - rear.x > 1.0) axis.direction = (front - rear).normalized();
+    axis.valid = true;
+    return axis;
+}
+
+Rigid bodyRollMotion(const RollAxis& axis, double degrees)
+{
+    Rigid motion;
+    if (!axis.valid) return motion;
+
+    const double angle = degrees * kDegToRad;
+    // The rotation's columns are where it takes the three unit directions, and
+    // Rigid keeps rows; the translation is where it takes the origin, which is
+    // what turning about a line through somewhere else amounts to.
+    const Axis through{ Vec3(), axis.direction };
+    const Vec3 columns[3] = { rotateAbout(Vec3(1, 0, 0), through, angle),
+                              rotateAbout(Vec3(0, 1, 0), through, angle),
+                              rotateAbout(Vec3(0, 0, 1), through, angle) };
+    for (int row = 0; row < 3; ++row)
+        motion.r[row] = Vec3(columns[0][row], columns[1][row], columns[2][row]);
+    motion.t = rotateAbout(Vec3(), Axis{ axis.origin, axis.direction }, angle);
+    return motion;
+}
 
 AxleSample sampleAxleAt(const AxleSolver& axle, SweepKind kind, double input,
                         double rackTravel)
