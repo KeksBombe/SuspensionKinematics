@@ -144,6 +144,40 @@ CornerSpec unsteeredCorner()
     return corner;
 }
 
+/// A real rear axle: token R, and no rack.
+CornerSpec rearCorner()
+{
+    CornerSpec corner;
+    corner.token = QStringLiteral("R");
+    corner.label = QStringLiteral("Rear");
+    return corner;
+}
+
+/// @p front with a rear axle added: the same corners moved back by @p wheelbase
+/// and renamed. All Ackermann asks of a rear axle is where it is.
+HardpointTable withRearAxle(const HardpointTable& front, double wheelbase)
+{
+    HardpointTable table = front;
+    for (const Hardpoint& point : front.points) {
+        Hardpoint rear = point;
+        rear.name = QStringLiteral("R") + point.name.mid(1);
+        if (!rear.mirrorOf.isEmpty()) rear.mirrorOf = QStringLiteral("R") + rear.mirrorOf.mid(1);
+        rear.coord[0] -= wheelbase;
+        table.points.push_back(rear);
+    }
+    return table;
+}
+
+/// The front axle with its outer tie rod ends moved to @p y, which is what
+/// swings the steering arms -- and so what sets the Ackermann.
+HardpointTable frontAxleWithOuterTieRodAt(double y)
+{
+    HardpointTable corner = frontLeftCorner();
+    for (Hardpoint& point : corner.points)
+        if (point.name == QLatin1String("F_TieRod_O")) point.coord[1] = y;
+    return mirrorHardpoints(corner, {}, MirrorSpec{}).table;
+}
+
 /// A rear axle for the same car, a wheelbase behind the front one. Its lower
 /// wishbone is mounted 20 mm higher on the chassis, which tilts that arm down
 /// towards the wheel and lifts the roll centre: a car whose roll axis climbs
@@ -157,14 +191,6 @@ HardpointTable rearAxle()
         if (point.name.startsWith(QLatin1String("R_LCA_I"))) point.coord[2] += 20.0;
     }
     return mirrorHardpoints(corner, {}, MirrorSpec{}).table;
-}
-
-CornerSpec rearCorner()
-{
-    CornerSpec corner;
-    corner.token = QStringLiteral("R");
-    corner.label = QStringLiteral("Rear");
-    return corner;
 }
 
 CornerSolver bindTo(const HardpointTable& table)
@@ -196,6 +222,7 @@ private slots:
     void trilaterationFindsBothMirrorImages();
     void aRigidTransformIsRecoveredFromThreePoints();
     void parallelLinesHaveNoIntersection();
+    void twoPlanesCrossAlongALine();
 
     // ---- the mechanism --------------------------------------------------
 
@@ -219,6 +246,8 @@ private slots:
     void aCornerWithNoContactPatchStillFindsTheGround();
     void theContactPatchWalksRoundTheTyreInsteadOfRidingTheUpright();
     void theUprightsMotionIsWhatTurnsTheWheelModel();
+    void staticAnglesAreWhatTheWheelIsBuiltFrom();
+    void staticAnglesWinOverTheTablesOwnWheelAxis();
 
     // ---- which axle has a steering rack ---------------------------------
 
@@ -233,12 +262,22 @@ private slots:
     void aBumpSweepMovesBothWheelsTheSameWay();
     void aRollSweepMovesThemOppositeWaysAndTwistsTheBar();
     void theRollCentreIsOnTheCentrelineWhenTheAxleIsSymmetric();
+    void theInstantCentreIsWhereTheArmPlanesCross();
     void theRollAxisRunsThroughEveryAxlesRollCentre();
     void rollingTheBodyAboutItLeavesTheTyresWhereTheyStand();
     void aRolledBodyLeansItsWheelsWithIt();
+    void camberToGroundPartsFromCamberByTheRollAngle();
     void aSteerSweepChangesToeAndNotRideHeight();
     void theCsvHasOneRowPerStepAndSaysNothingAboutWhatDidNotSolve();
     void theShippedTemplateSolvesTheCornerItDescribes();
+
+    // ---- Ackermann ------------------------------------------------------
+
+    void ackermannIsMeasuredAgainstTheIdealOuterAngle();
+    void theWheelbaseIsTakenToTheFarAxle();
+    void aSteerSweepReadsAckermannTheSameTurningEitherWay();
+    void ackermannIsReadOffTheWheelsThemselves();
+    void angledSteeringArmsAddAckermann();
 
     // ---- what a sweep is asked for --------------------------------------
 
@@ -246,6 +285,11 @@ private slots:
     void bumpAndReboundAreNotAssumedToBeEqual();
     void eachKindKeepsItsOwnTravelInItsOwnUnit();
     void anIncrementThatWouldNeverEndIsBoundedNotObeyed();
+
+    // ---- how the numbers are shown --------------------------------------
+
+    void aCurveIsNotStretchedPastWhatItsUnitCanSay();
+    void whichSidesAPlotDrawsRoundTrips();
 };
 
 void TestKinematics::rotatingAboutAnAxisKeepsTheDistanceToIt()
@@ -351,6 +395,29 @@ void TestKinematics::parallelLinesHaveNoIntersection()
     QVERIFY(ok);
     QVERIFY(std::abs(crossing.y - 10.0) < 1e-9);
     QVERIFY(std::abs(crossing.z - 10.0) < 1e-9);
+}
+
+void TestKinematics::twoPlanesCrossAlongALine()
+{
+    // z = 0 and y = 0 share the x axis, which crosses x = 5 at (5, 0, 0). The
+    // normals are not unit length and the points are anywhere on the planes.
+    bool ok = false;
+    Vec3 hit = planesCrossing(Vec3(0, 0, 2), Vec3(1, 1, 0), Vec3(0, 3, 0), Vec3(7, 0, 4), 0, 5.0,
+                              &ok);
+    QVERIFY(ok);
+    QVERIFY(distance(hit, Vec3(5, 0, 0)) < 1e-12);
+
+    // z = y and y + z = 10 meet along y = z = 5, wherever along x it is asked.
+    hit = planesCrossing(Vec3(0, -1, 1), Vec3(), Vec3(0, 1, 1), Vec3(0, 0, 10), 0, -3.0, &ok);
+    QVERIFY(ok);
+    QVERIFY(distance(hit, Vec3(-3, 5, 5)) < 1e-12);
+
+    // Parallel planes share no line at all.
+    planesCrossing(Vec3(0, 0, 1), Vec3(), Vec3(0, 0, 2), Vec3(0, 0, 5), 0, 0.0, &ok);
+    QVERIFY(!ok);
+    // And the x axis never reaches the plane y = 3.
+    planesCrossing(Vec3(0, 0, 1), Vec3(), Vec3(0, 1, 0), Vec3(), 1, 3.0, &ok);
+    QVERIFY(!ok);
 }
 
 void TestKinematics::instantiationFillsInTheCornerAndTheMirror()
@@ -573,11 +640,14 @@ void TestKinematics::theRockerAndDamperFollowTheWheel()
     // A pushrod on the upper arm moves with the upper arm, not with the upright.
     QVERIFY(std::abs(bump.upperArmAngle) > 1e-3);
 
-    // The installation ratio is a real number, of a believable size for a
-    // pushrod car: the damper moves less than the wheel does.
-    const double ratio = (bump.damperTravel - droop.damperTravel) / 50.0;
-    QVERIFY(std::abs(ratio) > 0.05);
-    QVERIFY(std::abs(ratio) < 1.5);
+    // Bump closes the damper, which is the whole point of connecting one.
+    QVERIFY(bump.damperTravel < 0.0);
+    QVERIFY(droop.damperTravel > 0.0);
+    // And by a believable amount for a pushrod car: the damper moves less than
+    // the wheel does.
+    const double ratio = (droop.damperTravel - bump.damperTravel) / 50.0;
+    QVERIFY(ratio > 0.05);
+    QVERIFY(ratio < 1.5);
 
     QVERIFY(bump.hasAntiRoll);
     QVERIFY(std::abs(bump.antiRollArmAngle) > 1e-4);
@@ -686,6 +756,77 @@ void TestKinematics::theUprightsMotionIsWhatTurnsTheWheelModel()
     const Vec3* axis = steered.find(QStringLiteral("F_WheelAxis"));
     QVERIFY(axis != nullptr);
     QVERIFY(std::abs(distance(*axis, steered.wheelCenter) - 150.0) < 1e-9);
+}
+
+void TestKinematics::staticAnglesAreWhatTheWheelIsBuiltFrom()
+{
+    // The corner whose only word on the wheel is a contact patch straight under
+    // its centre -- an upright wheel -- told outright what Lotus's Set Static
+    // Angles would tell it.
+    const StaticAlignment stated{ -1.5, 0.25 };
+    const AxleSolver axle = AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(),
+                                              MirrorSpec{}, true, stated);
+    QVERIFY(axle.hasBothSides());
+
+    for (const std::optional<CornerSolver>* side : { &axle.left(), &axle.right() }) {
+        const CornerSolver& solver = **side;
+        const CornerPose& design = solver.designPose();
+        QCOMPARE(solver.wheelAttitude(), WheelAttitude::Stated);
+        // Exactly those numbers, on both sides: the far side is the mirror image,
+        // which is the same camber and the same toe.
+        QVERIFY(std::abs(design.camber - stated.camber) < 1e-12);
+        QVERIFY(std::abs(design.toe - stated.toe) < 1e-12);
+        QVERIFY(distance(design.spinAxis, spinAxisFor(stated, solver.side())) < 1e-12);
+
+        // The contact patch is computed from them: on the road, square to the
+        // axle, and walked outboard by the negative camber -- not where the
+        // workbook's patch point was, straight under the centre.
+        QVERIFY(std::abs(design.contactPatch.z) < 1e-9);
+        QVERIFY(std::abs(dot(design.contactPatch - design.wheelCenter, design.spinAxis)) < 1e-9);
+        QVERIFY(solver.side() * (design.contactPatch.y - design.wheelCenter.y) > 5.0);
+
+        // And the curves are measured from there: a bump is still a bump, and
+        // camber changes by what the wishbones do to it.
+        const CornerPose bump = solver.poseAtWheelTravel(20.0);
+        QVERIFY2(bump.valid, qPrintable(bump.error));
+        QVERIFY(std::abs(bump.camberChange - (bump.camber - stated.camber)) < 1e-12);
+    }
+
+    // The table alone still decides for an axle nobody has stated angles for,
+    // and says which point it went by.
+    const AxleSolver bare =
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{}, true);
+    QCOMPARE(bare.left()->wheelAttitude(), WheelAttitude::ContactPatch);
+    QVERIFY(std::abs(bare.left()->designPose().camber) < 1e-9);
+    QCOMPARE(bindFrontWithAxis().wheelAttitude(), WheelAttitude::WheelAxis);
+}
+
+void TestKinematics::staticAnglesWinOverTheTablesOwnWheelAxis()
+{
+    // A table that says -3 degrees of camber and 2 of toe-in with an axle point,
+    // and a project that says something else. The number typed in wins: the
+    // point is what nobody has moved since.
+    const MechanismTemplate named =
+        instantiateMechanism(cornerMechanism(), QStringLiteral("F"), false, MirrorSpec{});
+    QString error;
+    const std::optional<CornerSolver> solver = CornerSolver::bind(
+        named, frontLeftCornerWithAxis(), &error, StaticAlignment{ -0.5, -0.1 });
+    QVERIFY2(solver.has_value(), qPrintable(error));
+    const CornerPose& design = solver->designPose();
+    QVERIFY(std::abs(design.camber - (-0.5)) < 1e-12);
+    QVERIFY(std::abs(design.toe - (-0.1)) < 1e-12);
+
+    // The axle point is carried on the axis that is actually being used, as far
+    // from the centre as the table has it, so what is drawn is what is measured.
+    const CornerPose steered = solver->poseAtWheelTravel(0.0, 8.0);
+    QVERIFY2(steered.valid, qPrintable(steered.error));
+    for (const CornerPose* pose : { &design, &steered }) {
+        const Vec3* axis = pose->find(QStringLiteral("F_WheelAxis"));
+        QVERIFY(axis != nullptr);
+        const Vec3 reach = *axis - pose->wheelCenter;
+        QVERIFY(std::abs(reach.length() - 150.0) < 1e-9);
+        QVERIFY(cross(reach, pose->spinAxis).length() < 1e-9);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -842,10 +983,12 @@ void TestKinematics::aBumpSweepMovesBothWheelsTheSameWay()
     }
 
     // The damper moves less than the wheel does, which is what a rocker is for.
+    // And the ratio is compression per bump, so it is positive: a damper that
+    // closes a millimetre for each millimetre of wheel travel reads +1, not -1.
     const AxleSample* middle = result.nearest(0.0);
     QVERIFY(middle);
-    QVERIFY(std::abs(middle->leftInstallationRatio) > 0.05);
-    QVERIFY(std::abs(middle->leftInstallationRatio) < 1.0);
+    QVERIFY(middle->leftInstallationRatio > 0.05);
+    QVERIFY(middle->leftInstallationRatio < 1.0);
     QVERIFY(std::abs(middle->leftInstallationRatio - middle->rightInstallationRatio) < 1e-6);
 }
 
@@ -918,6 +1061,45 @@ void TestKinematics::theRollCentreIsOnTheCentrelineWhenTheAxleIsSymmetric()
     // double wishbone puts it.
     QVERIFY(sample.rollCenterHeight > 0.0);
     QVERIFY(sample.rollCenterHeight < sample.left.wheelCenter.z);
+}
+
+void TestKinematics::theInstantCentreIsWhereTheArmPlanesCross()
+{
+    // The corner the other tests use has level pivot axes and both ball joints
+    // in the transverse plane through the wheel centre, which is exactly where
+    // crossing the arm planes and reading the arms off the joints agree. Tilt
+    // the upper axis the way anti-dive does and move the joints a caster's
+    // worth apart, and they no longer do.
+    HardpointTable table = frontLeftCorner();
+    for (Hardpoint& point : table.points) {
+        if (point.name == QLatin1String("F_UCA_IF")) point.coord[2] = 300.0;
+        if (point.name == QLatin1String("F_UCA_IR")) point.coord[2] = 260.0;
+        if (point.name == QLatin1String("F_UCA_O")) point.coord[0] = -20.0;
+        if (point.name == QLatin1String("F_LCA_O")) point.coord[0] = 15.0;
+    }
+    const CornerSolver solver = bindTo(table);
+    const auto at = [&table](const char* name) {
+        const Hardpoint* point = table.find(QLatin1String(name));
+        return Vec3(point->coord[0], point->coord[1], point->coord[2]);
+    };
+
+    for (const double travel : { -20.0, 0.0, 20.0 }) {
+        const CornerPose pose = solver.poseAtWheelTravel(travel, 0.0, nullptr);
+        QVERIFY2(pose.valid, qPrintable(pose.error));
+        QVERIFY(pose.instantCenterValid);
+        const Vec3& centre = pose.instantCenter;
+
+        // In the transverse plane through the wheel centre...
+        QVERIFY(std::abs(centre.x - pose.wheelCenter.x) < 1e-9);
+        // ...and in each arm's plane: the one through its pivot axis and its
+        // ball joint where the joint is now.
+        const Vec3 lower =
+            cross(at("F_LCA_IR") - at("F_LCA_IF"), pose.lowerOuter - at("F_LCA_IF")).normalized();
+        const Vec3 upper =
+            cross(at("F_UCA_IR") - at("F_UCA_IF"), pose.upperOuter - at("F_UCA_IF")).normalized();
+        QVERIFY(std::abs(dot(lower, centre - at("F_LCA_IF"))) < 1e-6);
+        QVERIFY(std::abs(dot(upper, centre - at("F_UCA_IF"))) < 1e-6);
+    }
 }
 
 void TestKinematics::theRollAxisRunsThroughEveryAxlesRollCentre()
@@ -1046,6 +1228,65 @@ void TestKinematics::aRolledBodyLeansItsWheelsWithIt()
     QVERIFY(camberToRoad(sample.left) < 0.0);
 }
 
+void TestKinematics::camberToGroundPartsFromCamberByTheRollAngle()
+{
+    const std::vector<AxleSolver> axles = {
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{}),
+        AxleSolver::build(cornerMechanism(), rearCorner(), rearAxle(), MirrorSpec{}),
+    };
+    const AxleSolver& axle = axles.front();
+
+    // Over a bump and a steer the road stays level under the car, so the two
+    // are one number.
+    for (const SweepKind kind : { SweepKind::Bump, SweepKind::Steer }) {
+        SweepSpec spec;
+        spec.kind = kind;
+        spec.from = -20.0;
+        spec.to = 20.0;
+        spec.steps = 9;
+        for (const AxleSample& sample : runSweep(axle, spec).samples) {
+            QVERIFY(sample.left.valid && sample.right.valid);
+            QCOMPARE(sample.left.camberToGround, sample.left.camber);
+            QCOMPARE(sample.right.camberToGround, sample.right.camber);
+        }
+    }
+
+    // In a roll the body leans and takes its wheels with it: against the road
+    // the inside wheel -- the left, in positive roll -- gains the roll angle of
+    // negative camber and the outside one loses it. For a wheel pointing
+    // straight ahead that is exact; what the roll steers it by is second order.
+    SweepSpec roll;
+    roll.kind = SweepKind::Roll;
+    roll.from = -3.0;
+    roll.to = 3.0;
+    roll.steps = 7;
+    const SweepResult result = runSweep(axle, roll);
+    for (const AxleSample& sample : result.samples) {
+        QVERIFY(sample.left.valid && sample.right.valid);
+        QVERIFY(std::abs(sample.left.camberToGround - (sample.left.camber - sample.input)) < 1e-4);
+        QVERIFY(std::abs(sample.right.camberToGround - (sample.right.camber + sample.input)) < 1e-4);
+    }
+    QVERIFY(std::abs(result.nearest(3.0)->left.camberToGround - result.nearest(3.0)->left.camber)
+            > 2.5);
+
+    // And it is the camber a picture of the car rolled on a level road shows --
+    // the body turned about its roll axis, which is nearly but not quite the
+    // ground line the sweep tilts.
+    const Rigid body = bodyRollMotion(rollAxisThrough(axles), 2.0);
+    const AxleSample* two = result.nearest(2.0);
+    QVERIFY(two);
+    const double onRoad = -std::asin(body.rotate(two->left.spinAxis).z) * 180.0 / M_PI;
+    QVERIFY(std::abs(two->left.camberToGround - onRoad) < 0.01);
+
+    // The single-position readout agrees with the curve.
+    const AxleSample single = sampleAxleAt(axle, SweepKind::Roll, 2.0, 0.0);
+    QVERIFY(std::abs(single.left.camberToGround - two->left.camberToGround) < 1e-6);
+
+    double value = 0.0;
+    QVERIFY(sweepMeasureValue(*two, SweepMeasure::CamberToGround, false, &value));
+    QCOMPARE(value, two->right.camberToGround);
+}
+
 void TestKinematics::aSteerSweepChangesToeAndNotRideHeight()
 {
     const AxleSolver axle =
@@ -1091,6 +1332,7 @@ void TestKinematics::theCsvHasOneRowPerStepAndSaysNothingAboutWhatDidNotSolve()
     QCOMPARE(lines.size(), 7);
     QVERIFY(lines.first().startsWith("Wheel travel [mm]"));
     QVERIFY(lines.first().contains("camber_left [deg]"));
+    QVERIFY(lines.first().contains("camber_to_ground_left [deg]"));
     QVERIFY(lines.first().contains("installation_ratio_right [mm/mm]"));
 
     const int columns = lines.first().count(',') + 1;
@@ -1146,8 +1388,8 @@ void TestKinematics::theShippedTemplateSolvesTheCornerItDescribes()
     QVERIFY(bump->left.camberChange < -0.3);
     QVERIFY(droop->left.camberChange > 0.3);
     QVERIFY(std::abs(design->left.camber) < 1e-9);
-    QVERIFY(std::abs(design->leftInstallationRatio) > 0.1);
-    QVERIFY(std::abs(design->leftInstallationRatio) < 1.0);
+    QVERIFY(design->leftInstallationRatio > 0.1);
+    QVERIFY(design->leftInstallationRatio < 1.0);
     QVERIFY(design->rollCenterValid);
     QVERIFY(std::abs(design->rollCenterLateral) < 1e-6);
     QVERIFY(design->rollCenterHeight > 0.0);
@@ -1171,6 +1413,209 @@ void TestKinematics::theShippedTemplateSolvesTheCornerItDescribes()
         QVERIFY(std::abs(distance(*outer, frontPivot) - toFront) < 1e-6);
         QVERIFY(std::abs(distance(*outer, rearPivot) - toRear) < 1e-6);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Ackermann
+// ---------------------------------------------------------------------------
+
+void TestKinematics::ackermannIsMeasuredAgainstTheIdealOuterAngle()
+{
+    const double wheelbase = 1530.0;
+    const double track = 1200.0;
+    const double inner = 20.0;
+    // The outer angle that puts both wheels' axles through one point on the
+    // rear axle's line, worked out the long way round: how far inboard of the
+    // inner wheel that point is, then the angle the outer wheel needs to face it.
+    const double turnRadius = wheelbase / std::tan(inner * M_PI / 180.0);
+    const double ideal = std::atan(wheelbase / (turnRadius + track)) * 180.0 / M_PI;
+
+    double percent = 0.0;
+    QVERIFY(ackermannPercent(inner, ideal, wheelbase, track, &percent));
+    QVERIFY(std::abs(percent - 100.0) < 1e-9);
+
+    // Parallel steer is none at all, an outer wheel turned further than the
+    // inner is anti-Ackermann, one turned less than ideal is more than 100, and
+    // half way between parallel and ideal is half.
+    QVERIFY(ackermannPercent(inner, inner, wheelbase, track, &percent));
+    QVERIFY(std::abs(percent) < 1e-9);
+    QVERIFY(ackermannPercent(inner, inner + 1.0, wheelbase, track, &percent));
+    QVERIFY(percent < 0.0);
+    QVERIFY(ackermannPercent(inner, ideal - 1.0, wheelbase, track, &percent));
+    QVERIFY(percent > 100.0);
+    QVERIFY(ackermannPercent(inner, 0.5 * (inner + ideal), wheelbase, track, &percent));
+    QVERIFY(std::abs(percent - 50.0) < 1e-9);
+
+    // Straight ahead there is nothing to take a ratio of, and without a
+    // wheelbase or a track nothing to take it against.
+    QVERIFY(!ackermannPercent(0.0, 0.0, wheelbase, track, &percent));
+    QVERIFY(!ackermannPercent(0.01, 0.01, wheelbase, track, &percent));
+    QVERIFY(!ackermannPercent(inner, ideal, 0.0, track, &percent));
+    QVERIFY(!ackermannPercent(inner, ideal, wheelbase, 0.0, &percent));
+}
+
+void TestKinematics::theWheelbaseIsTakenToTheFarAxle()
+{
+    const HardpointTable car = withRearAxle(frontAxle(), 1530.0);
+    std::vector<AxleSolver> axles;
+    axles.push_back(AxleSolver::build(cornerMechanism(), frontCorner(), car, MirrorSpec{}, true));
+    axles.push_back(AxleSolver::build(cornerMechanism(), rearCorner(), car, MirrorSpec{}, true));
+    QVERIFY(axles[0].hasBothSides());
+    QVERIFY(axles[1].hasBothSides());
+    QVERIFY(axles[0].isSteered());
+    QVERIFY(!axles[1].isSteered());
+
+    // Nothing is assumed: an axle knows its wheelbase only once told.
+    QCOMPARE(axles[0].wheelbase(), 0.0);
+    assignWheelbases(axles);
+    QVERIFY(std::abs(axles[0].wheelbase() - 1530.0) < 1e-9);
+    QVERIFY(std::abs(axles[1].wheelbase() - 1530.0) < 1e-9);
+
+    // An axle with nothing else in the table has nothing to measure to. Its
+    // steer sweep still runs; it just does not claim a percentage.
+    std::vector<AxleSolver> alone;
+    alone.push_back(
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{}, true));
+    assignWheelbases(alone);
+    QCOMPARE(alone.front().wheelbase(), 0.0);
+
+    SweepSpec spec;
+    spec.kind = SweepKind::Steer;
+    spec.from = -15.0;
+    spec.to = 15.0;
+    spec.steps = 7;
+    const SweepResult result = runSweep(alone.front(), spec);
+    QCOMPARE(result.samples.size(), std::size_t(7));
+    for (const AxleSample& sample : result.samples) {
+        QVERIFY(sample.left.valid);
+        QVERIFY(!sample.ackermannValid);
+        double value = 0.0;
+        QVERIFY(!sweepMeasureValue(sample, SweepMeasure::Ackermann, true, &value));
+    }
+}
+
+void TestKinematics::aSteerSweepReadsAckermannTheSameTurningEitherWay()
+{
+    AxleSolver axle =
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{}, true);
+    axle.setWheelbase(1530.0);
+
+    SweepSpec spec;
+    spec.kind = SweepKind::Steer;
+    spec.from = -20.0;
+    spec.to = 20.0;
+    spec.steps = 21;
+    const SweepResult result = runSweep(axle, spec);
+    QVERIFY2(result.warnings.isEmpty(), qPrintable(result.warnings.join(QStringLiteral("; "))));
+
+    for (const AxleSample& sample : result.samples) {
+        // Straight ahead is the one place there is no Ackermann to speak of.
+        if (std::abs(sample.input) < 1e-9) {
+            QVERIFY(!sample.ackermannValid);
+            continue;
+        }
+        QVERIFY(sample.ackermannValid);
+        QVERIFY(std::isfinite(sample.ackermann));
+        double value = 0.0;
+        QVERIFY(sweepMeasureValue(sample, SweepMeasure::Ackermann, true, &value));
+        QCOMPARE(value, sample.ackermann);
+    }
+
+    // The axle is a mirror image, so turning left is turning right: which wheel
+    // is inner swaps, and the percentage does not notice.
+    for (double rack : { 4.0, 10.0, 20.0 }) {
+        const AxleSample* one = result.nearest(rack);
+        const AxleSample* other = result.nearest(-rack);
+        QVERIFY(one && other);
+        QVERIFY(std::abs(one->ackermann - other->ackermann) < 1e-6);
+    }
+
+    // The readout is solved on its own rather than continued from a neighbour,
+    // and still agrees with the curve.
+    const AxleSample single = sampleAxleAt(axle, SweepKind::Steer, 10.0, 0.0);
+    QVERIFY(single.ackermannValid);
+    QVERIFY(std::abs(single.ackermann - result.nearest(10.0)->ackermann) < 1e-6);
+
+    // The CSV carries it, once, at the end.
+    const QList<QByteArray> lines = sweepToCsv(result).split('\n');
+    QVERIFY(lines.first().endsWith(",ackermann [%]"));
+    QVERIFY(lines[1 + 10].endsWith(",")); // straight ahead: an empty field, not a zero
+
+    // A bump sweep turns no wheel with the rack, so it has no Ackermann to
+    // give -- not even with the rack held over to one side.
+    spec.kind = SweepKind::Bump;
+    spec.from = -10.0;
+    spec.to = 10.0;
+    spec.steps = 5;
+    spec.rackTravel = 10.0;
+    for (const AxleSample& sample : runSweep(axle, spec).samples) {
+        QVERIFY(sample.left.valid);
+        QVERIFY(!sample.ackermannValid);
+    }
+}
+
+void TestKinematics::ackermannIsReadOffTheWheelsThemselves()
+{
+    // Worked out again from nothing but where the two wheels' axles point in
+    // plan view, so that neither the sign toe is read with on each side nor
+    // which wheel counts as inner is taken on trust from the code under test.
+    const auto turnedLeft = [](const CornerPose& pose, const CornerPose& design) {
+        return (std::atan2(pose.spinAxis.y, pose.spinAxis.x)
+                - std::atan2(design.spinAxis.y, design.spinAxis.x))
+               * 180.0 / M_PI;
+    };
+
+    const double wheelbase = 1530.0;
+    const double track = 1200.0; // the fixture's contact patches are at y = +-600
+    AxleSolver axle = AxleSolver::build(cornerMechanism(), frontCorner(),
+                                        frontAxleWithOuterTieRodAt(520.0), MirrorSpec{}, true);
+    axle.setWheelbase(wheelbase);
+
+    for (double rack : { -16.0, -6.0, 6.0, 16.0 }) {
+        const AxleSample sample = sampleAxleAt(axle, SweepKind::Steer, rack, 0.0);
+        QVERIFY(sample.left.valid && sample.right.valid);
+        const double left = turnedLeft(sample.left, axle.left()->designPose());
+        const double right = turnedLeft(sample.right, axle.right()->designPose());
+        QVERIFY(left * right > 0.0); // both wheels steer the same way
+
+        // The inner wheel is on the side the car turns towards.
+        const double inner = std::abs(left > 0.0 ? left : right);
+        const double outer = std::abs(left > 0.0 ? right : left);
+        const double turnRadius = wheelbase / std::tan(inner * M_PI / 180.0);
+        const double ideal = std::atan(wheelbase / (turnRadius + track)) * 180.0 / M_PI;
+
+        QVERIFY(sample.ackermannValid);
+        QVERIFY(std::abs(sample.ackermann - 100.0 * (inner - outer) / (inner - ideal)) < 1e-6);
+    }
+}
+
+void TestKinematics::angledSteeringArmsAddAckermann()
+{
+    // The fixture's steering arms point straight back, which is parallel steer
+    // near enough. Swinging the outer tie rod ends inboard -- towards the
+    // trapezoid every steering textbook draws -- is what adds Ackermann, and
+    // the further the more.
+    const auto ackermannAt = [](const HardpointTable& table) {
+        AxleSolver axle =
+            AxleSolver::build(cornerMechanism(), frontCorner(), table, MirrorSpec{}, true);
+        axle.setWheelbase(1530.0);
+        const AxleSample sample = sampleAxleAt(axle, SweepKind::Steer, 10.0, 0.0);
+        return sample.ackermannValid ? sample.ackermann : std::nan("");
+    };
+
+    const double straight = ackermannAt(frontAxle());
+    const double angled = ackermannAt(frontAxleWithOuterTieRodAt(530.0));
+    const double more = ackermannAt(frontAxleWithOuterTieRodAt(500.0));
+    QVERIFY(std::isfinite(straight) && std::isfinite(angled) && std::isfinite(more));
+
+    QVERIFY(std::abs(straight) < 10.0);
+    QVERIFY(angled > straight + 10.0);
+    QVERIFY(more > angled + 10.0);
+
+    // And the other way is anti-Ackermann: arms swung outboard turn the outer
+    // wheel further than the inner one.
+    const double outboard = ackermannAt(frontAxleWithOuterTieRodAt(580.0));
+    QVERIFY(outboard < -10.0);
 }
 
 void TestKinematics::aTravelAndAnIncrementBecomeARangeAndAStepCount()
@@ -1263,6 +1708,39 @@ void TestKinematics::anIncrementThatWouldNeverEndIsBoundedNotObeyed()
     QCOMPARE(still.steps, 2);
     QCOMPARE(still.inputAt(0), 0.0);
     QCOMPARE(still.inputAt(1), 0.0);
+}
+
+void TestKinematics::aCurveIsNotStretchedPastWhatItsUnitCanSay()
+{
+    // A tenth of a millimetre and a hundredth of a degree: a roll centre that
+    // wanders a nanometre off the centreline is drawn as the straight line it
+    // is, while bump steer of a few hundredths of a degree still fills a plot.
+    QCOMPARE(sweepMeasureResolution(SweepMeasure::RollCentreLateral), 0.1);
+    QCOMPARE(sweepMeasureResolution(SweepMeasure::Toe), 0.01);
+    QCOMPARE(sweepMeasureResolution(SweepMeasure::InstallationRatio), 0.001);
+    for (const SweepMeasure measure : sweepMeasures())
+        QVERIFY(sweepMeasureResolution(measure) > 0.0);
+
+    // And the readout never says "-0.000".
+    QCOMPARE(sweepValueText(-3e-9), QStringLiteral("0.000"));
+    QCOMPARE(sweepValueText(-0.0004), QStringLiteral("0.000"));
+    QCOMPARE(sweepValueText(-0.0006), QStringLiteral("-0.001"));
+    QCOMPARE(sweepValueText(10.0), QStringLiteral("10.000"));
+}
+
+void TestKinematics::whichSidesAPlotDrawsRoundTrips()
+{
+    for (const SweepSides sides : { SweepSides::Both, SweepSides::Left, SweepSides::Right })
+        QCOMPARE(sweepSidesFromString(sweepSidesToString(sides)), sides);
+    // Something a later release might write reads as the default, not as one
+    // wheel quietly disappearing from every plot.
+    QCOMPARE(sweepSidesFromString(QStringLiteral("front")), SweepSides::Both);
+    QCOMPARE(sweepSidesFromString(QString()), SweepSides::Both);
+
+    // Camber to ground is a curve per wheel, keyed like every other.
+    QVERIFY(sweepMeasureIsPerSide(SweepMeasure::CamberToGround));
+    QCOMPARE(sweepMeasureFromKey(sweepMeasureKey(SweepMeasure::CamberToGround)),
+             SweepMeasure::CamberToGround);
 }
 
 QTEST_MAIN(TestKinematics)

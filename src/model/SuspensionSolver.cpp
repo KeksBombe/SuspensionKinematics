@@ -32,6 +32,17 @@ double pickContactHeight(const CornerPose& pose) { return pose.contactPatch.z; }
 
 } // namespace
 
+Vec3 spinAxisFor(const StaticAlignment& alignment, double side)
+{
+    // Camber tips the axis out of the ground plane, toe turns what is left of
+    // it in plan view. Both measures read this straight back: camber is minus
+    // the arcsine of z, toe the angle of (x, side * y).
+    const double camber = alignment.camber / kRadToDeg;
+    const double toe = alignment.toe / kRadToDeg;
+    return Vec3(std::sin(toe) * std::cos(camber), side * std::cos(toe) * std::cos(camber),
+                -std::sin(camber));
+}
+
 Vec3 wheelPlaneDown(const Vec3& spinAxis)
 {
     const Vec3 axis = spinAxis.normalized();
@@ -69,7 +80,8 @@ const Vec3* CornerPose::find(const QString& name) const
 }
 
 std::optional<CornerSolver> CornerSolver::bind(const MechanismTemplate& mechanism,
-                                               const HardpointTable& table, QString* error)
+                                               const HardpointTable& table, QString* error,
+                                               const std::optional<StaticAlignment>& alignment)
 {
     const MechanismCoverage coverage = coverMechanism(mechanism, table);
     if (coverage.absent) {
@@ -193,23 +205,44 @@ std::optional<CornerSolver> CornerSolver::bind(const MechanismTemplate& mechanis
     // Which way the wheel points, as a unit vector outboard along its own axis of
     // rotation.
     //
-    // A second point on that axis says it outright, camber and toe together, and
-    // is the only way a hardpoint table can state static toe at all. Without one
-    // it is inferred the old way, from the contact patch sitting under the wheel
-    // centre: that carries the workbook's static camber and assumes zero toe,
-    // which is why toe is also reported as a change from this position.
+    // Static angles the project states say it outright, and win: they are the
+    // number the user typed, and a point that disagrees with them is a point
+    // nobody has moved since. Next, a second point on the axis says it, camber
+    // and toe together -- the only way a hardpoint table can state static toe
+    // at all. Without either it is inferred the old way, from the contact patch
+    // sitting under the wheel centre: that carries the workbook's static camber
+    // and assumes zero toe, which is why toe is also reported as a change from
+    // this position.
     Vec3 spin;
-    if (solver.m_hasWheelAxis) {
+    if (alignment) {
+        spin = spinAxisFor(*alignment, solver.side());
+        solver.m_attitude = WheelAttitude::Stated;
+    } else if (solver.m_hasWheelAxis) {
         spin = (solver.m_wheelAxisPoint - solver.m_wheelCenter).normalized();
         // Either end of the axle may have been measured; outboard is the end the
         // measures are read against.
         if (spin.y * solver.side() < 0.0) spin = spin * -1.0;
+        solver.m_attitude = WheelAttitude::WheelAxis;
     } else if (solver.m_hasContactPatch) {
         const Vec3 up = solver.m_wheelCenter - solver.m_contactPatch;
         spin = cross(up, Vec3(1, 0, 0)).normalized() * solver.side();
+        solver.m_attitude = WheelAttitude::ContactPatch;
     }
-    if (spin.lengthSquared() < 0.5) spin = Vec3(0, solver.side(), 0);
+    if (spin.lengthSquared() < 0.5) {
+        spin = Vec3(0, solver.side(), 0);
+        solver.m_attitude = alignment ? WheelAttitude::Stated : WheelAttitude::Upright;
+    }
     solver.m_designSpinAxis = spin;
+
+    // With the angles stated, a wheel axis point in the table is one more point
+    // on the upright, and it is carried on the axis those angles give -- as far
+    // from the centre as the table has it, on the same side -- so that what is
+    // drawn while simulating is the axis the numbers are actually read off.
+    if (alignment && solver.m_hasWheelAxis) {
+        const Vec3 offset = solver.m_wheelAxisPoint - solver.m_wheelCenter;
+        const double reach = dot(offset, spin) < 0.0 ? -offset.length() : offset.length();
+        solver.m_wheelAxisPoint = solver.m_wheelCenter + spin * reach;
+    }
 
     // The tyre radius, which is what turns a wheel centre and an axis into a
     // contact patch: the drop from the centre down the wheel's own plane onto
@@ -412,6 +445,7 @@ void CornerSolver::measure(CornerPose* pose) const
     // outboard, so the same two formulas do both sides.
     const Vec3 n = pose->spinAxis;
     pose->camber = -std::asin(std::clamp(n.z, -1.0, 1.0)) * kRadToDeg;
+    pose->camberToGround = pose->camber;
     pose->toe = std::atan2(n.x, s * n.y) * kRadToDeg;
     pose->camberChange = pose->camber - m_design.camber;
     pose->toeChange = pose->toe - m_design.toe;
@@ -444,24 +478,24 @@ void CornerSolver::measure(CornerPose* pose) const
         pose->damperTravel = pose->damperLength - m_design.damperLength;
     }
 
-    // The front-view instant centre. Each wishbone's line in that view runs from
-    // its outer ball joint to where its pivot axis pierces the transverse plane
-    // through the wheel centre -- which is what makes a swept-back arm behave
-    // differently from a square one.
-    bool lowerOk = false;
-    bool upperOk = false;
-    Vec3 lowerPivot =
-        linePlaneCrossing(m_lowerFront, m_lowerRear, 0, pose->wheelCenter.x, &lowerOk);
-    if (!lowerOk) lowerPivot = (m_lowerFront + m_lowerRear) * 0.5;
-    Vec3 upperPivot =
-        linePlaneCrossing(m_upperFront, m_upperRear, 0, pose->wheelCenter.x, &upperOk);
-    if (!upperOk) upperPivot = (m_upperFront + m_upperRear) * 0.5;
-
+    // The front-view instant centre, the way RCVD constructs it. A wishbone
+    // moves its ball joint at right angles to the plane through that joint and
+    // the arm's pivot axis, so the upright turns, for an instant, about the line
+    // the two arm planes share; the front-view centre is where that line pierces
+    // the transverse plane through the wheel centre. The hardpoint generator
+    // places its points by the same construction, so the two are inverses here
+    // as well.
+    //
+    // It is not the same as drawing each arm from its pivot to its ball joint
+    // and flattening the result, which is what this used to do: that ignores
+    // how far a joint sits ahead of or behind the wheel centre, and on an arm
+    // whose pivot axis is inclined a caster's worth of offset moved a real
+    // car's roll centre from 10 mm to 6.
+    const Vec3 lowerNormal = cross(m_lowerRear - m_lowerFront, pose->lowerOuter - m_lowerFront);
+    const Vec3 upperNormal = cross(m_upperRear - m_upperFront, pose->upperOuter - m_upperFront);
     bool centerOk = false;
-    Vec3 center =
-        intersectLines2D(lowerPivot, pose->lowerOuter, upperPivot, pose->upperOuter, 0, &centerOk);
-    center.x = pose->wheelCenter.x;
-    pose->instantCenter = center;
+    pose->instantCenter = planesCrossing(lowerNormal, m_lowerFront, upperNormal, m_upperFront, 0,
+                                         pose->wheelCenter.x, &centerOk);
     pose->instantCenterValid = centerOk;
 }
 

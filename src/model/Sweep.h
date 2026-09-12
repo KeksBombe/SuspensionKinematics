@@ -45,9 +45,14 @@ public:
     /// does not -- every template written before the role existed -- every axle
     /// is steered, which is the behaviour those projects have always had. When
     /// it does, this corner is steered only if it names a rack point itself.
+    ///
+    /// @p alignment is the axle's static camber and toe when the project states
+    /// them, handed to both sides alike: the far side's axis comes out as the
+    /// mirror image of the near side's. Nothing means "read them off the table".
     static AxleSolver build(const MechanismTemplate& mechanism, const CornerSpec& corner,
                             const HardpointTable& table, const MirrorSpec& mirror,
-                            bool steeringDeclared = false);
+                            bool steeringDeclared = false,
+                            const std::optional<StaticAlignment>& alignment = std::nullopt);
 
     bool isEmpty() const { return !m_left && !m_right; }
     bool hasBothSides() const { return m_left.has_value() && m_right.has_value(); }
@@ -64,6 +69,13 @@ public:
     const std::optional<CornerSolver>& left() const { return m_left; }
     const std::optional<CornerSolver>& right() const { return m_right; }
 
+    /// Millimetres fore and aft to the axle a turn is centred on -- the wheelbase,
+    /// as far as Ackermann is concerned. An axle on its own knows nothing about
+    /// the rest of the car, so this is zero until something that can see every
+    /// axle says otherwise (@ref assignWheelbases), and zero means no Ackermann.
+    double wheelbase() const { return m_wheelbase; }
+    void setWheelbase(double wheelbase) { m_wheelbase = wheelbase; }
+
     /// Where this axle's roll centre is at the design position, as a point in
     /// the car's own coordinates: across the car where the two construction
     /// lines cross, along it where the contact patches are. Nothing when there
@@ -77,7 +89,30 @@ private:
     std::optional<CornerSolver> m_left;
     std::optional<CornerSolver> m_right;
     QStringList m_warnings;
+    double m_wheelbase = 0.0;
 };
+
+/// Give each axle the distance to the axle farthest from it, measured between
+/// their design contact patches. On a car with two axles that is simply the
+/// wheelbase, whichever of them steers; an axle with nothing else in the table
+/// to measure to gets zero.
+void assignWheelbases(std::vector<AxleSolver>& axles);
+
+/// Percent Ackermann from the two wheels' steer angles, in degrees, both taken
+/// positive in the direction of the turn:
+///
+///     100 * (inner - outer) / (inner - idealOuter)
+///
+/// where idealOuter is the outer angle that puts both wheels' axles through the
+/// same point on the far axle's line: cot(idealOuter) = cot(inner) + track /
+/// wheelbase. So 100 is true Ackermann, 0 is parallel steer, a negative number
+/// is anti-Ackermann and one above 100 is more than Ackermann asks for.
+///
+/// False when the inner wheel is barely turned: both differences are then
+/// nothing, and their ratio would be the solver's rounding rather than the car.
+/// Also false without a positive wheelbase and track to measure against.
+bool ackermannPercent(double innerDeg, double outerDeg, double wheelbase, double track,
+                      double* percent);
 
 /// The line the body rolls about: through the roll centre of each axle.
 ///
@@ -200,9 +235,10 @@ struct AxleSample {
     double rollCenterLateral = 0.0;
     bool rollCenterValid = false;
 
-    /// Millimetres of damper per millimetre of wheel. Called the installation
-    /// ratio to keep it apart from its reciprocal, which is also called the
-    /// motion ratio by about half the literature.
+    /// Millimetres of damper compression per millimetre of wheel travel:
+    /// positive for a damper that bump compresses, as a motion ratio is quoted.
+    /// Called the installation ratio to keep it apart from its reciprocal, which
+    /// is also called the motion ratio by about half the literature.
     double leftInstallationRatio = 0.0;
     double rightInstallationRatio = 0.0;
 
@@ -211,6 +247,14 @@ struct AxleSample {
     /// roll, which is the whole point of fitting one.
     double antiRollTwist = 0.0;
     bool hasAntiRoll = false;
+
+    /// Percent Ackermann (@ref ackermannPercent), read off a steer sweep only.
+    /// Each wheel's steer angle is its toe change from rack centre, so static toe
+    /// -- a setting, not the geometry -- stays out of it; the track is between
+    /// the design contact patches. Not there in bump or roll, straight ahead, or
+    /// on an axle that has not been given a wheelbase.
+    double ackermann = 0.0;
+    bool ackermannValid = false;
 
     bool valid() const { return left.valid || right.valid; }
 };
@@ -235,6 +279,7 @@ struct SweepResult {
 enum class SweepMeasure {
     WheelTravel,
     Camber,
+    CamberToGround,
     Toe,
     Caster,
     KingpinInclination,
@@ -248,6 +293,7 @@ enum class SweepMeasure {
     RollCentreHeight,
     RollCentreLateral,
     AntiRollTwist,
+    Ackermann,
 };
 
 /// Every measure, in the order they belong in a menu: the wheel first, then the
@@ -262,8 +308,33 @@ QString sweepMeasureKey(SweepMeasure measure);
 SweepMeasure sweepMeasureFromKey(const QString& key, SweepMeasure fallback = SweepMeasure::Camber);
 
 /// False for the ones that belong to the axle rather than to a wheel -- the roll
-/// centre and the bar's twist -- which are drawn as one curve, not two.
+/// centre, the bar's twist and Ackermann -- which are drawn as one curve, not two.
 bool sweepMeasureIsPerSide(SweepMeasure measure);
+
+/// Which wheels a plot draws, for a measure that has one curve per wheel.
+///
+/// Both by default, because a car that is not symmetric is worth seeing. On one
+/// that is, the two are mirror images of each other -- the left wheel at +10 mm
+/// of rack is the right wheel at -10 -- and one of them is all there is to read.
+enum class SweepSides { Both, Left, Right };
+
+/// A stable identifier for the project file.
+QString sweepSidesToString(SweepSides sides);
+SweepSides sweepSidesFromString(const QString& text, SweepSides fallback = SweepSides::Both);
+
+/// The smallest change in @p measure worth a plot's whole height: a tenth of a
+/// millimetre, a hundredth of a degree.
+///
+/// A curve that moves less than this over the whole sweep is drawn flat, in a
+/// band this wide, instead of being stretched until the solver's rounding fills
+/// the plot. A roll centre that stays on the centreline through a bump is a
+/// straight line at zero, not a spike a ten-thousandth of a millimetre tall.
+double sweepMeasureResolution(SweepMeasure measure);
+
+/// @p value as a readout shows it: three decimals, and a value that rounds to
+/// nothing written as "0.000" rather than as the "-0.000" a centreline roll
+/// centre a few nanometres to the right would otherwise print.
+QString sweepValueText(double value);
 
 /// @p measure read off @p sample, for one side when it has sides. False when
 /// there is no number there: a position that did not assemble, an axle with no

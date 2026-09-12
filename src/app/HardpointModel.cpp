@@ -2,7 +2,9 @@
 
 #include <QLocale>
 
+#include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <utility>
 
 namespace suspkin {
@@ -65,6 +67,62 @@ void HardpointModel::clear()
     m_table = HardpointTable{};
     m_config.clear();
     endResetModel();
+}
+
+bool HardpointModel::insertPoint(int row, const Hardpoint& point)
+{
+    if (!hardpointNameProblem(point.name, m_table).isEmpty()) return false;
+
+    const int at = std::clamp(row, 0, rowCount());
+    beginInsertRows(QModelIndex(), at, at);
+    m_table.points.insert(m_table.points.begin() + at, point);
+    endInsertRows();
+    return true;
+}
+
+void HardpointModel::removePoints(std::vector<int> rows)
+{
+    // Bottom up, so taking one row out never moves another still to be taken.
+    std::sort(rows.begin(), rows.end(), std::greater<int>());
+    rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+
+    for (const int row : rows) {
+        if (row < 0 || row >= rowCount()) continue;
+        beginRemoveRows(QModelIndex(), row, row);
+        m_config.remove(m_table.points[static_cast<std::size_t>(row)].name);
+        m_table.points.erase(m_table.points.begin() + row);
+        endRemoveRows();
+    }
+}
+
+bool HardpointModel::renamePoint(int row, const QString& requested)
+{
+    if (row < 0 || row >= rowCount()) return false;
+
+    // Whatever was typed around the name is not part of it; the reader would
+    // take it off again on the way back in.
+    const QString name = requested.trimmed();
+    Hardpoint& point = m_table.points[static_cast<std::size_t>(row)];
+    if (name == point.name) return false; // nothing to store, nothing to save
+
+    const QString problem = hardpointNameProblem(name, m_table, row);
+    if (!problem.isEmpty()) {
+        emit editRejected(row, problem);
+        return false;
+    }
+
+    const QString from = point.name;
+    point.name = name;
+
+    // The name is the key, so what was stored under it moves with it: the
+    // configuration, and the provenance of anything that was mirrored from it.
+    if (m_config.contains(from)) m_config.insert(name, m_config.take(from));
+    for (Hardpoint& other : m_table.points)
+        if (other.mirrorOf == from) other.mirrorOf = name;
+
+    emit dataChanged(index(row, IndexColumn), index(row, ColumnCount - 1));
+    emit pointRenamed(row, from, name);
+    return true;
 }
 
 void HardpointModel::setConfig(HardpointConfigMap config)
@@ -268,8 +326,10 @@ QVariant HardpointModel::headerData(int section, Qt::Orientation orientation, in
         switch (section) {
         case IndexColumn: return tr("The point's place in the workbook, which is the order it is "
                                     "written back in.");
-        case NameColumn: return tr("The name the workbook gives this point. It is the key "
-                                   "everything else is stored under, so it cannot be edited here.");
+        case NameColumn: return tr("The name the workbook gives this point, and the key the parts, "
+                                   "the solver and the configuration find it by. Renaming a point "
+                                   "the workbook holds takes its old rows out of the workbook "
+                                   "and adds new ones when the workbook is next written.");
         case TypeColumn: return tr("What the solver does with this point: hold it to the chassis, "
                                    "solve for it, or carry it along with a body that moves.");
         case Part1Column:
@@ -295,7 +355,8 @@ Qt::ItemFlags HardpointModel::flags(const QModelIndex& index) const
 {
     Qt::ItemFlags result = QAbstractTableModel::flags(index);
     if (!index.isValid()) return result;
-    if (isCoordinateColumn(index.column()) || isConfigColumn(index.column()))
+    if (index.column() == NameColumn || isCoordinateColumn(index.column())
+        || isConfigColumn(index.column()))
         result |= Qt::ItemIsEditable;
     return result;
 }
@@ -303,6 +364,7 @@ Qt::ItemFlags HardpointModel::flags(const QModelIndex& index) const
 bool HardpointModel::setData(const QModelIndex& index, const QVariant& value, int role)
 {
     if (role != Qt::EditRole || !index.isValid() || index.row() >= rowCount()) return false;
+    if (index.column() == NameColumn) return renamePoint(index.row(), value.toString());
     if (isCoordinateColumn(index.column())) return setCoordinate(index, value);
     if (isConfigColumn(index.column())) return setConfigField(index.row(), index.column(), value);
     return false;

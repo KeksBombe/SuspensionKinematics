@@ -27,14 +27,16 @@ SteeringDialog::SteeringDialog(const LinkageTemplate& templ, const MirrorSpec& m
                                const HardpointTable& table, QWidget* parent)
     : QDialog(parent), m_mirror(mirror), m_table(table), m_corners(templ.corners)
 {
-    setWindowTitle(tr("Steering"));
+    setWindowTitle(tr("Steering Rack"));
 
     auto* layout = new QVBoxLayout(this);
 
+    // Asked the way the car is described -- where is the rack, what is it bolted
+    // to -- rather than in terms of what the solver does with the answer.
     auto* intro = new QLabel(
-        tr("Which axle does the steering rack drive? An axle that drives none keeps its toe link "
-           "where the workbook put it, and is not offered a steer sweep -- which is what stops a "
-           "rear axle being steered by a rack the car has not got."),
+        tr("Where is the steering rack attached? For each axle, pick the point the rack moves: "
+           "the inner end of that axle's tie rod. An axle with no rack has its tie rods fixed "
+           "to the chassis, and has no steer sweep."),
         this);
     intro->setWordWrap(true);
     layout->addWidget(intro);
@@ -46,12 +48,12 @@ SteeringDialog::SteeringDialog(const LinkageTemplate& templ, const MirrorSpec& m
         auto* box = new QComboBox(this);
         // Empty data is the answer "no rack here", which is a real answer and
         // not the absence of one.
-        box->addItem(tr("Not steered"), QString());
+        box->addItem(tr("No steering rack"), QString());
         if (!rackRole.isEmpty()) {
             // Shown as the hardpoint the user would find in their own table,
             // stored as the role, so the file keeps saying {corner} and the far
             // side keeps coming from the project's own mirror rule.
-            box->addItem(named(rackRole, corner.token), rackRole);
+            box->addItem(tr("Rack attached at %1").arg(named(rackRole, corner.token)), rackRole);
         }
         const int index = box->findData(corner.steeringRack);
         box->setCurrentIndex(index >= 0 ? index : 0);
@@ -64,8 +66,8 @@ SteeringDialog::SteeringDialog(const LinkageTemplate& templ, const MirrorSpec& m
     layout->addLayout(form);
 
     if (rackRole.isEmpty()) {
-        auto* none = new QLabel(tr("This project's template names no inboard tie rod end, so "
-                                   "there is nothing for a rack to drive."),
+        auto* none = new QLabel(tr("This project's template names no inner tie rod end, so "
+                                   "there is nowhere for a rack to be attached."),
                                 this);
         none->setWordWrap(true);
         layout->addWidget(none);
@@ -104,7 +106,7 @@ void SteeringDialog::refreshPreview()
     for (const CornerSpec& corner : chosen) {
         const QString label = escaped(corner.label.isEmpty() ? corner.token : corner.label);
         if (corner.steeringRack.isEmpty()) {
-            lines << tr("<b>%1</b>: not steered.").arg(label);
+            lines << tr("<b>%1</b>: no rack. Its tie rods are fixed to the chassis.").arg(label);
             continue;
         }
 
@@ -118,7 +120,7 @@ void SteeringDialog::refreshPreview()
             if (name.isEmpty() || m_table.indexOf(name) < 0) missing << name;
         }
 
-        QString line = tr("<b>%1</b>: the rack moves %2 and %3.")
+        QString line = tr("<b>%1</b>: the rack is attached at %2 and %3.")
                            .arg(label, escaped(base), escaped(far.isEmpty() ? tr("no far side")
                                                                             : far));
         if (!missing.isEmpty()) {

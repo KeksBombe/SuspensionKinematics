@@ -19,6 +19,40 @@ struct PosedPoint {
     Vec3 position;
 };
 
+/// A wheel's static camber and toe, stated as numbers instead of being read off
+/// the hardpoints. It is what Lotus calls Set Static Angles, and what makes the
+/// wheel axis and the contact patch computed values rather than points somebody
+/// has to place.
+///
+/// Degrees, signed the way the measures are: negative camber leans the top of
+/// the wheel in, positive toe points its front at the centreline. One pair per
+/// axle -- the far side takes the same pair, which is its mirror image.
+struct StaticAlignment {
+    double camber = 0.0;
+    double toe = 0.0;
+
+    bool operator==(const StaticAlignment& other) const
+    {
+        return camber == other.camber && toe == other.toe;
+    }
+    bool operator!=(const StaticAlignment& other) const { return !(*this == other); }
+};
+
+/// The outboard spin axis of a wheel with @p alignment on side @p side (+1
+/// left, -1 right). Read back by the measures, it gives exactly that camber and
+/// that toe: camber is the axis's own inclination, toe its angle in plan view.
+Vec3 spinAxisFor(const StaticAlignment& alignment, double side);
+
+/// Where a corner's static camber and toe came from, so that whoever shows them
+/// can say -- a number typed in and a number read off a point are not equally
+/// easy to change.
+enum class WheelAttitude {
+    Stated,       ///< a StaticAlignment the project holds
+    WheelAxis,    ///< the second point on the wheel's axis, in the table
+    ContactPatch, ///< the patch under the wheel centre: the table's camber, zero toe
+    Upright,      ///< nothing to go on: an upright wheel pointing straight ahead
+};
+
 /// The unit direction that runs straight down the wheel's own plane -- vertical
 /// with the wheel upright, leaning with it once there is camber. It is @c down
 /// with whatever of it lies along the spin axis taken out, which is what makes
@@ -100,6 +134,12 @@ struct CornerPose {
     /// points the front of the wheel at the car's centreline.
     double camber = 0.0;
     double camberChange = 0.0;
+    /// Camber against the road rather than against the car. The same number as
+    /// @ref camber until the two stop being level with each other, which in a
+    /// roll sweep is by the whole of the roll angle: the body leans, the wheel
+    /// leans with it, and what the tyre feels is this one. Set by whoever knows
+    /// where the road is -- @ref measure() takes it to be level.
+    double camberToGround = 0.0;
     double toe = 0.0;
     double toeChange = 0.0;
     /// Degrees, off the steering axis. Positive caster leans its top rearward;
@@ -121,8 +161,9 @@ struct CornerPose {
     double damperTravel = 0.0; ///< mm shorter (negative) or longer than design
     bool hasAntiRoll = false;
 
-    /// The front-view instant centre: where the two wishbones' projected lines
-    /// cross. Invalid when they are parallel, which is a real answer about a
+    /// The front-view instant centre: where the line the two wishbone planes
+    /// share pierces the transverse plane through the wheel centre. Invalid
+    /// when the arms are parallel in that view, which is a real answer about a
     /// suspension rather than a failure -- it puts the centre at infinity.
     Vec3 instantCenter;
     bool instantCenterValid = false;
@@ -139,10 +180,22 @@ class CornerSolver {
 public:
     /// Resolve @p mechanism against @p table. Returns nothing, and sets
     /// @p error, when the table does not hold enough of it to solve.
+    ///
+    /// @p alignment, when given, is which way the wheel points at design, and
+    /// it wins over anything the table says: a wheel axis point is then carried
+    /// on the axis these angles give rather than read for its direction, and a
+    /// contact patch only says how high the ground is. Without one the table is
+    /// read the way it always was -- the wheel axis point, else the patch under
+    /// the wheel centre, else an upright wheel.
     static std::optional<CornerSolver> bind(const MechanismTemplate& mechanism,
-                                            const HardpointTable& table, QString* error);
+                                            const HardpointTable& table, QString* error,
+                                            const std::optional<StaticAlignment>& alignment
+                                            = std::nullopt);
 
     const MechanismTemplate& mechanism() const { return m_mechanism; }
+
+    /// Where the design camber and toe came from.
+    WheelAttitude wheelAttitude() const { return m_attitude; }
 
     /// Whether a steering rack drives this corner. False for an axle whose toe
     /// link inboard end is simply bolted to the chassis: it then ignores rack
@@ -248,12 +301,14 @@ private:
     bool m_hasDamper = false;
     bool m_hasAntiRoll = false;
 
-    /// The design wheel spin axis, outboard. Taken from the wheel axis point when
-    /// the table has one -- which is the only way a table can state static toe --
-    /// and otherwise from the contact patch sitting under the wheel centre, which
-    /// carries the workbook's static camber but knows nothing about toe. That is
-    /// why toe is reported as a change as well as an absolute.
+    /// The design wheel spin axis, outboard. From the static angles when the
+    /// project states them; otherwise from the wheel axis point when the table
+    /// has one -- the only way a table can state static toe -- and otherwise
+    /// from the contact patch sitting under the wheel centre, which carries the
+    /// workbook's static camber but knows nothing about toe. That is why toe is
+    /// reported as a change as well as an absolute.
     Vec3 m_designSpinAxis;
+    WheelAttitude m_attitude = WheelAttitude::Upright;
     CornerPose m_design;
 };
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "model/DesignParameters.h"
 #include "model/Hardpoint.h"
 #include "model/HardpointConfig.h"
 #include "model/HardpointMirror.h"
@@ -36,7 +37,12 @@ struct SimulationState {
     /// back to the wheel travel it was given, not to the roll angle.
     SweepSettings sweep;
     double position = 0.0; ///< where along that sweep the model stands
-    QString measure;       ///< which curve the plot is showing
+    /// Which curves are plotted, one plot each, by @ref sweepMeasureKey. A
+    /// project from before there could be more than one has the one, which is
+    /// a list of one.
+    QStringList measures;
+    /// Which wheels those plots draw, for the measures that have one per wheel.
+    SweepSides sides = SweepSides::Both;
     /// Whether it is running through its travel on its own, how long one run of
     /// the travel takes, and whether every axle comes along or only the one the
     /// curve belongs to.
@@ -65,7 +71,13 @@ struct ViewState {
     /// Whether the wheel and rim models are drawn at the wheel centres. On by
     /// default, for the same reason: they were imported to be looked at.
     bool wheelsVisible = true;
+    /// The point the selection is centred on -- the one the labels, the mirror
+    /// dialog and a new point take their cue from.
     int selectedHardpoint = -1;
+    /// Every selected point, in the order they were picked, @ref
+    /// selectedHardpoint among them. A chain of points picked for a new part is
+    /// picked in the order it is drawn, so the order is kept.
+    QList<int> selection;
     /// Where the solver had the suspension standing, so reopening a project puts
     /// the user back mid-travel if that is where they left it.
     SimulationState simulation;
@@ -123,11 +135,13 @@ struct HardpointRef {
 /// Either model may be absent -- a rim on its own is a perfectly good way to see
 /// where the wheels sit -- so what makes this empty is having neither.
 struct WheelsRef {
-    AssetRef wheel; ///< the wheel or tyre model, copied in
-    AssetRef rim;   ///< the rim model, copied in
+    /// The tyre model, copied in. Under "tyre" in the manifest; a project from
+    /// before the tyre was called that has it under "wheel", which still reads.
+    AssetRef tyre;
+    AssetRef rim; ///< the rim model, copied in
     WheelSpec spec;
 
-    bool isEmpty() const { return wheel.isEmpty() && rim.isEmpty(); }
+    bool isEmpty() const { return tyre.isEmpty() && rim.isEmpty(); }
     bool hasModels() const { return !isEmpty(); }
 };
 
@@ -143,7 +157,7 @@ struct WheelsRef {
 ///       linkage/
 ///         template.json      which parts join which hardpoints
 ///       wheels/
-///         wheel.step         the wheel model, copied in
+///         tyre.step          the tyre model, copied in
 ///         rim.step           the rim model, copied in
 ///
 /// Geometry and workbooks are copied rather than referenced because the whole
@@ -195,6 +209,25 @@ public:
                                           const QString& targetFileName, QString* error);
     /// Write @p bytes into the project as @p relativePath, creating directories.
     bool writeFile(const QString& relativePath, const QByteArray& bytes, QString* error) const;
+    /// The whole of @p relativePath, with the file already closed again by the
+    /// time it returns. Nothing when it cannot be read.
+    ///
+    /// Closed matters on Windows. writeFile() replaces a file by renaming a
+    /// temporary over it, and Windows refuses to replace a file that any handle
+    /// has open -- this process's own included. Reading the template through a
+    /// QFile still open in the same scope as the write is what made "Steering"
+    /// fail there with "Access is denied", while Linux let it through.
+    std::optional<QByteArray> readFile(const QString& relativePath, QString* error) const;
+
+    /// Give the project a workbook of its own, made from the blank one the
+    /// application ships and filled with @p table, and return the reference to
+    /// it -- for a project that has points to hold and nothing imported to hold
+    /// them in. The caller reads it back to get the baseline, the same way an
+    /// overwritten workbook is read back.
+    ///
+    /// Never writes over a file that is already there: a workbook left in
+    /// hardpoints/ by hand is the user's, whatever the manifest says.
+    std::optional<AssetRef> createHardpointWorkbook(const HardpointTable& table, QString* error);
 
     const AssetRef& geometry() const { return m_geometry; }
     void setGeometry(const AssetRef& asset) { m_geometry = asset; }
@@ -225,6 +258,31 @@ public:
     const MirrorSpec& mirror() const { return m_mirror; }
     void setMirror(const MirrorSpec& spec) { m_mirror = spec; }
 
+    /// The targets the hardpoint generator was last given, so reopening it
+    /// starts from where the user left it. Nothing until it has been opened
+    /// once; the generator's own defaults are what it opens with then.
+    ///
+    /// Only the targets: changing one does not move a point. Regenerating is
+    /// an action the user takes, with a preview of what it will overwrite.
+    const std::optional<DesignParameters>& design() const { return m_design; }
+    void setDesign(const DesignParameters& design) { m_design = design; }
+
+    /// Each axle's static camber and toe, by corner token, for the axles whose
+    /// angles the user has stated -- Lotus's Set Static Angles. An axle that is
+    /// not here has them read off its hardpoints, the way every project did
+    /// before this existed.
+    ///
+    /// In the manifest rather than in the template: the template says what the
+    /// car is made of, and these are a setting on it that changes from one
+    /// session to the next. Not in the workbook either, which holds points and
+    /// has nowhere to put an angle.
+    const QHash<QString, StaticAlignment>& alignment() const { return m_alignment; }
+    std::optional<StaticAlignment> alignmentFor(const QString& corner) const;
+    void setAlignment(const QHash<QString, StaticAlignment>& alignment)
+    {
+        m_alignment = alignment;
+    }
+
     /// Where the file dialogs last pointed, so a project remembers the folders
     /// its owner actually imports from.
     const QString& lastGeometryDirectory() const { return m_lastGeometryDirectory; }
@@ -248,6 +306,8 @@ private:
     ViewState m_view;
     WindowState m_window;
     MirrorSpec m_mirror;
+    std::optional<DesignParameters> m_design;
+    QHash<QString, StaticAlignment> m_alignment;
     QString m_lastGeometryDirectory;
     QString m_lastHardpointDirectory;
 };
@@ -261,6 +321,15 @@ struct HardpointEdits {
     /// In the workbook, and deleted since. Names rather than points: there is
     /// nothing left of them but which rows to leave out.
     QStringList removed;
+    /// Where each added point sits: the name of the point above it, keyed by the
+    /// added point's name, and empty for one at the very top.
+    ///
+    /// Row order is state like any other. Without this a point added next to the
+    /// one it belongs with -- or a workbook point that was renamed, which is an
+    /// addition -- would come back at the bottom of the table the next time the
+    /// project opens. An added point with no entry is one from an edits file
+    /// written before this existed, and goes at the end, where it always went.
+    QHash<QString, QString> addedAfter;
 
     bool isEmpty() const { return changed.empty() && added.empty() && removed.isEmpty(); }
     int count() const
@@ -272,8 +341,10 @@ struct HardpointEdits {
 /// The difference between @p current and the @p baseline the workbook holds.
 HardpointEdits diffHardpoints(const HardpointTable& baseline, const HardpointTable& current);
 
-/// @p baseline with @p edits applied: changed coordinates overwritten, added
-/// points appended in the order the edits file lists them.
+/// @p baseline with @p edits applied: removed points taken out, changed
+/// coordinates overwritten, and added points put back where they were -- after
+/// the point @ref HardpointEdits::addedAfter names, or at the end when it names
+/// none or one that is no longer there.
 HardpointTable applyHardpointEdits(const HardpointTable& baseline, const HardpointEdits& edits);
 
 /// Read and write the edits file. Reading a file that is not there is not an

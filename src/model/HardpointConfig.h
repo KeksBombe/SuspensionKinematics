@@ -108,6 +108,14 @@ struct BodyCatalog {
 /// taken out, so "{corner} {side} lower wishbone" becomes "Lower wishbone".
 BodyCatalog bodyCatalog(const LinkageTemplate& templ);
 
+/// The body @p part is in the catalog: its label, generically.
+QString partBodyName(const PartTemplate& part);
+
+/// Every entry in @p config that names the body @p from names @p to instead;
+/// returns how many entries that changed. For a part that has been relabelled,
+/// whose rows would otherwise all name a body the catalog no longer has.
+int renameBody(HardpointConfigMap& config, const QString& from, const QString& to);
+
 /// How badly wrong an entry is.
 ///
 /// An error is refused before it reaches the store; a warning is stored and

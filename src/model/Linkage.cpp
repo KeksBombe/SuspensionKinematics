@@ -91,13 +91,21 @@ Instance instantiatePart(const PartTemplate& source, const HardpointTable& table
                          const CornerSpec& corner, bool mirrored, const MirrorSpec& mirror,
                          const QString& sideLabel)
 {
+    // A part that spells its points out is drawn through exactly those names:
+    // no corner to substitute, no far side to mirror onto.
+    const bool literal = !source.perCorner;
+
     Instance instance;
-    instance.part.id = QStringLiteral("%1@%2:%3")
-                           .arg(source.id, corner.token,
-                                mirrored ? QStringLiteral("mirror") : QStringLiteral("base"));
+    instance.part.id = literal ? QStringLiteral("%1@literal").arg(source.id)
+                               : QStringLiteral("%1@%2:%3")
+                                     .arg(source.id, corner.token,
+                                          mirrored ? QStringLiteral("mirror")
+                                                   : QStringLiteral("base"));
     instance.part.label = source.label;
     instance.part.label.replace(kCornerToken, corner.label);
     instance.part.label.replace(kSideToken, sideLabel);
+    instance.part.label = instance.part.label.simplified();
+    if (instance.part.label.isEmpty()) instance.part.label = source.id;
     instance.part.kind = source.kind;
     instance.part.corner = corner.token;
     instance.part.mirrored = mirrored;
@@ -109,7 +117,8 @@ Instance instantiatePart(const PartTemplate& source, const HardpointTable& table
 
         for (const QString& pattern : chain.points) {
             ++instance.wanted;
-            const QString name = instantiate(pattern, corner.token, mirrored, mirror);
+            const QString name =
+                literal ? pattern : instantiate(pattern, corner.token, mirrored, mirror);
             const int index = name.isEmpty() ? -1 : table.indexOf(name);
             if (index < 0) {
                 complete = false;
@@ -145,6 +154,15 @@ Linkage buildLinkage(const LinkageTemplate& templ, const HardpointTable& table,
     std::vector<CornerSpec> corners = templ.corners;
     if (corners.empty()) corners.push_back(CornerSpec{});
 
+    const auto report = [&linkage](const Instance& instance) {
+        if (!instance.missing.isEmpty()) {
+            linkage.warnings.append(tr("%1: no hardpoint named %2")
+                                        .arg(instance.part.label,
+                                             instance.missing.join(QStringLiteral(", "))));
+        }
+        if (!instance.part.chains.empty()) linkage.parts.push_back(instance.part);
+    };
+
     for (const CornerSpec& corner : corners) {
         for (int side = 0; side < 2; ++side) {
             const bool mirrored = (side == 1);
@@ -153,6 +171,7 @@ Linkage buildLinkage(const LinkageTemplate& templ, const HardpointTable& table,
             instances.reserve(templ.parts.size());
             int found = 0;
             for (const PartTemplate& source : templ.parts) {
+                if (!source.perCorner) continue; // drawn once, below
                 instances.push_back(
                     instantiatePart(source, table, corner, mirrored, mirror,
                                     mirrored ? templ.mirroredSideLabel : templ.baseSideLabel));
@@ -166,17 +185,16 @@ Linkage buildLinkage(const LinkageTemplate& templ, const HardpointTable& table,
             // would bury the warnings that do matter.
             if (found == 0) continue;
 
-            for (const Instance& instance : instances) {
-                if (!instance.missing.isEmpty()) {
-                    linkage.warnings.append(
-                        tr("%1: no hardpoint named %2")
-                            .arg(instance.part.label,
-                                 instance.missing.join(QStringLiteral(", "))));
-                }
-                if (instance.part.chains.empty()) continue;
-                linkage.parts.push_back(instance.part);
-            }
+            for (const Instance& instance : instances) report(instance);
         }
+    }
+
+    // Parts that name their points outright belong to no corner and no side, so
+    // there is nothing for "not on this car" to mean: one that has lost a point
+    // has lost it, and says so.
+    for (const PartTemplate& source : templ.parts) {
+        if (source.perCorner) continue;
+        report(instantiatePart(source, table, CornerSpec{}, false, mirror, QString()));
     }
 
     return linkage;

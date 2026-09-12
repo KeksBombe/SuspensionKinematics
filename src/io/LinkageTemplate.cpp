@@ -55,6 +55,28 @@ QJsonObject chainToJson(const ChainTemplate& chain)
     return object;
 }
 
+QJsonObject partToJson(const PartTemplate& part)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("id"), part.id);
+    object.insert(QStringLiteral("label"), part.label);
+    object.insert(QStringLiteral("kind"), partKindToString(part.kind));
+    if (part.optional) object.insert(QStringLiteral("optional"), true);
+    if (!part.perCorner) object.insert(QStringLiteral("perCorner"), false);
+
+    // The shorthand back out again: a one-chain part is much easier to read and
+    // to edit as "points" than as a list of one.
+    if (part.chains.size() == 1) {
+        const QJsonObject chain = chainToJson(part.chains.front());
+        for (auto it = chain.begin(); it != chain.end(); ++it) object.insert(it.key(), it.value());
+    } else {
+        QJsonArray chains;
+        for (const ChainTemplate& chain : part.chains) chains.append(chainToJson(chain));
+        object.insert(QStringLiteral("chains"), chains);
+    }
+    return object;
+}
+
 /// One named string out of a sub-object, e.g. mechanism.lowerWishbone.outer.
 QString roleName(const QJsonObject& parent, const char* group, const char* key)
 {
@@ -241,6 +263,9 @@ LinkageTemplateLoadResult readTemplate(const QByteArray& bytes, const QString& l
         part.label = object.value(QStringLiteral("label")).toString(part.id);
         part.kind = partKindFromString(object.value(QStringLiteral("kind")).toString());
         part.optional = object.value(QStringLiteral("optional")).toBool(false);
+        // Absent is a template's own part, written once for every corner --
+        // which is every part any template had before this existed.
+        part.perCorner = object.value(QStringLiteral("perCorner")).toBool(true);
 
         if (object.contains(QStringLiteral("chains"))) {
             for (const QJsonValue& entry : object.value(QStringLiteral("chains")).toArray()) {
@@ -343,26 +368,7 @@ QByteArray writeLinkageTemplate(const LinkageTemplate& templ)
     root.insert(QStringLiteral("sides"), sides);
 
     QJsonArray parts;
-    for (const PartTemplate& part : templ.parts) {
-        QJsonObject object;
-        object.insert(QStringLiteral("id"), part.id);
-        object.insert(QStringLiteral("label"), part.label);
-        object.insert(QStringLiteral("kind"), partKindToString(part.kind));
-        if (part.optional) object.insert(QStringLiteral("optional"), true);
-
-        // The shorthand back out again: a one-chain part is much easier to read
-        // and to edit as "points" than as a list of one.
-        if (part.chains.size() == 1) {
-            const QJsonObject chain = chainToJson(part.chains.front());
-            for (auto it = chain.begin(); it != chain.end(); ++it)
-                object.insert(it.key(), it.value());
-        } else {
-            QJsonArray chains;
-            for (const ChainTemplate& chain : part.chains) chains.append(chainToJson(chain));
-            object.insert(QStringLiteral("chains"), chains);
-        }
-        parts.append(object);
-    }
+    for (const PartTemplate& part : templ.parts) parts.append(partToJson(part));
     root.insert(QStringLiteral("parts"), parts);
 
     const QJsonObject mechanism = mechanismToJson(templ.mechanism);
@@ -658,6 +664,341 @@ QByteArray setTemplateSteering(const QByteArray& bytes, const std::vector<Corner
         if (!check.isNull() && check == document) return spliced;
     }
     return rewritten;
+}
+
+namespace {
+
+bool isJsonSpace(char c) { return std::isspace(static_cast<unsigned char>(c)) != 0; }
+
+int skipSpace(const QByteArray& text, int i)
+{
+    while (i < text.size() && isJsonSpace(text.at(i))) ++i;
+    return i;
+}
+
+/// One past the value starting at @p at, whatever kind of value it is. The
+/// scalars -- a number, true, false, null -- run until whatever ends them.
+int endOfAnyValue(const QByteArray& text, int at)
+{
+    if (at >= text.size()) return -1;
+    const char c = text.at(at);
+    if (c == '"' || c == '{' || c == '[') return endOfValue(text, at);
+    int i = at;
+    while (i < text.size() && text.at(i) != ',' && text.at(i) != '}' && text.at(i) != ']'
+           && !isJsonSpace(text.at(i)))
+        ++i;
+    return i > at ? i : -1;
+}
+
+/// A JSON string's text, its quotes and escapes dealt with by the real parser
+/// rather than by hand.
+QString decodeString(const QByteArray& quoted)
+{
+    const QJsonDocument document = QJsonDocument::fromJson('[' + quoted + ']');
+    return document.array().at(0).toString();
+}
+
+/// @p text as a JSON string literal, quotes and all.
+QByteArray encodeString(const QString& text)
+{
+    const QByteArray array = QJsonDocument(QJsonArray{ text }).toJson(QJsonDocument::Compact);
+    return array.mid(1, array.size() - 2); // ["..."] without the brackets
+}
+
+/// One member of an object, where it is written.
+struct Member {
+    QString key;
+    int keyStart = 0;
+    int valueStart = 0;
+    int valueEnd = 0;
+};
+
+/// The members of the object that opens at @p open, in the order written.
+/// Nothing when the text is not shaped the way JSON has to be.
+std::optional<std::vector<Member>> objectMembers(const QByteArray& text, int open)
+{
+    if (open < 0 || open >= text.size() || text.at(open) != '{') return std::nullopt;
+    std::vector<Member> members;
+    int i = skipSpace(text, open + 1);
+    if (i < text.size() && text.at(i) == '}') return members;
+
+    while (i < text.size()) {
+        if (text.at(i) != '"') return std::nullopt;
+        Member member;
+        member.keyStart = i;
+        const int keyEnd = endOfValue(text, i);
+        if (keyEnd < 0) return std::nullopt;
+        member.key = decodeString(text.mid(i, keyEnd - i));
+        i = skipSpace(text, keyEnd);
+        if (i >= text.size() || text.at(i) != ':') return std::nullopt;
+        member.valueStart = skipSpace(text, i + 1);
+        member.valueEnd = endOfAnyValue(text, member.valueStart);
+        if (member.valueEnd < 0) return std::nullopt;
+        members.push_back(member);
+
+        i = skipSpace(text, member.valueEnd);
+        if (i >= text.size()) return std::nullopt;
+        if (text.at(i) == '}') return members;
+        if (text.at(i) != ',') return std::nullopt;
+        i = skipSpace(text, i + 1);
+    }
+    return std::nullopt;
+}
+
+const Member* findMember(const std::vector<Member>& members, const QString& key)
+{
+    for (const Member& member : members)
+        if (member.key == key) return &member;
+    return nullptr;
+}
+
+/// A part as text, in the shape the shipped template writes one: the fields in
+/// the order a person reads them, one to a line, lined up under @p indent.
+QByteArray partText(const PartTemplate& part, const QByteArray& indent)
+{
+    const QByteArray inner = indent + QByteArrayLiteral("    ");
+    QList<QByteArray> lines;
+    lines << inner + QByteArrayLiteral("\"id\": ") + encodeString(part.id);
+    lines << inner + QByteArrayLiteral("\"label\": ") + encodeString(part.label);
+    lines << inner + QByteArrayLiteral("\"kind\": ") + encodeString(partKindToString(part.kind));
+    if (part.optional) lines << inner + QByteArrayLiteral("\"optional\": true");
+    if (!part.perCorner) lines << inner + QByteArrayLiteral("\"perCorner\": false");
+
+    const auto pointList = [](const ChainTemplate& chain) {
+        QList<QByteArray> names;
+        for (const QString& name : chain.points) names << encodeString(name);
+        return QByteArrayLiteral("[") + names.join(", ") + QByteArrayLiteral("]");
+    };
+    if (part.chains.size() == 1) {
+        const ChainTemplate& chain = part.chains.front();
+        lines << inner + QByteArrayLiteral("\"points\": ") + pointList(chain);
+        if (chain.closed) lines << inner + QByteArrayLiteral("\"closed\": true");
+    } else {
+        QList<QByteArray> chains;
+        for (const ChainTemplate& chain : part.chains) {
+            QByteArray entry = QByteArrayLiteral("{ \"points\": ") + pointList(chain);
+            if (chain.closed) entry += QByteArrayLiteral(", \"closed\": true");
+            if (chain.optional) entry += QByteArrayLiteral(", \"optional\": true");
+            chains << inner + QByteArrayLiteral("    ") + entry + QByteArrayLiteral(" }");
+        }
+        lines << inner + QByteArrayLiteral("\"chains\": [\n") + chains.join(",\n") + '\n' + inner
+                     + ']';
+    }
+    return QByteArrayLiteral("{\n") + lines.join(",\n") + '\n' + indent + '}';
+}
+
+/// Where the "parts" array is, and where each part in it is, by id.
+struct PartsLayout {
+    int arrayStart = -1;
+    int arrayEnd = -1;
+    std::vector<std::pair<int, int>> spans;
+    QStringList ids; ///< parallel to spans
+};
+
+std::optional<PartsLayout> findParts(const QByteArray& text)
+{
+    const int root = skipSpace(text, 0);
+    const std::optional<std::vector<Member>> members = objectMembers(text, root);
+    if (!members) return std::nullopt;
+    const Member* parts = findMember(*members, QStringLiteral("parts"));
+    if (!parts || text.at(parts->valueStart) != '[') return std::nullopt;
+
+    PartsLayout layout;
+    layout.arrayStart = parts->valueStart;
+    layout.arrayEnd = parts->valueEnd;
+    layout.spans = elementSpans(text, layout.arrayStart, layout.arrayEnd);
+    for (const auto& [from, to] : layout.spans) {
+        Q_UNUSED(to);
+        const std::optional<std::vector<Member>> part = objectMembers(text, from);
+        const Member* id = part ? findMember(*part, QStringLiteral("id")) : nullptr;
+        layout.ids << (id ? decodeString(text.mid(id->valueStart, id->valueEnd - id->valueStart))
+                          : QString());
+    }
+    return layout;
+}
+
+/// The spliced text if it says exactly what @p expected says, and otherwise
+/// @p expected written out whole. The same safety net setTemplateSteering()
+/// uses: an edit made as text is only kept once the parser agrees with it.
+QByteArray splicedOrRewritten(const QByteArray& spliced, const QJsonDocument& expected)
+{
+    if (!spliced.isEmpty()) {
+        const QJsonDocument check = QJsonDocument::fromJson(spliced);
+        if (!check.isNull() && check == expected) return spliced;
+    }
+    return expected.toJson(QJsonDocument::Indented);
+}
+
+/// The template as a document, or nothing with @p error set.
+std::optional<QJsonDocument> parseTemplateBytes(const QByteArray& bytes, QString* error)
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(bytes, &parseError);
+    if (document.isNull() || !document.isObject()) {
+        if (error)
+            *error = tr("The template is not readable JSON: %1 (at offset %2)")
+                         .arg(parseError.errorString())
+                         .arg(parseError.offset);
+        return std::nullopt;
+    }
+    return document;
+}
+
+/// Index of the part called @p id in the document's "parts" array, or -1.
+int partIndex(const QJsonArray& parts, const QString& id)
+{
+    for (int i = 0; i < parts.size(); ++i)
+        if (parts.at(i).toObject().value(QStringLiteral("id")).toString() == id) return i;
+    return -1;
+}
+
+} // namespace
+
+QByteArray addTemplatePart(const QByteArray& bytes, const PartTemplate& part, QString* error)
+{
+    std::optional<QJsonDocument> document = parseTemplateBytes(bytes, error);
+    if (!document) return {};
+
+    QJsonObject root = document->object();
+    QJsonArray parts = root.value(QStringLiteral("parts")).toArray();
+    if (partIndex(parts, part.id) >= 0) {
+        if (error) *error = tr("The template already has a part called \"%1\".").arg(part.id);
+        return {};
+    }
+    parts.append(partToJson(part));
+    root.insert(QStringLiteral("parts"), parts);
+    const QJsonDocument expected(root);
+
+    QByteArray spliced;
+    if (const std::optional<PartsLayout> layout = findParts(bytes)) {
+        spliced = bytes;
+        if (layout->spans.empty()) {
+            // An empty array opens up onto lines of its own.
+            const QByteArray indent = indentAt(bytes, layout->arrayStart);
+            const QByteArray inner = indent + QByteArrayLiteral("    ");
+            spliced.replace(layout->arrayStart, layout->arrayEnd - layout->arrayStart,
+                            QByteArrayLiteral("[\n") + inner + partText(part, inner) + '\n' + indent
+                                + ']');
+        } else {
+            // After the last part, lined up with it.
+            const auto [lastStart, lastEnd] = layout->spans.back();
+            const QByteArray indent = indentAt(bytes, lastStart);
+            spliced.insert(lastEnd, QByteArrayLiteral(",\n") + indent + partText(part, indent));
+        }
+    }
+    return splicedOrRewritten(spliced, expected);
+}
+
+QByteArray removeTemplatePart(const QByteArray& bytes, const QString& id, QString* error)
+{
+    std::optional<QJsonDocument> document = parseTemplateBytes(bytes, error);
+    if (!document) return {};
+
+    QJsonObject root = document->object();
+    QJsonArray parts = root.value(QStringLiteral("parts")).toArray();
+    const int index = partIndex(parts, id);
+    if (index < 0) {
+        if (error) *error = tr("The template has no part called \"%1\".").arg(id);
+        return {};
+    }
+    parts.removeAt(index);
+    root.insert(QStringLiteral("parts"), parts);
+    const QJsonDocument expected(root);
+
+    QByteArray spliced;
+    const std::optional<PartsLayout> layout = findParts(bytes);
+    const int at = layout ? int(layout->ids.indexOf(id)) : -1;
+    if (at >= 0) {
+        spliced = bytes;
+        const auto [from, to] = layout->spans[std::size_t(at)];
+        if (at > 0) {
+            // From the end of the part before it: the comma that joined them
+            // and the line break go with it.
+            const int previousEnd = layout->spans[std::size_t(at - 1)].second;
+            spliced.remove(previousEnd, to - previousEnd);
+        } else if (layout->spans.size() > 1) {
+            // The first of several: up to where the next one starts.
+            const int nextStart = layout->spans[1].first;
+            spliced.remove(from, nextStart - from);
+        } else {
+            // The only one: the array is left empty, on one line.
+            spliced.replace(layout->arrayStart, layout->arrayEnd - layout->arrayStart,
+                            QByteArrayLiteral("[]"));
+        }
+    }
+    return splicedOrRewritten(spliced, expected);
+}
+
+QByteArray setTemplatePartLabel(const QByteArray& bytes, const QString& id, const QString& label,
+                                QString* error)
+{
+    std::optional<QJsonDocument> document = parseTemplateBytes(bytes, error);
+    if (!document) return {};
+
+    QJsonObject root = document->object();
+    QJsonArray parts = root.value(QStringLiteral("parts")).toArray();
+    const int index = partIndex(parts, id);
+    if (index < 0) {
+        if (error) *error = tr("The template has no part called \"%1\".").arg(id);
+        return {};
+    }
+    QJsonObject part = parts.at(index).toObject();
+    part.insert(QStringLiteral("label"), label);
+    parts.replace(index, part);
+    root.insert(QStringLiteral("parts"), parts);
+    const QJsonDocument expected(root);
+
+    QByteArray spliced;
+    const std::optional<PartsLayout> layout = findParts(bytes);
+    const int at = layout ? int(layout->ids.indexOf(id)) : -1;
+    if (at >= 0) {
+        const int from = layout->spans[std::size_t(at)].first;
+        const std::optional<std::vector<Member>> members = objectMembers(bytes, from);
+        const Member* existing = members ? findMember(*members, QStringLiteral("label")) : nullptr;
+        const Member* idMember = members ? findMember(*members, QStringLiteral("id")) : nullptr;
+        if (existing) {
+            spliced = bytes;
+            spliced.replace(existing->valueStart, existing->valueEnd - existing->valueStart,
+                            encodeString(label));
+        } else if (idMember) {
+            // No label yet: one goes in straight after the id, in the shape the
+            // object is already written in.
+            const bool multiLine = bytes.mid(from, idMember->keyStart - from).contains('\n');
+            const QByteArray separator =
+                multiLine ? QByteArrayLiteral(",\n") + indentAt(bytes, idMember->keyStart)
+                          : QByteArrayLiteral(", ");
+            spliced = bytes;
+            spliced.insert(idMember->valueEnd,
+                           separator + QByteArrayLiteral("\"label\": ") + encodeString(label));
+        }
+    }
+    return splicedOrRewritten(spliced, expected);
+}
+
+QString uniquePartId(const LinkageTemplate& templ, const QString& label)
+{
+    // "Camera mount, left" -> "cameraMountLeft": the way the shipped template
+    // names its own parts.
+    QString id;
+    bool upper = false;
+    for (const QChar ch : label) {
+        if (!ch.isLetterOrNumber()) {
+            upper = !id.isEmpty();
+            continue;
+        }
+        id += id.isEmpty() ? ch.toLower() : (upper ? ch.toUpper() : ch);
+        upper = false;
+    }
+    if (id.isEmpty() || id.at(0).isDigit()) id.prepend(QStringLiteral("part"));
+
+    const auto taken = [&templ](const QString& candidate) {
+        for (const PartTemplate& part : templ.parts)
+            if (part.id == candidate) return true;
+        return false;
+    };
+    QString candidate = id;
+    for (int n = 2; taken(candidate); ++n) candidate = id + QString::number(n);
+    return candidate;
 }
 
 QString linkageTemplateRelativePath() { return QStringLiteral("linkage/template.json"); }

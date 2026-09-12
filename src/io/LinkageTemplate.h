@@ -43,6 +43,23 @@ QByteArray writeLinkageTemplate(const LinkageTemplate& templ);
 QByteArray setTemplateSteering(const QByteArray& bytes, const std::vector<CornerSpec>& corners,
                                QString* error);
 
+/// @p bytes with @p part added to the end of its parts, lined up with the ones
+/// already there. A patch for the same reason setTemplateSteering() is one:
+/// every other byte of the user's file comes out the other side. Refused, with
+/// @p error set, when the id is already taken.
+QByteArray addTemplatePart(const QByteArray& bytes, const PartTemplate& part, QString* error);
+/// @p bytes without the part whose id is @p id, and nothing else touched.
+QByteArray removeTemplatePart(const QByteArray& bytes, const QString& id, QString* error);
+/// @p bytes with the label of part @p id set to @p label, and nothing else
+/// touched. The id stays: it is the key, and the label is what is read.
+QByteArray setTemplatePartLabel(const QByteArray& bytes, const QString& id, const QString& label,
+                                QString* error);
+
+/// An id for a new part in @p templ, made out of @p label the way the shipped
+/// template names its own ("Camera mount" becomes "cameraMount") and numbered
+/// on when that is taken.
+QString uniquePartId(const LinkageTemplate& templ, const QString& label);
+
 /// The roles the built-in template gives a corner's hardpoints.
 ///
 /// What a template written before the solver existed falls back to, so that a

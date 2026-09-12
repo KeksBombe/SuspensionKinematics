@@ -211,4 +211,33 @@ Vec3 intersectLines2D(const Vec3& a1, const Vec3& a2, const Vec3& b1, const Vec3
     return hit;
 }
 
+Vec3 planesCrossing(const Vec3& normalA, const Vec3& pointA, const Vec3& normalB,
+                    const Vec3& pointB, int axis, double value, bool* ok)
+{
+    // With the one coordinate fixed, each plane is a line in the other two, and
+    // the answer is where those two lines cross: a two-by-two system.
+    const int i0 = (axis + 1) % 3;
+    const int i1 = (axis + 2) % 3;
+    const double a1 = normalA[i0];
+    const double b1 = normalA[i1];
+    const double c1 = dot(normalA, pointA) - normalA[axis] * value;
+    const double a2 = normalB[i0];
+    const double b2 = normalB[i1];
+    const double c2 = dot(normalB, pointB) - normalB[axis] * value;
+    const double determinant = a1 * b2 - a2 * b1;
+    // Relative to the normals themselves, so the test means the same thing
+    // whether they came out of a cross product of millimetres or of unit vectors.
+    const double scale = normalA.length() * normalB.length();
+    if (!(scale > 0.0) || std::abs(determinant) < kTiny * scale) {
+        if (ok) *ok = false;
+        return pointA;
+    }
+    Vec3 hit;
+    hit[axis] = value;
+    hit[i0] = (c1 * b2 - c2 * b1) / determinant;
+    hit[i1] = (a1 * c2 - a2 * c1) / determinant;
+    if (ok) *ok = true;
+    return hit;
+}
+
 } // namespace suspkin

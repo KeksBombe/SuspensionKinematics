@@ -240,6 +240,45 @@ def main():
     # 5. Not a workbook at all.
     (out / "not_a_zip.xlsx").write_bytes(b"PK\x03\x04 this is not really a zip file")
 
+    # 6. A table with more to it than names and numbers: a unit and a note in
+    #    the columns beside every coordinate, and a formatted row with nothing in
+    #    it below the table. Deleting a point has to blank its two cells and
+    #    leave the unit and the note standing; appending has to go below the
+    #    empty formatted row rather than be numbered the same as it.
+    shared6 = SharedStrings()
+    header = "".join(
+        f'<c r="{column_name(i)}1" t="s"><v>{shared6.add(text)}</v></c>'
+        for i, text in enumerate(["Name", "Value", "Unit", "Note"], start=1)
+    )
+    body = [f'<row r="1">{header}</row>']
+    extra_rows = [
+        ("F_LCA_O_x", "-544.26", "measured"),
+        ("F_LCA_O_y", "554.412", "measured"),
+        ("F_LCA_O_z", "138.408", "measured"),
+        ("F_UCA_O_x", "-556.894", "from CAD"),
+        ("F_UCA_O_y", "548.237", "from CAD"),
+        ("F_UCA_O_z", "318.388", "from CAD"),
+    ]
+    for number, (name, value, note) in enumerate(extra_rows, start=2):
+        body.append(
+            f'<row r="{number}">'
+            f'<c r="A{number}" t="s"><v>{shared6.add(name)}</v></c>'
+            f'<c r="B{number}" s="1"><v>{value}</v></c>'
+            f'<c r="C{number}" t="s"><v>{shared6.add("mm")}</v></c>'
+            f'<c r="D{number}" t="s"><v>{shared6.add(note)}</v></c>'
+            "</row>"
+        )
+    # Row 10: styled and empty, two rows below the table.
+    body.append('<row r="10"><c r="A10" s="1"/><c r="B10" s="1"/></row>')
+    extra = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<dimension ref="A1:D10"/>'
+        f'<sheetData>{"".join(body)}</sheetData>'
+        "</worksheet>"
+    )
+    write_workbook(out / "extra_columns.xlsx", [("Geometry", extra)], shared6)
+
     print(f"xlsx fixtures written to {out}")
     return 0
 

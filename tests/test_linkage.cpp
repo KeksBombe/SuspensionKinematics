@@ -84,6 +84,13 @@ private slots:
     void patchingTheSteeringLeavesTheRestOfTheFileAlone();
     void theMechanismSurvivesAWriteAndAReadBack();
     void aTemplateWithoutAMechanismStillLoads();
+
+    void aLiteralPartIsDrawnOnceThroughTheNamesItGives();
+    void aLiteralPartThatLostAPointSaysSo();
+    void aPartIsAddedWithoutDisturbingTheFile();
+    void aPartIsRemovedWithoutDisturbingTheFile();
+    void aPartIsRelabelledWithoutDisturbingTheFile();
+    void aNewPartsIdIsMadeFromItsLabel();
 };
 
 void TestLinkage::theBuiltInTemplateIsReadable()
@@ -454,6 +461,207 @@ void TestLinkage::patchingTheSteeringLeavesTheRestOfTheFileAlone()
                  .at(0)
                  .toObject()
                  .contains(QStringLiteral("steering")));
+}
+
+namespace {
+
+/// A hand-written template of the shape the patch tests edit: notes, a key
+/// this version does not know, two parts in the file's own layout.
+const QByteArray kHandWritten = R"({
+    "format": "suspkin-linkage-template",
+    "formatVersion": 1,
+    "name": "somebody's own template",
+    "notes": ["hand written, do not lose me"],
+    "somethingFromTheFuture": { "keep": "me" },
+    "corners": [ { "token": "F", "label": "Front" } ],
+    "parts": [
+        { "id": "tieRod", "label": "{corner} tie rod", "kind": "link", "points": ["{corner}_TieRod_I", "{corner}_TieRod_O"] },
+        {
+            "id": "pushRod",
+            "label": "{corner} pushrod",
+            "kind": "link",
+            "points": ["{corner}_PushRod_O", "{corner}_PushRod_I"]
+        }
+    ]
+})";
+
+PartTemplate literalPart()
+{
+    PartTemplate part;
+    part.id = QStringLiteral("cameraMount");
+    part.label = QStringLiteral("Camera mount");
+    part.kind = PartKind::Other;
+    part.perCorner = false;
+    ChainTemplate chain;
+    chain.points = { QStringLiteral("F_LCA_O"), QStringLiteral("F_UCA_O"),
+                     QStringLiteral("F_WheelCenter") };
+    chain.closed = true;
+    part.chains.push_back(chain);
+    return part;
+}
+
+} // namespace
+
+void TestLinkage::aLiteralPartIsDrawnOnceThroughTheNamesItGives()
+{
+    LinkageTemplate templ = builtinLinkageTemplate();
+    templ.parts.push_back(literalPart());
+
+    // Both corners and both sides are in the table, so a per-corner part would
+    // come out four times. This one names its points outright.
+    QStringList names = frontCornerNames();
+    for (const QString& name : frontCornerNames()) {
+        QString rear = name;
+        rear.replace(0, 1, QLatin1Char('R'));
+        names << rear << name + QStringLiteral("_M") << rear + QStringLiteral("_M");
+    }
+    const HardpointTable table = tableOf(names);
+    const Linkage linkage = buildLinkage(templ, table, suffixMirror());
+
+    int copies = 0;
+    for (const LinkagePart& part : linkage.parts)
+        if (part.id.startsWith(QStringLiteral("cameraMount@"))) ++copies;
+    QCOMPARE(copies, 1);
+
+    const LinkagePart* part = findPart(linkage, QStringLiteral("cameraMount@literal"));
+    QVERIFY(part);
+    QCOMPARE(part->label, QStringLiteral("Camera mount"));
+    QCOMPARE(part->chains.size(), std::size_t(1));
+    QVERIFY(part->chains.front().closed);
+    QCOMPARE(part->chains.front().points,
+             (std::vector<int>{ table.indexOf(QStringLiteral("F_LCA_O")),
+                                table.indexOf(QStringLiteral("F_UCA_O")),
+                                table.indexOf(QStringLiteral("F_WheelCenter")) }));
+
+    // It survives the file, which is where it lives.
+    const LinkageTemplateLoadResult reread =
+        readLinkageTemplate(writeLinkageTemplate(templ), QStringLiteral("round trip"));
+    QVERIFY2(reread.ok(), qPrintable(reread.error));
+    QVERIFY(!reread.templ->parts.back().perCorner);
+    // A template's own parts say nothing and stay per corner.
+    QVERIFY(reread.templ->parts.front().perCorner);
+    const QJsonArray written = QJsonDocument::fromJson(writeLinkageTemplate(builtinLinkageTemplate()))
+                                   .object()
+                                   .value(QStringLiteral("parts"))
+                                   .toArray();
+    for (const QJsonValue& value : written)
+        QVERIFY(!value.toObject().contains(QStringLiteral("perCorner")));
+}
+
+void TestLinkage::aLiteralPartThatLostAPointSaysSo()
+{
+    LinkageTemplate templ = builtinLinkageTemplate();
+    templ.parts.push_back(literalPart());
+
+    // One corner, one side -- the silence that covers an axle not on the car
+    // does not cover a part that belongs to no axle.
+    QStringList names = frontCornerNames();
+    names.removeAll(QStringLiteral("F_WheelCenter"));
+    const Linkage linkage = buildLinkage(templ, tableOf(names), suffixMirror());
+
+    bool warned = false;
+    for (const QString& warning : linkage.warnings)
+        warned |= warning.startsWith(QStringLiteral("Camera mount")) &&
+                  warning.contains(QStringLiteral("F_WheelCenter"));
+    QVERIFY(warned);
+    // What is left of it is still drawn, open now that a point is gone.
+    const LinkagePart* part = findPart(linkage, QStringLiteral("cameraMount@literal"));
+    QVERIFY(part);
+    QVERIFY(!part->chains.front().closed);
+}
+
+void TestLinkage::aPartIsAddedWithoutDisturbingTheFile()
+{
+    QString error;
+    const QByteArray after = addTemplatePart(kHandWritten, literalPart(), &error);
+    QVERIFY2(!after.isEmpty(), qPrintable(error));
+
+    // Everything that was there is there byte for byte, in the order it was.
+    QVERIFY(after.startsWith(kHandWritten.left(kHandWritten.indexOf("\"pushRod\""))));
+    QVERIFY(after.contains(R"("somethingFromTheFuture": { "keep": "me" })"));
+    QVERIFY(after.contains(R"({ "id": "tieRod", "label": "{corner} tie rod", "kind": "link", )"
+                           R"("points": ["{corner}_TieRod_I", "{corner}_TieRod_O"] })"));
+    // And the new part is written the way the file's own are, after them.
+    QVERIFY(after.indexOf("\"cameraMount\"") > after.indexOf("\"pushRod\""));
+    QVERIFY(after.contains("\n        {\n            \"id\": \"cameraMount\",\n"));
+    QVERIFY(after.contains("\"perCorner\": false"));
+
+    const LinkageTemplateLoadResult reread = readLinkageTemplate(after, QStringLiteral("added"));
+    QVERIFY2(reread.ok(), qPrintable(reread.error));
+    QCOMPARE(reread.templ->parts.size(), std::size_t(3));
+    const PartTemplate& part = reread.templ->parts.back();
+    QCOMPARE(part.id, QStringLiteral("cameraMount"));
+    QCOMPARE(part.label, QStringLiteral("Camera mount"));
+    QVERIFY(!part.perCorner);
+    QVERIFY(part.chains.front().closed);
+    QCOMPARE(part.chains.front().points.size(), 3);
+
+    // The same id twice is two parts under one key, and is refused.
+    QVERIFY(addTemplatePart(after, literalPart(), &error).isEmpty());
+    QVERIFY(!error.isEmpty());
+}
+
+void TestLinkage::aPartIsRemovedWithoutDisturbingTheFile()
+{
+    QString error;
+    // The first of two, so the comma after it has to go with it.
+    const QByteArray withoutFirst = removeTemplatePart(kHandWritten, QStringLiteral("tieRod"), &error);
+    QVERIFY2(!withoutFirst.isEmpty(), qPrintable(error));
+    QVERIFY(!withoutFirst.contains("tieRod"));
+    QVERIFY(withoutFirst.contains("\"id\": \"pushRod\",\n"));
+    QVERIFY(withoutFirst.contains(R"("notes": ["hand written, do not lose me"])"));
+
+    // The last of two, so the comma before it goes.
+    const QByteArray withoutLast = removeTemplatePart(kHandWritten, QStringLiteral("pushRod"), &error);
+    QVERIFY2(!withoutLast.isEmpty(), qPrintable(error));
+    QVERIFY(!withoutLast.contains("pushRod"));
+    QVERIFY(withoutLast.contains(R"("{corner}_TieRod_O"] }
+    ])"));
+
+    for (const QByteArray& patched : { withoutFirst, withoutLast }) {
+        const LinkageTemplateLoadResult reread = readLinkageTemplate(patched, QStringLiteral("removed"));
+        QVERIFY2(reread.ok(), qPrintable(reread.error));
+        QCOMPARE(reread.templ->parts.size(), std::size_t(1));
+    }
+
+    QVERIFY(removeTemplatePart(kHandWritten, QStringLiteral("nothing"), &error).isEmpty());
+}
+
+void TestLinkage::aPartIsRelabelledWithoutDisturbingTheFile()
+{
+    QString error;
+    const QByteArray after = setTemplatePartLabel(kHandWritten, QStringLiteral("pushRod"),
+                                                  QStringLiteral("{corner} \"push\" rod"), &error);
+    QVERIFY2(!after.isEmpty(), qPrintable(error));
+    // The one value, escaped, and nothing around it moved.
+    QVERIFY(after.contains(R"("label": "{corner} \"push\" rod",)"));
+    QCOMPARE(after.size() - kHandWritten.size(),
+             qsizetype(QByteArray(R"({corner} \"push\" rod)").size())
+                 - qsizetype(QByteArray("{corner} pushrod").size()));
+
+    const LinkageTemplateLoadResult reread = readLinkageTemplate(after, QStringLiteral("relabelled"));
+    QVERIFY2(reread.ok(), qPrintable(reread.error));
+    QCOMPARE(reread.templ->parts.back().label, QStringLiteral("{corner} \"push\" rod"));
+    // The id is the key, and a label is only what is read.
+    QCOMPARE(reread.templ->parts.back().id, QStringLiteral("pushRod"));
+
+    // A part that had no label gets one next to its id.
+    const QByteArray unlabelled = R"({"format": "suspkin-linkage-template",
+        "parts": [ { "id": "link", "points": ["A", "B"] } ]})";
+    const QByteArray labelled =
+        setTemplatePartLabel(unlabelled, QStringLiteral("link"), QStringLiteral("Link"), &error);
+    QVERIFY(labelled.contains(R"({ "id": "link", "label": "Link", "points": ["A", "B"] })"));
+}
+
+void TestLinkage::aNewPartsIdIsMadeFromItsLabel()
+{
+    LinkageTemplate templ = builtinLinkageTemplate();
+    QCOMPARE(uniquePartId(templ, QStringLiteral("Camera mount, left")),
+             QStringLiteral("cameraMountLeft"));
+    // Taken ids are numbered on rather than reused.
+    QCOMPARE(uniquePartId(templ, QStringLiteral("Tie rod")), QStringLiteral("tieRod2"));
+    QCOMPARE(uniquePartId(templ, QStringLiteral("3rd link")), QStringLiteral("part3rdLink"));
+    QCOMPARE(uniquePartId(templ, QStringLiteral("  ")), QStringLiteral("part"));
 }
 
 void TestLinkage::theMechanismSurvivesAWriteAndAReadBack()

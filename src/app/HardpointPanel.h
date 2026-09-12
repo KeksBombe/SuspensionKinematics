@@ -44,13 +44,20 @@ public:
 
     QSize sizeHint() const override;
 
+    /// The selected model rows, and the one the selection is centred on.
+    QList<int> selectedRows() const;
+
 public slots:
     /// Select @p row, or clear the selection when it is negative.
     void setSelectedRow(int row);
+    /// Select every model row in @p rows, with @p current the one the cursor
+    /// is on. Rows an active filter hides are left out rather than shown.
+    void setSelectedRows(const QList<int>& rows, int current);
 
 signals:
-    /// The selected model row, or -1 when nothing is selected.
-    void rowSelected(int row);
+    /// The user changed the selection in the table: every selected model row,
+    /// and the one the cursor is on (-1 when there is none).
+    void selectionChanged(const QList<int>& rows, int current);
 
 protected:
     /// The table's colours are derived from the palette, so it follows the
@@ -65,6 +72,9 @@ private:
     void updateStatusLine();
     void showRejection(int row, const QString& reason);
     int currentModelRow() const;
+    /// Tell whoever listens what the table's selection is now, unless it is
+    /// being set from outside.
+    void announceSelection();
 
     HardpointModel* m_model = nullptr;
     QSortFilterProxyModel* m_proxy = nullptr;

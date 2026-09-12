@@ -138,7 +138,8 @@ SweepSpec SweepSettings::specFor(SweepKind kind) const
 
 AxleSolver AxleSolver::build(const MechanismTemplate& mechanism, const CornerSpec& corner,
                              const HardpointTable& table, const MirrorSpec& mirror,
-                             bool steeringDeclared)
+                             bool steeringDeclared,
+                             const std::optional<StaticAlignment>& alignment)
 {
     AxleSolver axle;
     axle.m_token = corner.token;
@@ -182,7 +183,7 @@ AxleSolver AxleSolver::build(const MechanismTemplate& mechanism, const CornerSpe
         if (coverage.absent) continue;
 
         QString error;
-        std::optional<CornerSolver> solver = CornerSolver::bind(named, table, &error);
+        std::optional<CornerSolver> solver = CornerSolver::bind(named, table, &error, alignment);
         if (!solver) {
             axle.m_warnings << tr("%1 %2: %3")
                                    .arg(axle.m_label,
@@ -238,6 +239,79 @@ bool AxleSolver::isSteered() const
     return (m_left && m_left->isSteered()) || (m_right && m_right->isSteered());
 }
 
+namespace {
+
+/// Where the ground is under an axle at design, and how far along the car the
+/// axle is: the mean of its contact patches, or the one it has. False for an
+/// axle with neither side.
+bool axleFootprint(const AxleSolver& axle, double* x, double* ground)
+{
+    double sumX = 0.0;
+    double sumZ = 0.0;
+    int count = 0;
+    for (const std::optional<CornerSolver>* side : { &axle.left(), &axle.right() }) {
+        if (!*side) continue;
+        const Vec3& patch = (*side)->designPose().contactPatch;
+        sumX += patch.x;
+        sumZ += patch.z;
+        ++count;
+    }
+    if (count == 0) return false;
+    *x = sumX / count;
+    *ground = sumZ / count;
+    return true;
+}
+
+/// Where an axle stands fore and aft, which is all Ackermann asks of it.
+bool axleStation(const AxleSolver& axle, double* x)
+{
+    double ground = 0.0;
+    return axleFootprint(axle, x, &ground);
+}
+
+/// Below this the inner wheel is taken as pointing straight ahead. Both halves
+/// of the Ackermann ratio shrink with the square of the steer angle, so this is
+/// where the ratio stops being about the car.
+constexpr double kMinAckermannSteerDeg = 0.1;
+
+} // namespace
+
+void assignWheelbases(std::vector<AxleSolver>& axles)
+{
+    // Farthest rather than "the one without a rack": a turn is centred on the
+    // line of the axle that does not steer, but a template that says nothing
+    // about steering has every axle steered, and on a two-axle car the answer
+    // is the other axle either way.
+    for (AxleSolver& axle : axles) {
+        double wheelbase = 0.0;
+        double here = 0.0;
+        if (axleStation(axle, &here)) {
+            for (const AxleSolver& other : axles) {
+                double there = 0.0;
+                if (&other == &axle || !axleStation(other, &there)) continue;
+                wheelbase = std::max(wheelbase, std::abs(here - there));
+            }
+        }
+        axle.setWheelbase(wheelbase);
+    }
+}
+
+bool ackermannPercent(double innerDeg, double outerDeg, double wheelbase, double track,
+                      double* percent)
+{
+    if (!(wheelbase > 0.0) || !(track > 0.0) || !(innerDeg >= kMinAckermannSteerDeg))
+        return false;
+    const double inner = innerDeg * kDegToRad;
+    // cot(idealOuter) = cot(inner) + track / wheelbase, written with a sine and
+    // a cosine so it does not go through a tangent that is infinite at ninety.
+    const double idealOuter =
+        std::atan2(std::sin(inner), std::cos(inner) + track / wheelbase * std::sin(inner));
+    const double idealDifference = inner - idealOuter;
+    if (!(idealDifference > 0.0)) return false;
+    *percent = 100.0 * (inner - outerDeg * kDegToRad) / idealDifference;
+    return true;
+}
+
 const AxleSample* SweepResult::nearest(double input) const
 {
     const AxleSample* best = nullptr;
@@ -266,9 +340,18 @@ CornerPose poseFor(const CornerSolver& solver, SweepKind kind, double input, dou
         // and each contact patch sits at a new height on it. Positive roll is a
         // right-hand rotation about x, which drops the left-hand contact patch
         // and so puts the left wheel into droop.
+        const double angle = input * kDegToRad;
         const double y = solver.designPose().contactPatch.y;
-        return solver.poseAtContactPatchRise(-y * std::tan(input * kDegToRad), rackTravel,
-                                             previous);
+        CornerPose pose =
+            solver.poseAtContactPatchRise(-y * std::tan(angle), rackTravel, previous);
+        // That tilted ground is z = -y tan(roll), whose upward normal is this.
+        // Camber against it is what the tyre sees, and what a picture of the
+        // car rolled on a level road shows; camber against the body is what
+        // the suspension did, and the two part by the whole roll angle.
+        const Vec3 up(0.0, std::sin(angle), std::cos(angle));
+        pose.camberToGround =
+            -std::asin(std::clamp(dot(pose.spinAxis, up), -1.0, 1.0)) * kRadToDeg;
+        return pose;
     }
     case SweepKind::Steer:
         return solver.poseAtWheelTravel(0.0, input, previous);
@@ -324,36 +407,48 @@ void computeRollCentre(AxleSample* sample)
     }
 }
 
-/// Damper millimetres per wheel millimetre, by central difference against the
-/// neighbouring samples. Differentiating the curve rather than the mechanism
-/// keeps it honest about what was actually solved.
+void computeAckermann(AxleSample* sample, const AxleSolver& axle, SweepKind kind)
+{
+    sample->ackermannValid = false;
+    // Only a steer sweep turns the wheels by the rack alone. Toe also changes
+    // over a bump, but a percentage read off bump steer is not a number anybody
+    // designs to.
+    if (kind != SweepKind::Steer || !axle.hasBothSides()) return;
+    if (!sample->left.valid || !sample->right.valid) return;
+
+    // Each wheel's steer angle, positive to the left. A steer sweep runs at
+    // design ride height with the design pose as rack centre, so this is the
+    // toe change with the sign each side reads toe in taken out: toe-in points
+    // a left wheel to the right and a right wheel to the left.
+    const double left = -sample->left.toeChange;
+    const double right = sample->right.toeChange;
+
+    // The inner wheel is the one on the side the car turns towards, which is
+    // not necessarily the one turned furthest -- that is the whole question.
+    const bool turningLeft = left + right > 0.0;
+    const double inner = turningLeft ? left : -right;
+    const double outer = turningLeft ? right : -left;
+    const double track =
+        axle.left()->designPose().contactPatch.y - axle.right()->designPose().contactPatch.y;
+    sample->ackermannValid =
+        ackermannPercent(inner, outer, axle.wheelbase(), track, &sample->ackermann);
+}
+
+/// Millimetres the damper closes per millimetre the wheel rises, by central
+/// difference against the neighbouring samples. Differentiating the curve
+/// rather than the mechanism keeps it honest about what was actually solved.
+///
+/// Compression per bump, so a damper that bump compresses -- which is every
+/// damper that does its job -- reads positive, the way a motion ratio is quoted.
+/// This was the length change per bump until 2026-09-12, which is the same
+/// number with the sign turned round: a car whose damper closes a millimetre
+/// for every millimetre of wheel travel read -1.
 double installationRatio(const CornerPose& before, const CornerPose& after)
 {
     if (!before.valid || !after.valid || !before.hasDamper || !after.hasDamper) return 0.0;
     const double travel = after.wheelTravel - before.wheelTravel;
     if (std::abs(travel) < 1e-9) return 0.0;
-    return (after.damperTravel - before.damperTravel) / travel;
-}
-
-/// Where the ground is under an axle at design, and how far along the car the
-/// axle is: the mean of its contact patches. False for an axle with no side that
-/// assembled.
-bool axleFootprint(const AxleSolver& axle, double* x, double* ground)
-{
-    double sumX = 0.0;
-    double sumZ = 0.0;
-    int count = 0;
-    for (const std::optional<CornerSolver>* side : { &axle.left(), &axle.right() }) {
-        if (!*side) continue;
-        const Vec3& patch = (*side)->designPose().contactPatch;
-        sumX += patch.x;
-        sumZ += patch.z;
-        ++count;
-    }
-    if (count == 0) return false;
-    *x = sumX / count;
-    *ground = sumZ / count;
-    return true;
+    return (before.damperLength - after.damperLength) / travel;
 }
 
 } // namespace
@@ -444,6 +539,7 @@ AxleSample sampleAxleAt(const AxleSolver& axle, SweepKind kind, double input,
     if (axle.left()) sample.left = poseFor(*axle.left(), kind, input, rackTravel, nullptr);
     if (axle.right()) sample.right = poseFor(*axle.right(), kind, input, rackTravel, nullptr);
     computeRollCentre(&sample);
+    computeAckermann(&sample, axle, kind);
 
     // Half a millimetre, or a hundredth of a degree of roll: small enough to be
     // a derivative, large enough not to be noise off the root finder.
@@ -480,7 +576,7 @@ SweepResult runSweep(const AxleSolver& axle, const SweepSpec& spec)
     // steer", which is a claim about the car rather than about the model.
     if (spec.kind == SweepKind::Steer && !axle.isSteered()) {
         result.warnings << tr("%1 has no steering: the linkage template names no hardpoint for "
-                              "its rack to drive. Parts > Steering names one.")
+                              "its rack to drive. Linkage > Steering Rack names one.")
                                .arg(result.axleLabel);
         return result;
     }
@@ -526,6 +622,7 @@ SweepResult runSweep(const AxleSolver& axle, const SweepSpec& spec)
     for (int i = 0; i < steps; ++i) {
         AxleSample& sample = result.samples[static_cast<std::size_t>(i)];
         computeRollCentre(&sample);
+        computeAckermann(&sample, axle, bounded.kind);
 
         const int before = std::max(0, i - 1);
         const int after = std::min(steps - 1, i + 1);
@@ -565,14 +662,15 @@ SweepResult runSweep(const AxleSolver& axle, const SweepSpec& spec)
 const std::vector<SweepMeasure>& sweepMeasures()
 {
     static const std::vector<SweepMeasure> all = {
-        SweepMeasure::Camber,           SweepMeasure::Toe,
+        SweepMeasure::Camber,           SweepMeasure::CamberToGround,
+        SweepMeasure::Toe,
         SweepMeasure::WheelTravel,      SweepMeasure::Caster,
         SweepMeasure::KingpinInclination, SweepMeasure::ScrubRadius,
         SweepMeasure::MechanicalTrail,  SweepMeasure::HalfTrackChange,
         SweepMeasure::WheelbaseChange,  SweepMeasure::DamperTravel,
         SweepMeasure::DamperLength,     SweepMeasure::InstallationRatio,
         SweepMeasure::RollCentreHeight, SweepMeasure::RollCentreLateral,
-        SweepMeasure::AntiRollTwist,
+        SweepMeasure::AntiRollTwist,    SweepMeasure::Ackermann,
     };
     return all;
 }
@@ -582,6 +680,7 @@ QString sweepMeasureLabel(SweepMeasure measure)
     switch (measure) {
     case SweepMeasure::WheelTravel: return tr("Wheel travel");
     case SweepMeasure::Camber: return tr("Camber");
+    case SweepMeasure::CamberToGround: return tr("Camber to ground");
     case SweepMeasure::Toe: return tr("Toe");
     case SweepMeasure::Caster: return tr("Caster");
     case SweepMeasure::KingpinInclination: return tr("Kingpin inclination");
@@ -595,6 +694,7 @@ QString sweepMeasureLabel(SweepMeasure measure)
     case SweepMeasure::RollCentreHeight: return tr("Roll centre height");
     case SweepMeasure::RollCentreLateral: return tr("Roll centre offset");
     case SweepMeasure::AntiRollTwist: return tr("Anti-roll bar twist");
+    case SweepMeasure::Ackermann: return tr("Ackermann");
     }
     return QString();
 }
@@ -603,11 +703,13 @@ QString sweepMeasureUnit(SweepMeasure measure)
 {
     switch (measure) {
     case SweepMeasure::Camber:
+    case SweepMeasure::CamberToGround:
     case SweepMeasure::Toe:
     case SweepMeasure::Caster:
     case SweepMeasure::KingpinInclination:
     case SweepMeasure::AntiRollTwist: return QStringLiteral("deg");
     case SweepMeasure::InstallationRatio: return QStringLiteral("mm/mm");
+    case SweepMeasure::Ackermann: return QStringLiteral("%");
     default: break;
     }
     return QStringLiteral("mm");
@@ -618,6 +720,7 @@ QString sweepMeasureKey(SweepMeasure measure)
     switch (measure) {
     case SweepMeasure::WheelTravel: return QStringLiteral("wheelTravel");
     case SweepMeasure::Camber: return QStringLiteral("camber");
+    case SweepMeasure::CamberToGround: return QStringLiteral("camberToGround");
     case SweepMeasure::Toe: return QStringLiteral("toe");
     case SweepMeasure::Caster: return QStringLiteral("caster");
     case SweepMeasure::KingpinInclination: return QStringLiteral("kingpinInclination");
@@ -631,6 +734,7 @@ QString sweepMeasureKey(SweepMeasure measure)
     case SweepMeasure::RollCentreHeight: return QStringLiteral("rollCentreHeight");
     case SweepMeasure::RollCentreLateral: return QStringLiteral("rollCentreLateral");
     case SweepMeasure::AntiRollTwist: return QStringLiteral("antiRollTwist");
+    case SweepMeasure::Ackermann: return QStringLiteral("ackermann");
     }
     return QString();
 }
@@ -647,10 +751,46 @@ bool sweepMeasureIsPerSide(SweepMeasure measure)
     switch (measure) {
     case SweepMeasure::RollCentreHeight:
     case SweepMeasure::RollCentreLateral:
-    case SweepMeasure::AntiRollTwist: return false;
+    case SweepMeasure::AntiRollTwist:
+    case SweepMeasure::Ackermann: return false;
     default: break;
     }
     return true;
+}
+
+QString sweepSidesToString(SweepSides sides)
+{
+    switch (sides) {
+    case SweepSides::Both: return QStringLiteral("both");
+    case SweepSides::Left: return QStringLiteral("left");
+    case SweepSides::Right: return QStringLiteral("right");
+    }
+    return QStringLiteral("both");
+}
+
+SweepSides sweepSidesFromString(const QString& text, SweepSides fallback)
+{
+    if (text == QLatin1String("both")) return SweepSides::Both;
+    if (text == QLatin1String("left")) return SweepSides::Left;
+    if (text == QLatin1String("right")) return SweepSides::Right;
+    return fallback;
+}
+
+double sweepMeasureResolution(SweepMeasure measure)
+{
+    // By unit, because what is too small to matter is a matter of the unit: a
+    // tenth of a millimetre is below anything a suspension is built to, while
+    // a hundredth of a degree of toe is still bump steer somebody designs out.
+    const QString unit = sweepMeasureUnit(measure);
+    if (unit == QLatin1String("deg")) return 0.01;
+    if (unit == QLatin1String("mm/mm")) return 0.001;
+    return 0.1; // millimetres, and percent Ackermann
+}
+
+QString sweepValueText(double value)
+{
+    if (std::abs(value) < 0.0005) value = 0.0;
+    return QString::number(value, 'f', 3);
 }
 
 bool sweepMeasureValue(const AxleSample& sample, SweepMeasure measure, bool leftSide,
@@ -669,6 +809,10 @@ bool sweepMeasureValue(const AxleSample& sample, SweepMeasure measure, bool left
         if (!sample.hasAntiRoll) return false;
         *value = sample.antiRollTwist;
         return true;
+    case SweepMeasure::Ackermann:
+        if (!sample.ackermannValid) return false;
+        *value = sample.ackermann;
+        return true;
     default: break;
     }
 
@@ -678,6 +822,7 @@ bool sweepMeasureValue(const AxleSample& sample, SweepMeasure measure, bool left
     switch (measure) {
     case SweepMeasure::WheelTravel: *value = pose.wheelTravel; return true;
     case SweepMeasure::Camber: *value = pose.camber; return true;
+    case SweepMeasure::CamberToGround: *value = pose.camberToGround; return true;
     case SweepMeasure::Toe: *value = pose.toe; return true;
     case SweepMeasure::Caster: *value = pose.caster; return true;
     case SweepMeasure::KingpinInclination: *value = pose.kingpinInclination; return true;
@@ -712,6 +857,7 @@ QByteArray sweepToCsv(const SweepResult& result)
         const QByteArray s = QByteArray(side);
         csv += ",travel_" + s + " [mm]";
         csv += ",camber_" + s + " [deg]";
+        csv += ",camber_to_ground_" + s + " [deg]";
         csv += ",toe_" + s + " [deg]";
         csv += ",caster_" + s + " [deg]";
         csv += ",kpi_" + s + " [deg]";
@@ -723,7 +869,8 @@ QByteArray sweepToCsv(const SweepResult& result)
         csv += ",damper_travel_" + s + " [mm]";
         csv += ",installation_ratio_" + s + " [mm/mm]";
     }
-    csv += ",roll_centre_height [mm],roll_centre_lateral [mm],anti_roll_twist [deg]\n";
+    csv += ",roll_centre_height [mm],roll_centre_lateral [mm],anti_roll_twist [deg]"
+           ",ackermann [%]\n";
 
     for (const AxleSample& sample : result.samples) {
         csv += field(sample.input);
@@ -732,14 +879,15 @@ QByteArray sweepToCsv(const SweepResult& result)
             const double ratio = side == 0 ? sample.leftInstallationRatio
                                            : sample.rightInstallationRatio;
             if (!pose.valid) {
-                // Twelve empty fields rather than twelve zeros: a position that
-                // did not assemble has no camber, and plotting one as zero would
-                // put a spike in the middle of an otherwise honest curve.
-                csv += QByteArray(",,,,,,,,,,,,");
+                // Empty fields rather than zeros: a position that did not
+                // assemble has no camber, and plotting one as zero would put a
+                // spike in the middle of an otherwise honest curve.
+                csv += QByteArray(",,,,,,,,,,,,,");
                 continue;
             }
             csv += "," + field(pose.wheelTravel);
             csv += "," + field(pose.camber);
+            csv += "," + field(pose.camberToGround);
             csv += "," + field(pose.toe);
             csv += "," + field(pose.caster);
             csv += "," + field(pose.kingpinInclination);
@@ -756,6 +904,7 @@ QByteArray sweepToCsv(const SweepResult& result)
         else
             csv += ",,";
         csv += sample.hasAntiRoll ? "," + field(sample.antiRollTwist) : QByteArray(",");
+        csv += sample.ackermannValid ? "," + field(sample.ackermann) : QByteArray(",");
         csv += "\n";
     }
     return csv;

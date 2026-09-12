@@ -28,15 +28,15 @@ class WheelDialog : public QDialog {
 
 public:
     /// @p table is what the corner lists are filled from, @p spec seeds the
-    /// controls with whatever the project last used, @p wheelPath and @p rimPath
+    /// controls with whatever the project last used, @p tyrePath and @p rimPath
     /// are the models it already holds, and @p browseDirectory is where the file
     /// dialog starts when there is nothing better to go on.
-    WheelDialog(const HardpointTable& table, const WheelSpec& spec, const QString& wheelPath,
+    WheelDialog(const HardpointTable& table, const WheelSpec& spec, const QString& tyrePath,
                 const QString& rimPath, const QString& browseDirectory,
                 QWidget* parent = nullptr);
 
     WheelSpec spec() const;
-    QString wheelPath() const;
+    QString tyrePath() const;
     QString rimPath() const;
 
 private:
@@ -51,7 +51,7 @@ private:
     QString m_browseDirectory;
 
     std::array<QComboBox*, kWheelCornerCount> m_corners{};
-    QLineEdit* m_wheelPath = nullptr;
+    QLineEdit* m_tyrePath = nullptr;
     QLineEdit* m_rimPath = nullptr;
     QComboBox* m_modelSide = nullptr;
     QCheckBox* m_alignToCenter = nullptr;

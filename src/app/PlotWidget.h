@@ -11,6 +11,9 @@ namespace suspkin {
 /// Painted with QPainter rather than pulled in from Qt Charts: charts is a whole
 /// extra Qt module to find, build and deploy on both platforms, and what is
 /// needed here is two polylines, an axis pair and a marker.
+///
+/// Its colours come from the palette, the way the hardpoint table's do, so it
+/// reads the same on a light desktop and a dark one.
 class PlotWidget : public QWidget {
     Q_OBJECT
 
@@ -21,9 +24,20 @@ public:
     void setMeasure(SweepMeasure measure);
     SweepMeasure measure() const { return m_measure; }
 
+    /// Which wheels to draw, for a measure that has one curve per wheel. A
+    /// measure of the whole axle -- the roll centre, Ackermann -- is one curve
+    /// whatever this says.
+    void setSides(SweepSides sides);
+    SweepSides sides() const { return m_sides; }
+
     /// Where the model is standing right now, drawn as a vertical line so the
     /// viewport and the curve always agree about where you are.
     void setMarker(double input);
+
+    /// Where the pointer is over another plot of the same sweep, so every plot
+    /// on screen reads out the same position at once. @p hovering false puts
+    /// the readout back on the marker.
+    void setHover(double input, bool hovering);
 
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
@@ -31,6 +45,8 @@ public:
 signals:
     /// The user clicked or dragged in the plot: they want to be at this input.
     void markerMoved(double input);
+    /// The pointer moved over the plot, or left it.
+    void hoverMoved(double input, bool hovering);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -44,6 +60,7 @@ private:
         QList<QPointF> points;
         QColor color;
         QString label;
+        bool left = true; ///< which side's value the readout asks for
     };
 
     void rebuild();
@@ -57,6 +74,7 @@ private:
 
     SweepResult m_result;
     SweepMeasure m_measure = SweepMeasure::Camber;
+    SweepSides m_sides = SweepSides::Both;
     QList<Series> m_series;
 
     double m_xMin = -1.0;

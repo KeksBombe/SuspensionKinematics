@@ -187,8 +187,9 @@ void ViewportWidget::setHardpoints(const HardpointTable& table)
         m_hardpointBounds.expand(position);
     }
 
-    // Both indices refer to the previous set, so neither survives a reload.
+    // Every index refers to the previous set, so none survives a reload.
     m_selectedPoint = -1;
+    m_selection.clear();
     m_hoveredPoint = -1;
     m_pointsUploadPending = true;
     // The linkage is indices into the table too, and the one it was built from
@@ -357,9 +358,20 @@ void ViewportWidget::setHardpointLabelsVisible(bool visible)
 
 void ViewportWidget::setSelectedHardpoint(int index)
 {
-    const int clamped = (index >= 0 && index < static_cast<int>(m_hardpoints.size())) ? index : -1;
-    if (m_selectedPoint == clamped) return;
-    m_selectedPoint = clamped;
+    setSelectedHardpoints(index >= 0 ? QList<int>{ index } : QList<int>{}, index);
+}
+
+void ViewportWidget::setSelectedHardpoints(const QList<int>& selection, int current)
+{
+    const int count = static_cast<int>(m_hardpoints.size());
+    QList<int> kept;
+    for (const int index : selection)
+        if (index >= 0 && index < count && !kept.contains(index)) kept.append(index);
+    const int centred = kept.contains(current) ? current : (kept.isEmpty() ? -1 : kept.last());
+
+    if (kept == m_selection && centred == m_selectedPoint) return;
+    m_selection = kept;
+    m_selectedPoint = centred;
     update();
     emit viewChanged();
 }
@@ -710,10 +722,9 @@ void ViewportWidget::renderHardpoints(const QMatrix4x4& mvp)
         };
 
         drawMarker(-1, kPointColor, kPointSizePx);
-        if (m_hoveredPoint >= 0 && m_hoveredPoint != m_selectedPoint)
+        if (m_hoveredPoint >= 0 && !m_selection.contains(m_hoveredPoint))
             drawMarker(m_hoveredPoint, kHoverColor, kHighlightSizePx);
-        if (m_selectedPoint >= 0)
-            drawMarker(m_selectedPoint, kSelectedColor, kHighlightSizePx);
+        for (const int index : m_selection) drawMarker(index, kSelectedColor, kHighlightSizePx);
     }
 
     m_pointProgram->release();
@@ -773,7 +784,7 @@ std::vector<ViewportWidget::Label> ViewportWidget::layoutLabels() const
     if (m_hardpoints.empty()) return labels;
     // With labels switched off the hovered and selected points still get one --
     // otherwise there is no way to find out what you are pointing at.
-    if (!m_labelsVisible && m_selectedPoint < 0 && m_hoveredPoint < 0) return labels;
+    if (!m_labelsVisible && m_selection.isEmpty() && m_hoveredPoint < 0) return labels;
 
     const QMatrix4x4 viewProjection = m_camera.projectionMatrix(aspect()) * m_camera.viewMatrix();
     const QFontMetricsF metrics(font());
@@ -790,7 +801,7 @@ std::vector<ViewportWidget::Label> ViewportWidget::layoutLabels() const
 
     for (std::size_t i = 0; i < m_hardpoints.size(); ++i) {
         const int index = static_cast<int>(i);
-        const bool pinned = (index == m_selectedPoint || index == m_hoveredPoint);
+        const bool pinned = (m_selection.contains(index) || index == m_hoveredPoint);
         if (!m_labelsVisible && !pinned) continue;
 
         QPointF anchor;
@@ -862,7 +873,7 @@ QImage ViewportWidget::renderChrome(const QRectF& area, const std::vector<Label>
     painter.translate(-area.topLeft());
 
     for (const Label& label : labels) {
-        const bool selected = (label.index == m_selectedPoint);
+        const bool selected = m_selection.contains(label.index);
         const bool hovered = (label.index == m_hoveredPoint) && !selected;
         const QColor fill = selected ? kLabelFillSelected : hovered ? kLabelFillHovered : kLabelFill;
         const QColor text = selected ? kLabelTextSelected : hovered ? kLabelTextHovered : kLabelText;
@@ -995,11 +1006,29 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event)
     }
 
     // A click that did not turn into an orbit picks a marker -- or, on empty
-    // space, clears the selection.
+    // space, clears the selection. With Ctrl held it adds the marker to what is
+    // already picked, or takes it away again, which is how a chain of points is
+    // picked for a new part: in the order it is drawn.
     if (m_drag == Drag::Orbit && event->button() == Qt::LeftButton && !m_hardpoints.empty()
         && (event->position().toPoint() - m_pressPos).manhattanLength() <= kClickSlopPixels) {
-        setSelectedHardpoint(m_pressedPoint);
-        emit hardpointClicked(m_pressedPoint);
+        const bool toggling = event->modifiers() & Qt::ControlModifier;
+        QList<int> selection;
+        int current = m_pressedPoint;
+        if (toggling) {
+            selection = m_selection;
+            if (m_pressedPoint >= 0 && selection.contains(m_pressedPoint)) {
+                selection.removeAll(m_pressedPoint);
+                current = selection.isEmpty() ? -1 : selection.last();
+            } else if (m_pressedPoint >= 0) {
+                selection.append(m_pressedPoint);
+            } else {
+                current = m_selectedPoint; // Ctrl on empty space changes nothing
+            }
+        } else if (m_pressedPoint >= 0) {
+            selection = { m_pressedPoint };
+        }
+        setSelectedHardpoints(selection, current);
+        emit hardpointSelectionEdited(m_selection, m_selectedPoint);
     }
 
     m_drag = Drag::None;

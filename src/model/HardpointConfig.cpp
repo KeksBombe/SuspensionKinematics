@@ -119,6 +119,27 @@ BodyCatalog bodyCatalog(const LinkageTemplate& templ)
     return catalog;
 }
 
+QString partBodyName(const PartTemplate& part) { return genericLabel(part); }
+
+int renameBody(HardpointConfigMap& config, const QString& from, const QString& to)
+{
+    if (from.isEmpty() || from == to) return 0;
+    int changed = 0;
+    for (auto it = config.begin(); it != config.end(); ++it) {
+        bool touched = false;
+        if (it->part1 == from) {
+            it->part1 = to;
+            touched = true;
+        }
+        if (it->part2 == from) {
+            it->part2 = to;
+            touched = true;
+        }
+        if (touched) ++changed;
+    }
+    return changed;
+}
+
 std::vector<ConfigIssue> validateHardpointConfig(const HardpointConfig& config,
                                                  const BodyCatalog& catalog)
 {

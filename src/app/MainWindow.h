@@ -11,6 +11,9 @@
 #include <QMainWindow>
 #include <QString>
 
+#include <functional>
+#include <memory>
+
 class QAction;
 class QActionGroup;
 class QDockWidget;
@@ -23,6 +26,7 @@ namespace suspkin {
 class AnalysisPanel;
 class HardpointModel;
 class HardpointPanel;
+class MeshQuery;
 class UpdateChecker;
 
 /// The application window, which always has exactly one project open.
@@ -81,8 +85,18 @@ private slots:
     bool overwriteWorkbook();
     bool exportWorkbookAs();
     void closeHardpoints();
+    /// A point of the user's own, next to the selected one. In a project with
+    /// no workbook yet this is also what makes one: New Hardpoint Table.
+    void addPointDialog();
+    void deleteSelectedPoints();
+    void renamePointDialog();
+    /// The targets, the preview, and -- if the user says so -- the points.
+    void generateFromDesignDialog();
     void importLinkageTemplateDialog();
     void resetLinkageTemplate();
+    /// A part drawn through the selected points, written into the template.
+    void newPartFromSelection();
+    void editPartsDialog();
     void addWheelsDialog();
     void removeWheels();
     void exportSweepCsv();
@@ -123,6 +137,9 @@ private:
     /// Let the user say which axle the rack drives, and write it into the
     /// project's own template.
     void steeringDialog();
+    /// Let the user state each axle's static camber and toe -- or hand an axle
+    /// back to its hardpoints -- and solve again with them.
+    void staticAnglesDialog();
     /// Resolve the template against the current table and hand the result to
     /// the viewport. Cheap enough to redo whenever either one changes.
     void rebuildLinkage();
@@ -165,7 +182,7 @@ private:
     void rebuildWheels();
     /// Take what the wheel dialog came back with: import whichever models
     /// changed, drop whichever were cleared, and keep the rest.
-    void applyWheels(const WheelSpec& spec, const QString& wheelPath, const QString& rimPath);
+    void applyWheels(const WheelSpec& spec, const QString& tyrePath, const QString& rimPath);
 
     /// Note that something worth persisting changed, and schedule a save.
     void markDirty();
@@ -173,6 +190,28 @@ private:
     void applyViewState();
 
     void setHardpointTable(HardpointTable table, bool refit);
+    /// Everything that is resolved against the table, resolved again: the
+    /// markers, the parts, the solve, the wheels. The other half of
+    /// setHardpointTable(), for when the model has already been changed a row
+    /// at a time. The parts are indices into the table, so any add, delete or
+    /// rename that skipped this would draw them between the wrong points.
+    void syncTableToViewport(bool refit);
+    /// Select @p rows in the viewport and the table together.
+    void selectRows(const QList<int>& rows, int current);
+    /// Give a project with no workbook one of its own, filled with @p table,
+    /// and read it back as the baseline -- so from here on it is an ordinary
+    /// project with an ordinary workbook, not a special case.
+    bool adoptNewWorkbook(const HardpointTable& table);
+    /// Patch the project's linkage template with @p patch and read it back.
+    /// @p failure titles the message when that goes wrong.
+    bool patchLinkageTemplate(const std::function<QByteArray(const QByteArray&, QString*)>& patch,
+                              const QString& failure);
+    /// The project's geometry as something rays can be cast at, built the first
+    /// time it is asked for and dropped whenever the geometry changes.
+    const MeshQuery* chassisQuery();
+    /// The targets a project that has never opened the generator starts from:
+    /// the 2025 car, pointed at this project's own corners and side.
+    DesignParameters initialDesign() const;
     /// Stamp each point with where it was mirrored from, out of the project's
     /// own record. A workbook cannot carry that, so it is restored here after
     /// anything that comes back out of one.
@@ -214,11 +253,19 @@ private:
     QAction* m_overwriteWorkbookAction = nullptr;
     QAction* m_exportWorkbookAction = nullptr;
     QAction* m_closeHardpointsAction = nullptr;
+    QAction* m_newTableAction = nullptr;
+    QAction* m_addPointAction = nullptr;
+    QAction* m_deletePointAction = nullptr;
+    QAction* m_renamePointAction = nullptr;
+    QAction* m_generateAction = nullptr;
+    QAction* m_newPartAction = nullptr;
+    QAction* m_editPartsAction = nullptr;
     QAction* m_labelsAction = nullptr;
     QAction* m_linksAction = nullptr;
     QAction* m_importLinkageAction = nullptr;
     QAction* m_resetLinkageAction = nullptr;
     QAction* m_steeringAction = nullptr;
+    QAction* m_staticAnglesAction = nullptr;
     QAction* m_addWheelsAction = nullptr;
     QAction* m_removeWheelsAction = nullptr;
     QAction* m_wheelsAction = nullptr;
@@ -277,6 +324,11 @@ private:
     /// is a difference from this, and that difference is what the project keeps
     /// in its edits file until the workbook is overwritten or exported.
     HardpointTable m_baseline;
+
+    /// The geometry, ready for the generator to cast rays at. Built on first
+    /// use -- a million-triangle chassis takes a moment -- and reset whenever
+    /// the geometry is replaced or removed.
+    std::unique_ptr<MeshQuery> m_chassisQuery;
 
     /// Set while the project is being loaded, so restoring a saved view does not
     /// immediately look like a change the user made.

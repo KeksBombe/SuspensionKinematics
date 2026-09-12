@@ -62,8 +62,9 @@ so its normals come from the real surface and a bore shades as the cylinder it i
 | `Ctrl+1` / `Ctrl+2` | Solid / Triangles |
 | `Ctrl+N` / `Ctrl+Shift+O` | New project / Open project |
 | `Ctrl+S` | Save the project now (it also saves itself) |
-| `Ctrl+O` / `Ctrl+W` / `Ctrl+Q` | Import geometry / Remove geometry / Quit |
+| `Ctrl+O` / `Ctrl+W` / `Ctrl+Q` | Import chassis / Remove chassis / Quit |
 | Click a marker | Select that hardpoint, in the viewport and in the table |
+| `Ctrl+H` | Show or hide the hardpoint table |
 | `Ctrl+I` | Import hardpoints |
 | `Ctrl+M` | Mirror hardpoints to the other side |
 | `Ctrl+Shift+S` / `Ctrl+E` | Overwrite the workbook / Export a workbook |
@@ -94,7 +95,7 @@ Bremergy26/
   linkage/
     template.json        which parts join which hardpoints
   wheels/
-    wheel.step           a copy of the wheel model you imported
+    tyre.step            a copy of the tyre model you imported
     rim.step             and of the rim
 ```
 
@@ -136,8 +137,64 @@ The points show up in the viewport as labelled markers, drawn at a constant size
 on screen — a hardpoint is a coordinate, not an object with a size. One hidden
 behind geometry still shows through, dimmed, because that is usually the moment
 somebody goes looking for it. Labels that would collide are dropped, except for
-the one under the cursor and the one that is selected. Selecting in the table and
-selecting in the viewport are the same selection.
+the one under the cursor and the ones that are selected. Selecting in the table and
+selecting in the viewport are the same selection, and it can be more than one
+point: **Ctrl+click** in the viewport adds a point to it or takes one away, and
+Ctrl or Shift does the same in the table. The viewport keeps the order they were
+picked in, which is the order a new part is drawn through.
+
+### Making points here
+
+A point does not have to come out of a workbook.
+
+- **Hardpoints ▸ Add Point** (`Ins`) adds one next to the selected point, starting
+  at its coordinates with a name that is free.
+- **Delete Point** (`Del`) deletes every selected point, after asking. A point the
+  workbook holds stays in it until the workbook is overwritten; until then the
+  project remembers it as deleted.
+- **Rename Point**, or a double-click on the name in the table, renames one. The
+  name is the key the parts, the solver and the configuration find a point by, so
+  its configuration and anything mirrored from it go with it. A name has to be
+  free, cannot be empty, and cannot end in `_x`, `_y` or `_z`, which is how the
+  workbook marks a coordinate.
+- **New Hardpoint Table** starts a project that has no workbook at all. The
+  project gets one of its own, `hardpoints/hardpoints.xlsx`, made from a blank
+  workbook the application carries, and from then on it is an ordinary project
+  with an ordinary workbook.
+
+A new point comes back where you put it when the project reopens, rather than at
+the bottom of the table.
+
+### Generating a corner from design targets
+
+**Hardpoints ▸ Generate from Design** (`Ctrl+G`) works out the wishbones, the
+upright and the steering from vehicle targets: wheelbase and track, weight
+distribution and brake bias, loaded radius, static camber and toe, caster and
+kingpin inclination, scrub radius and trail, the roll centre and the front-view
+swing arm, anti-dive or anti-lift and the side-view swing arm, the ball joint
+heights, the planform of each wishbone leg, and the steering arm. The defaults are
+the 2025 car.
+
+The construction is ported from the team's Python geometry editor, with its bugs
+fixed: the contact patch is computed down the wheel's own plane, so camber and toe
+are real inputs; anti-dive is measured over the whole wheelbase; the side-view
+instant centre is placed off the contact patch; and each arm's plane contains its
+ball joint and both instant centres. The points are named through your linkage
+template, the far side comes from your mirror rule, and the steering is written
+into the template: an axle generated without a rack is not steered by one.
+
+Generating is one-shot. Changing a target moves nothing; the dialog shows what
+**Generate** would do first — which points arrive, which move and by how much, and
+which of your own edits would be overwritten. It also says where the fourth chassis
+pivot would have to go to share a plane with the other three and the inner tie
+rod end, which is what takes the bump steer out. That is advice; it is never
+applied for you. With geometry imported, the pivots can be put against it a
+clearance off its surface, which is worth doing when the geometry is the chassis
+on its own. The targets are kept in the project, so reopening the dialog starts
+where you left it.
+
+The rocker, pushrod inner end, damper and anti-roll bar are not generated. They
+are packaging, not a consequence of vehicle targets; place them with Add Point.
 
 ### The configuration table
 
@@ -218,13 +275,14 @@ same double, rather than as seventeen digits. Workbooks that carry a `calcPr`
 element are marked to recalculate on load, so formulas elsewhere that read these
 cells do not show stale results.
 
-Points that are not in the workbook — the ones mirroring produced — are appended
-as new rows under the table, in the same two columns it uses.
+Points that are not in the workbook — the ones mirroring produced, and the ones
+you added — are appended as new rows under the table, in the same two columns it
+uses. A point you deleted has its name and value cells emptied, and everything
+else in those rows — a unit, a note, a formula in the next column — is left
+alone. A renamed point is both: its old rows emptied, its new name appended.
 
 Coordinates are carried as doubles from the file to the viewport and back;
-only the renderer sees floats. Editing is limited to coordinates — names are the
-key the cells are addressed by, so renaming one here would either rewrite cells
-nobody looked at or quietly break the round trip.
+only the renderer sees floats.
 
 ## Parts
 
@@ -267,10 +325,19 @@ that is missing is reported once, by name, and the rest of the part is still
 drawn.
 
 A project that does not have a template gets the built-in one written into it the
-first time it opens. **Parts ▸ Import Template** takes one from anywhere (it is
+first time it opens. **Linkage ▸ Import Template** takes one from anywhere (it is
 copied in, like every other asset), **Reset to Built-in Template** puts the
 shipped one back, and **Show Template File** opens the project's copy in whatever
 edits JSON on your machine.
+
+**Linkage ▸ New Part from Selection** draws a part through the selected points, in
+the order you picked them, with a label and a kind, closed or open. It is written
+into the project's template with `"perCorner": false`: it names its points
+outright and is drawn exactly once, not repeated per corner or mirrored.
+**Edit Parts** renames or deletes the template's parts. Both edit the file in
+place — your notes, your layout and anything this version does not know about
+come out the other side untouched — and renaming a part takes the configuration
+rows that named it along.
 
 > The template that ships assumes the **pushrod picks up on the upper wishbone**,
 > which is what this workbook's numbers say: `PushRod_O` sits 21 mm (front) and
@@ -278,11 +345,63 @@ edits JSON on your machine.
 > joint. If yours is mounted on the upright instead, delete the `pushRodPickup`
 > part and add `{corner}_PushRod_O` to the upright's first chain.
 
+## Analysis
+
+The analysis dock (`Ctrl+K`) puts an axle through **bump**, **roll** or
+**steer** and plots what it does: camber (to the body, and to the ground), toe,
+caster, kingpin inclination, scrub radius, trail, track and wheelbase change,
+damper travel and installation ratio, the roll centre, the anti-roll bar's twist
+and Ackermann. **Curves** picks as many plots as you want. Beside it, **Both
+sides / Left only / Right only** says which wheels they draw: on a symmetric car
+the two are mirror images — the left wheel at +10 mm of rack is the right wheel
+at −10 — so one of them is often all there is to read.
+
+### Static camber and toe
+
+**Linkage ▸ Static Camber and Toe** sets each axle's static camber and toe as
+numbers, the way Lotus's *Set Static Angles* does. The wheel's axis is built from
+them and the contact patch is computed from that — a tyre radius from the wheel
+centre, straight down the wheel's own plane onto the ground — so neither has to
+be placed as a hardpoint. The far side takes the same numbers, mirrored.
+
+An axle you have not set reads its angles off its hardpoints: a
+`{corner}_WheelAxis` point if the table has one, otherwise the contact patch
+under the wheel centre, which gives camber and assumes zero toe. That is where
+a workbook's static camber has always come from, and it is easy to miss — the
+26_DY workbook's patch sits 0.8 mm outboard of its wheel centre, which is
+−0.2°. The dialog shows what each axle currently reads and where it read it.
+
+With the angles set, a contact patch in the table only says how high the ground
+is (for a workbook measured from a chassis datum), and a wheel axis point is
+carried on the axis the angles give. If your ground is `z = 0` you can delete the
+patch points altogether.
+
+### Signs, and comparing with Lotus
+
+Every measure has been checked against an independent solve of the same car
+(Newton on the upright as a free rigid body, sharing no code with the solver);
+they agree to the fourth decimal across bump, roll and steer. When a number
+disagrees with Lotus, it is almost always one of these:
+
+| | Here | Lotus |
+|---|---|---|
+| Frame | ISO 8855: X forward, **Y left**, Z up | X rearward, **Y right**, Z up |
+| Positive roll | right-handed about +X: the **left** side rises, body leans right | roll to the **left** is positive |
+| Positive rack travel | towards **+Y**, i.e. to the left | check yours: with Y to the right it is likely the other way |
+| Static camber and toe | set here, or read off the hardpoints (see above) | *Data ▸ Set Static Angles* |
+| Camber in roll | **Camber** is to the body; **Camber to ground** is to the road | check which your plot shows |
+
+Camber, toe, caster and kingpin are signed the same way in both: negative camber
+leans the top in, positive toe is toe-in, positive caster leans the top
+rearward, positive kingpin leans it inboard. The **installation ratio** is damper
+compression per millimetre of wheel travel, so a damper that bump compresses
+reads positive.
+
 ## Wheels
 
-**Geometry ▸ Add Wheels** draws a real wheel and rim at the corners, which is
+**Geometry ▸ Add Wheels** draws a real tyre and rim at the corners, which is
 what turns a cloud of points into something recognisable as a car. One dialog:
-pick the hardpoint each of the four wheels is centred on, and pick a wheel model
+pick the hardpoint each of the four wheels is centred on, and pick a tyre model
 and a rim model — STEP or STL, whatever this build can import. Both are copied
 into the project like every other asset, and both are optional: a rim on its own
 is a perfectly good way to see where the wheels sit.
@@ -314,7 +433,10 @@ touched.
 
 ## Building
 
-Requires **Qt 6.5+**, **CMake 3.24+** and a C++20 compiler.
+Requires **Qt 6.5+**, **CMake 3.24+**, a C++20 compiler and **Python 3**. The
+blank workbook a new hardpoint table starts from is generated at configure time by
+`tools/make_blank_hardpoints_xlsx.py` (standard library only) rather than
+committed as a binary.
 
 An `.xlsx` is a ZIP of XML parts, so reading one needs zlib. The build uses the
 system zlib when there is one — every Linux has it — and otherwise downloads and

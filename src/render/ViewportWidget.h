@@ -44,6 +44,11 @@ public:
     void setMesh(TriMesh mesh, EdgeSet edges);
     void clearMesh();
     bool hasMesh() const { return !m_mesh.isEmpty(); }
+    /// The geometry on screen, for anything that has to ask questions of it --
+    /// the hardpoint generator putting a pivot on the chassis. Held here
+    /// already, so nothing else keeps a second copy of a mesh that can run to
+    /// a million triangles.
+    const TriMesh& mesh() const { return m_mesh; }
 
     /// Draw the imported geometry moved by @p transform rather than where its
     /// file put it. It is the chassis, so when the body rolls it goes with it;
@@ -97,8 +102,14 @@ public:
     void setWheelsVisible(bool visible);
     bool wheelsVisible() const { return m_wheelsVisible; }
 
+    /// Select @p index alone, or nothing when it is negative.
     void setSelectedHardpoint(int index);
+    /// Select every row in @p selection, in that order, with @p current the one
+    /// the selection is centred on.
+    void setSelectedHardpoints(const QList<int>& selection, int current);
     int selectedHardpoint() const { return m_selectedPoint; }
+    /// Every selected marker, in the order it was picked.
+    const QList<int>& selectedHardpoints() const { return m_selection; }
 
     void setDisplayMode(DisplayMode mode);
     DisplayMode displayMode() const { return m_mode; }
@@ -115,8 +126,10 @@ signals:
     void contextReady(const QString& description);
     /// The mode changed from inside the viewport (the overlay buttons).
     void displayModeChanged(DisplayMode mode);
-    /// A marker was clicked, or empty space was, which clears to -1.
-    void hardpointClicked(int index);
+    /// The user changed the selection by clicking: a marker on its own, Ctrl
+    /// and a marker to add or take one away, or empty space to clear it.
+    /// @p current is the marker the click was on, or -1.
+    void hardpointSelectionEdited(const QList<int>& selection, int current);
     /// Anything a project remembers about the view changed: the camera moved,
     /// the mode or the labels were toggled, a marker was selected. Emitted on
     /// every orbit step, so anything listening has to be cheap or debounced.
@@ -213,6 +226,7 @@ private:
     bool m_linkageVisible = true;
     bool m_labelsVisible = true;
     int m_selectedPoint = -1;
+    QList<int> m_selection; ///< in the order picked; holds m_selectedPoint when it is set
     int m_hoveredPoint = -1;
     int m_pressedPoint = -1;
 

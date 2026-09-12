@@ -38,6 +38,13 @@ struct PartTemplate {
     PartKind kind = PartKind::Other;
     std::vector<ChainTemplate> chains;
     bool optional = false;
+    /// Whether the part is written once for every corner and side -- names
+    /// carrying {corner}, the far side from the mirror rule -- which is what a
+    /// template's own parts are. False is a part that names its points
+    /// literally, as one made from a selection does: it is drawn exactly once,
+    /// through exactly those points, with nothing substituted and nothing
+    /// mirrored. Drawing it per corner would draw one bracket eight times.
+    bool perCorner = true;
 };
 
 /// An axle, or whatever else the point names are grouped by.
@@ -147,6 +154,10 @@ struct Linkage {
 /// point name put through @p mirror. A corner or a side with not one of its
 /// points in the table is dropped without comment, so a table holding one axle,
 /// or one side that has not been mirrored yet, yields exactly what it holds.
+///
+/// A part with @ref PartTemplate::perCorner off is instantiated once, through
+/// the names it spells out. It belongs to no corner, so the silence above does
+/// not cover it: a point it names and cannot find is reported.
 Linkage buildLinkage(const LinkageTemplate& templ, const HardpointTable& table,
                      const MirrorSpec& mirror);
 

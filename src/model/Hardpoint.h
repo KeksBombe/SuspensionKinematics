@@ -71,4 +71,16 @@ struct HardpointTable {
     }
 };
 
+/// Why @p name cannot be the name of a point in @p table, or an empty string
+/// when it can. @p ignoreRow is the row being renamed, whose own name does not
+/// count as taken.
+///
+/// The name is the key everything is stored under -- the workbook rows, the
+/// configuration, the mirror provenance -- so what it may not be is decided by
+/// what would stop it reading back as the same point: empty, already taken,
+/// padded with spaces the reader trims off, or ending in the `_x`/`_y`/`_z`
+/// the workbook marks a coordinate with.
+QString hardpointNameProblem(const QString& name, const HardpointTable& table,
+                             int ignoreRow = -1);
+
 } // namespace suspkin

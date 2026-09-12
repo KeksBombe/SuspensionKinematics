@@ -107,4 +107,14 @@ Vec3 linePlaneCrossing(const Vec3& a, const Vec3& b, int axis, double value, boo
 Vec3 intersectLines2D(const Vec3& a1, const Vec3& a2, const Vec3& b1, const Vec3& b2, int drop,
                       bool* ok);
 
+/// Where the line two planes share crosses the plane @p axis = @p value. Each
+/// plane is given by a normal and a point on it; the normals need not be unit
+/// length.
+///
+/// @p ok is cleared when the planes are parallel, or when the line they share
+/// runs parallel to the plane it is to cross -- both of which put the answer
+/// at infinity.
+Vec3 planesCrossing(const Vec3& normalA, const Vec3& pointA, const Vec3& normalB,
+                    const Vec3& pointB, int axis, double value, bool* ok);
+
 } // namespace suspkin

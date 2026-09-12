@@ -24,10 +24,10 @@ class MirrorDialog : public QDialog {
     Q_OBJECT
 
 public:
-    /// @p table is previewed against, @p selection is the row the user has
-    /// picked in the panel (or -1), and @p spec seeds the controls with whatever
-    /// the project last used.
-    MirrorDialog(const HardpointTable& table, int selection, const MirrorSpec& spec,
+    /// @p table is previewed against, @p selection is what the user has picked
+    /// in the panel or the viewport (possibly nothing), and @p spec seeds the
+    /// controls with whatever the project last used.
+    MirrorDialog(const HardpointTable& table, const QList<int>& selection, const MirrorSpec& spec,
                  QWidget* parent = nullptr);
 
     MirrorSpec spec() const;
@@ -38,7 +38,7 @@ private:
     void refreshPreview();
 
     const HardpointTable& m_table;
-    int m_selection = -1;
+    std::vector<int> m_selection;
 
     QComboBox* m_axis = nullptr;
     QRadioButton* m_allRows = nullptr;

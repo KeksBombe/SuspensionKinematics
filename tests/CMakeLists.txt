@@ -23,6 +23,10 @@ foreach(_gen make_test_stl make_test_xlsx)
     if(NOT _gen_result EQUAL 0)
         message(FATAL_ERROR "${_gen} fixture generation failed:\n${_gen_output}")
     endif()
+    # A new fixture added to a generator reconfigures, and so is written, rather
+    # than the test looking for a file the last configure never made.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/../tools/${_gen}.py")
 endforeach()
 message(STATUS "Test fixtures generated in ${SUSPKIN_TEST_DATA_DIR}")
 
@@ -68,6 +72,14 @@ add_test(NAME linkage COMMAND test_linkage)
 qt_add_executable(test_kinematics test_kinematics.cpp)
 target_link_libraries(test_kinematics PRIVATE suspkin_core Qt6::Test)
 add_test(NAME kinematics COMMAND test_kinematics)
+
+qt_add_executable(test_hardpoint_generator test_hardpoint_generator.cpp)
+target_link_libraries(test_hardpoint_generator PRIVATE suspkin_core Qt6::Test)
+add_test(NAME hardpoint_generator COMMAND test_hardpoint_generator)
+
+qt_add_executable(test_mesh_query test_mesh_query.cpp)
+target_link_libraries(test_mesh_query PRIVATE suspkin_core Qt6::Test)
+add_test(NAME mesh_query COMMAND test_mesh_query)
 
 qt_add_executable(test_project test_project.cpp)
 target_link_libraries(test_project PRIVATE suspkin_core Qt6::Test)

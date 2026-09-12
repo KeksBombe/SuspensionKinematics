@@ -11,8 +11,11 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QGridLayout;
 class QLabel;
+class QMenu;
 class QPushButton;
+class QScrollArea;
 class QSlider;
 class QTableWidget;
 class QTimer;
@@ -95,10 +98,18 @@ public:
     bool movesAllAxles() const;
     void setMovesAllAxles(bool all);
 
-    SweepMeasure measure() const;
-    void setMeasure(SweepMeasure measure);
+    /// The curves on screen, one plot each, in the order the curve menu lists
+    /// them. Never empty: the last one cannot be switched off, because a panel
+    /// with no plot in it reads as broken rather than as a choice.
+    QList<SweepMeasure> measures() const { return m_measures; }
+    void setMeasures(const QList<SweepMeasure>& measures);
 
-    /// The curve.
+    /// Which wheels the plots draw, and which column the readout keeps: both,
+    /// or one of them for a car whose two sides mirror each other anyway.
+    SweepSides sides() const { return m_sides; }
+    void setSides(SweepSides sides);
+
+    /// The sweep every plot draws its curve from.
     void setResult(const SweepResult& result);
     /// The numbers at the position the model is actually standing in, which is
     /// not always one of the sweep's own steps.
@@ -119,14 +130,32 @@ signals:
     void positionChanged(double position);
     void simulatingChanged(bool simulating);
     void animatingChanged(bool animating);
-    void measureChanged();
+    void measuresChanged();
+    void sidesChanged();
     /// Something that is remembered but does not change the curve: how fast the
     /// animation runs, whether the parameters window is open.
     void playbackChanged();
     void exportCsvRequested();
 
+protected:
+    /// Watches the plots' viewport, so they reflow into more or fewer columns as
+    /// the dock is resized.
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     void buildUi();
+    /// One plot per curve in @ref m_measures: the ones still wanted are kept,
+    /// the rest removed, any new ones made. Then laid out again.
+    void syncPlots();
+    PlotWidget* makePlot(SweepMeasure measure);
+    /// Put the plots in a grid as many columns wide as the viewport has room
+    /// for. Unless @p force, only when that number of columns has changed.
+    void layOutPlots(bool force);
+    /// The curve button's text and the ticks in its menu, from @ref m_measures.
+    void syncCurveMenu();
+    void setPlotMarker(double input);
+    /// Hide the readout column of a side the plots are not showing.
+    void syncReadoutColumns();
     /// Offer Steer only for an axle that has a rack, and step off it when the
     /// selected axle has none.
     void syncSteerAvailability();
@@ -149,7 +178,10 @@ private:
     QDoubleSpinBox* m_positionBox = nullptr;
     QLabel* m_positionUnit = nullptr;
     QComboBox* m_kindBox = nullptr;
-    QComboBox* m_measureBox = nullptr;
+    /// Which curves are plotted: a button whose menu has one tick per measure.
+    QToolButton* m_curveButton = nullptr;
+    QMenu* m_curveMenu = nullptr;
+    QComboBox* m_sidesBox = nullptr;
     QToolButton* m_playButton = nullptr;
     QPushButton* m_parametersButton = nullptr;
     /// The travel, the increments and the playback settings, in a window of
@@ -162,7 +194,18 @@ private:
     QPushButton* m_exportButton = nullptr;
     QLabel* m_status = nullptr;
     QTableWidget* m_readout = nullptr;
-    PlotWidget* m_plot = nullptr;
+
+    /// The plots, one per curve, in a scrolling grid: as many as are wanted fit
+    /// side by side when the dock is wide, and stack and scroll when it is not.
+    QScrollArea* m_plotScroll = nullptr;
+    QWidget* m_plotHost = nullptr;
+    QGridLayout* m_plotGrid = nullptr;
+    QList<PlotWidget*> m_plots;
+    QList<SweepMeasure> m_measures{ SweepMeasure::Camber };
+    SweepSides m_sides = SweepSides::Both;
+    int m_plotColumns = 0;
+    /// Kept so that a plot made after the sweep arrived still gets its curve.
+    SweepResult m_result;
 
     /// Set while the panel is being told what to show, so echoing it straight
     /// back out does not look like the user having done something.

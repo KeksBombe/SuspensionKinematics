@@ -1,5 +1,7 @@
 #include "project/Project.h"
 
+#include "io/XlsxHardpoints.h"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -298,6 +300,13 @@ QString Project::fileFilter()
 
 QString Project::manifestPath() const { return QDir(m_root).filePath(manifestName()); }
 
+std::optional<StaticAlignment> Project::alignmentFor(const QString& corner) const
+{
+    const auto it = m_alignment.constFind(corner);
+    if (it == m_alignment.constEnd()) return std::nullopt;
+    return *it;
+}
+
 QString Project::absolutePath(const QString& relativePath) const
 {
     if (relativePath.isEmpty()) return {};
@@ -404,7 +413,12 @@ std::optional<Project> Project::open(const QString& manifestPath, QString* error
 
     if (root.contains(QStringLiteral("wheels"))) {
         const QJsonObject wheels = root.value(QStringLiteral("wheels")).toObject();
-        project.m_wheels.wheel = assetFromJson(wheels.value(QStringLiteral("wheel")).toObject());
+        // "wheel" is what the tyre was called before a wheel was understood to
+        // be the tyre and the rim together. Read so an older project keeps its
+        // tyre; it points at wheels/wheel.<ext>, which is still where that one is.
+        const QString tyreKey = wheels.contains(QStringLiteral("tyre")) ? QStringLiteral("tyre")
+                                                                        : QStringLiteral("wheel");
+        project.m_wheels.tyre = assetFromJson(wheels.value(tyreKey).toObject());
         project.m_wheels.rim = assetFromJson(wheels.value(QStringLiteral("rim")).toObject());
         project.m_wheels.spec = wheelSpecFromJson(wheels);
     }
@@ -422,6 +436,15 @@ std::optional<Project> Project::open(const QString& manifestPath, QString* error
     project.m_view.linksVisible = view.value(QStringLiteral("links")).toBool(true);
     project.m_view.wheelsVisible = view.value(QStringLiteral("wheels")).toBool(true);
     project.m_view.selectedHardpoint = view.value(QStringLiteral("selected")).toInt(-1);
+    // A project from before more than one point could be selected has only the
+    // one, which is a selection of one.
+    for (const QJsonValue& value : view.value(QStringLiteral("selection")).toArray()) {
+        const int row = value.toInt(-1);
+        if (row >= 0 && !project.m_view.selection.contains(row))
+            project.m_view.selection.append(row);
+    }
+    if (project.m_view.selection.isEmpty() && project.m_view.selectedHardpoint >= 0)
+        project.m_view.selection.append(project.m_view.selectedHardpoint);
 
     const QJsonObject simulation = view.value(QStringLiteral("simulation")).toObject();
     if (!simulation.isEmpty()) {
@@ -429,7 +452,14 @@ std::optional<Project> Project::open(const QString& manifestPath, QString* error
         state.active = simulation.value(QStringLiteral("active")).toBool(false);
         state.axle = simulation.value(QStringLiteral("axle")).toString();
         state.position = simulation.value(QStringLiteral("position")).toDouble(0.0);
-        state.measure = simulation.value(QStringLiteral("measure")).toString();
+        for (const QJsonValue& value : simulation.value(QStringLiteral("measures")).toArray()) {
+            const QString key = value.toString();
+            if (!key.isEmpty() && !state.measures.contains(key)) state.measures.append(key);
+        }
+        // A project from before there could be more than one plot names one.
+        const QString single = simulation.value(QStringLiteral("measure")).toString();
+        if (state.measures.isEmpty() && !single.isEmpty()) state.measures.append(single);
+        state.sides = sweepSidesFromString(simulation.value(QStringLiteral("sides")).toString());
         state.kind = sweepKindFromString(simulation.value(QStringLiteral("kind")).toString());
         const QJsonObject sweep = simulation.value(QStringLiteral("sweep")).toObject();
         state.sweep = sweep.isEmpty()
@@ -450,6 +480,20 @@ std::optional<Project> Project::open(const QString& manifestPath, QString* error
 
     if (root.contains(QStringLiteral("mirror")))
         project.m_mirror = mirrorFromJson(root.value(QStringLiteral("mirror")).toObject());
+    if (root.contains(QStringLiteral("design")))
+        project.m_design = designParametersFromJson(root.value(QStringLiteral("design")).toObject());
+
+    // Per axle, and only the axles that have been given angles: one that is not
+    // here reads them off its hardpoints. An entry missing either number is not
+    // half an answer, so it is left out rather than filled with a zero.
+    const QJsonObject alignment = root.value(QStringLiteral("alignment")).toObject();
+    for (auto it = alignment.begin(); it != alignment.end(); ++it) {
+        const QJsonObject angles = it.value().toObject();
+        const QJsonValue camber = angles.value(QStringLiteral("camber"));
+        const QJsonValue toe = angles.value(QStringLiteral("toe"));
+        if (!camber.isDouble() || !toe.isDouble()) continue;
+        project.m_alignment.insert(it.key(), StaticAlignment{ camber.toDouble(), toe.toDouble() });
+    }
 
     const QJsonObject directories = root.value(QStringLiteral("directories")).toObject();
     project.m_lastGeometryDirectory = directories.value(QStringLiteral("geometry")).toString();
@@ -504,8 +548,8 @@ bool Project::save(QString* error) const
     // were on.
     if (!m_wheels.isEmpty() || !m_wheels.spec.isEmpty()) {
         QJsonObject wheels = wheelSpecToJson(m_wheels.spec);
-        if (!m_wheels.wheel.isEmpty())
-            wheels.insert(QStringLiteral("wheel"), assetToJson(m_wheels.wheel));
+        if (!m_wheels.tyre.isEmpty())
+            wheels.insert(QStringLiteral("tyre"), assetToJson(m_wheels.tyre));
         if (!m_wheels.rim.isEmpty())
             wheels.insert(QStringLiteral("rim"), assetToJson(m_wheels.rim));
         root.insert(QStringLiteral("wheels"), wheels);
@@ -520,12 +564,24 @@ bool Project::save(QString* error) const
     view.insert(QStringLiteral("links"), m_view.linksVisible);
     view.insert(QStringLiteral("wheels"), m_view.wheelsVisible);
     view.insert(QStringLiteral("selected"), m_view.selectedHardpoint);
+    if (!m_view.selection.isEmpty()) {
+        QJsonArray selection;
+        for (const int row : m_view.selection) selection.append(row);
+        view.insert(QStringLiteral("selection"), selection);
+    }
 
     const SimulationState& state = m_view.simulation;
     QJsonObject simulation;
     simulation.insert(QStringLiteral("active"), state.active);
     if (!state.axle.isEmpty()) simulation.insert(QStringLiteral("axle"), state.axle);
-    if (!state.measure.isEmpty()) simulation.insert(QStringLiteral("measure"), state.measure);
+    if (!state.measures.isEmpty()) {
+        simulation.insert(QStringLiteral("measures"), QJsonArray::fromStringList(state.measures));
+        // The first on its own as well, the way "selected" sits beside
+        // "selection": a build from before there were several plots still
+        // opens on one of the right curves.
+        simulation.insert(QStringLiteral("measure"), state.measures.front());
+    }
+    simulation.insert(QStringLiteral("sides"), sweepSidesToString(state.sides));
     simulation.insert(QStringLiteral("kind"), sweepKindToString(state.kind));
     simulation.insert(QStringLiteral("sweep"), writeSweepSettings(state.sweep));
     simulation.insert(QStringLiteral("position"), state.position);
@@ -546,6 +602,17 @@ bool Project::save(QString* error) const
     }
 
     root.insert(QStringLiteral("mirror"), mirrorToJson(m_mirror));
+    if (m_design) root.insert(QStringLiteral("design"), designParametersToJson(*m_design));
+    if (!m_alignment.isEmpty()) {
+        QJsonObject alignment;
+        for (auto it = m_alignment.begin(); it != m_alignment.end(); ++it) {
+            QJsonObject angles;
+            angles.insert(QStringLiteral("camber"), it.value().camber);
+            angles.insert(QStringLiteral("toe"), it.value().toe);
+            alignment.insert(it.key(), angles);
+        }
+        root.insert(QStringLiteral("alignment"), alignment);
+    }
 
     QJsonObject directories;
     directories.insert(QStringLiteral("geometry"), m_lastGeometryDirectory);
@@ -618,6 +685,59 @@ bool Project::writeFile(const QString& relativePath, const QByteArray& bytes, QS
     return writeAtomically(absolutePath(relativePath), bytes, error);
 }
 
+std::optional<QByteArray> Project::readFile(const QString& relativePath, QString* error) const
+{
+    const QString path = absolutePath(relativePath);
+    if (path.isEmpty()) {
+        if (error) *error = tr("The project names no file to read.");
+        return std::nullopt;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error)
+            *error = tr("Cannot read %1: %2")
+                         .arg(QDir::toNativeSeparators(path), file.errorString());
+        return std::nullopt;
+    }
+    QByteArray bytes = file.readAll();
+    file.close(); // before anyone can try to replace it -- see the header
+    return bytes;
+}
+
+std::optional<AssetRef> Project::createHardpointWorkbook(const HardpointTable& table,
+                                                         QString* error)
+{
+    // A workbook with no points in it cannot be read back -- the reader looks
+    // for a table of coordinates and there would be none -- so there has to be
+    // something to write before there is anything to create.
+    if (table.isEmpty()) {
+        if (error) *error = tr("A workbook needs at least one point in it.");
+        return std::nullopt;
+    }
+
+    const QString directory = QDir(m_root).filePath(QStringLiteral("hardpoints"));
+    if (!QDir().mkpath(directory)) {
+        if (error) *error = tr("Cannot create %1.").arg(QDir::toNativeSeparators(directory));
+        return std::nullopt;
+    }
+
+    QString target = QDir(directory).filePath(QStringLiteral("hardpoints.xlsx"));
+    for (int n = 2; QFileInfo::exists(target); ++n)
+        target = QDir(directory).filePath(QStringLiteral("hardpoints-%1.xlsx").arg(n));
+
+    const QString failure = writeNewHardpointsXlsx(target, table);
+    if (!failure.isEmpty()) {
+        if (error) *error = failure;
+        return std::nullopt;
+    }
+
+    AssetRef asset;
+    asset.relativePath = QDir(m_root).relativeFilePath(target);
+    // No importedFrom: it was made here, and did not come from anywhere.
+    asset.importedAt = QDateTime::currentDateTimeUtc();
+    return asset;
+}
+
 // ---------------------------------------------------------------------------
 // Hardpoint edits
 // ---------------------------------------------------------------------------
@@ -625,10 +745,14 @@ bool Project::writeFile(const QString& relativePath, const QByteArray& bytes, QS
 HardpointEdits diffHardpoints(const HardpointTable& baseline, const HardpointTable& current)
 {
     HardpointEdits edits;
-    for (const Hardpoint& point : current.points) {
+    for (std::size_t i = 0; i < current.points.size(); ++i) {
+        const Hardpoint& point = current.points[i];
         const Hardpoint* original = baseline.find(point.name);
         if (!original) {
             edits.added.push_back(point);
+            // Where it sits, by its neighbour's name rather than by a row
+            // number: rows above it may be removed or added in the meantime.
+            edits.addedAfter.insert(point.name, i == 0 ? QString() : current.points[i - 1].name);
             continue;
         }
         // Bit-exact: these numbers are only ever set by parsing text or by the
@@ -673,12 +797,31 @@ HardpointTable applyHardpointEdits(const HardpointTable& baseline, const Hardpoi
         else
             table.points[static_cast<std::size_t>(index)] = point;
     }
+    // In the order the file lists them, which is the order the table held them
+    // in -- so a run of points added together finds each one's neighbour
+    // already in place.
     for (const Hardpoint& point : edits.added) {
         const int index = table.indexOf(point.name);
-        if (index < 0)
-            table.points.push_back(point);
-        else
+        if (index >= 0) {
             table.points[static_cast<std::size_t>(index)] = point;
+            continue;
+        }
+
+        const auto after = edits.addedAfter.constFind(point.name);
+        if (after == edits.addedAfter.constEnd()) {
+            table.points.push_back(point);
+        } else if (after->isEmpty()) {
+            table.points.insert(table.points.begin(), point);
+        } else {
+            // A neighbour that has since gone -- deleted, or no longer in a
+            // reimported workbook -- says nothing about where this one goes,
+            // and the end of the table is where it went before this existed.
+            const int neighbour = table.indexOf(*after);
+            if (neighbour < 0)
+                table.points.push_back(point);
+            else
+                table.points.insert(table.points.begin() + neighbour + 1, point);
+        }
     }
     return table;
 }
@@ -698,7 +841,12 @@ bool writeHardpointEdits(const QString& path, const HardpointEdits& edits, QStri
     QJsonArray changed;
     for (const Hardpoint& point : edits.changed) changed.append(pointToJson(point));
     QJsonArray added;
-    for (const Hardpoint& point : edits.added) added.append(pointToJson(point));
+    for (const Hardpoint& point : edits.added) {
+        QJsonObject object = pointToJson(point);
+        const auto after = edits.addedAfter.constFind(point.name);
+        if (after != edits.addedAfter.constEnd()) object.insert(QStringLiteral("after"), *after);
+        added.append(object);
+    }
 
     QJsonObject root;
     root.insert(QStringLiteral("format"), QLatin1String(kEditsFormatTag));
@@ -749,8 +897,14 @@ std::optional<HardpointEdits> readHardpointEdits(const QString& path, QString* e
             edits.changed.push_back(*point);
     }
     for (const QJsonValue& value : root.value(QStringLiteral("added")).toArray()) {
-        if (const std::optional<Hardpoint> point = pointFromJson(value))
-            edits.added.push_back(*point);
+        const std::optional<Hardpoint> point = pointFromJson(value);
+        if (!point) continue;
+        edits.added.push_back(*point);
+        // Absent and empty mean different things: absent is a file from before
+        // positions were kept, empty is a point at the very top.
+        const QJsonObject object = value.toObject();
+        if (object.contains(QStringLiteral("after")))
+            edits.addedAfter.insert(point->name, object.value(QStringLiteral("after")).toString());
     }
     for (const QJsonValue& value : root.value(QStringLiteral("removed")).toArray()) {
         const QString name = value.toString();

@@ -18,11 +18,20 @@ constexpr int kRightMargin = 14;
 constexpr int kTopMargin = 26;
 constexpr int kBottomMargin = 40;
 
+/// The two sides. Saturated enough to read on a dark ground and a light one,
+/// and far enough apart in hue to tell apart for the commonest colour blindness.
 const QColor kLeftColor(58, 124, 216);
 const QColor kRightColor(214, 106, 42);
-const QColor kAxisColor(120, 120, 128);
-const QColor kGridColor(214, 214, 220);
-const QColor kMarkerColor(150, 150, 158);
+
+/// @p a moved @p t of the way to @p b. How every neutral here is made: from the
+/// palette's own ground and text, so a dark theme gets a dark plot with a faint
+/// grid rather than a pale grid painted onto it.
+QColor mix(const QColor& a, const QColor& b, float t)
+{
+    return QColor::fromRgbF(a.redF() + (b.redF() - a.redF()) * t,
+                            a.greenF() + (b.greenF() - a.greenF()) * t,
+                            a.blueF() + (b.blueF() - a.blueF()) * t);
+}
 
 /// A tick step that lands on a 1, a 2 or a 5, which are the only spacings a
 /// person reads without having to think about it.
@@ -39,13 +48,11 @@ double niceStep(double span, int target)
 }
 
 /// Tick labels get as many decimals as the step needs and no more, so a 0.5 step
-/// reads "1.5" and a 5 step reads "10".
+/// reads "1.5", a 5 step reads "10" and a 0.002 step reads "0.004" -- never a
+/// column of labels that all say the same thing.
 QString tickText(double value, double step)
 {
-    int decimals = 0;
-    if (step < 0.05) decimals = 3;
-    else if (step < 0.5) decimals = 2;
-    else if (step < 5.0) decimals = 1;
+    const int decimals = std::clamp(int(std::ceil(-std::log10(step) - 1e-9)), 0, 6);
     // Keeps a tick that lands a hair below zero from printing as "-0".
     if (std::abs(value) < step * 1e-6) value = 0.0;
     return QString::number(value, 'f', decimals);
@@ -78,10 +85,26 @@ void PlotWidget::setMeasure(SweepMeasure measure)
     update();
 }
 
+void PlotWidget::setSides(SweepSides sides)
+{
+    if (m_sides == sides) return;
+    m_sides = sides;
+    rebuild();
+    update();
+}
+
 void PlotWidget::setMarker(double input)
 {
     if (qFuzzyCompare(m_marker + 1.0, input + 1.0)) return;
     m_marker = input;
+    update();
+}
+
+void PlotWidget::setHover(double input, bool hovering)
+{
+    if (m_hovering == hovering && (!hovering || qFuzzyCompare(m_hover + 1.0, input + 1.0))) return;
+    m_hover = input;
+    m_hovering = hovering;
     update();
 }
 
@@ -99,8 +122,10 @@ void PlotWidget::rebuild()
     };
     QList<SideSpec> sides;
     if (perSide) {
-        sides.append({ true, kLeftColor, tr("left") });
-        sides.append({ false, kRightColor, tr("right") });
+        // The range below is taken from what is drawn, so a side left out does
+        // not leave its curve's room behind in the plot either.
+        if (m_sides != SweepSides::Right) sides.append({ true, kLeftColor, tr("left") });
+        if (m_sides != SweepSides::Left) sides.append({ false, kRightColor, tr("right") });
     } else {
         sides.append({ true, kLeftColor, sweepMeasureLabel(m_measure) });
     }
@@ -115,6 +140,7 @@ void PlotWidget::rebuild()
         Series series;
         series.color = side.color;
         series.label = side.label;
+        series.left = side.left;
         for (const AxleSample& sample : m_result.samples) {
             double value = 0.0;
             if (!sweepMeasureValue(sample, m_measure, side.left, &value)) continue;
@@ -135,20 +161,25 @@ void PlotWidget::rebuild()
 
     if (m_series.isEmpty()) return;
 
-    // A flat curve still needs a band to be drawn in, or it lands on the axis
-    // and reads as no data at all.
     if (xMax - xMin < 1e-9) {
         xMin -= 1.0;
         xMax += 1.0;
     }
-    const double ySpan = yMax - yMin;
-    if (ySpan < 1e-9) {
-        const double pad = std::max(0.5, std::abs(yMax) * 0.1);
+
+    // A curve that moves less than its measure is worth over the whole sweep is
+    // drawn flat, in a band that wide, rather than stretched until the solver's
+    // rounding fills the plot -- which is how a roll centre sitting on the
+    // centreline through a bump used to come out as a wild line of spikes under
+    // an axis that read "0.000" at every tick.
+    const double resolution = sweepMeasureResolution(m_measure);
+    if (yMax - yMin < resolution) {
+        const double middle = 0.5 * (yMin + yMax);
+        yMin = middle - 0.5 * resolution;
+        yMax = middle + 0.5 * resolution;
+    } else {
+        const double pad = (yMax - yMin) * 0.08;
         yMin -= pad;
         yMax += pad;
-    } else {
-        yMin -= ySpan * 0.08;
-        yMax += ySpan * 0.08;
     }
 
     m_xMin = xMin;
@@ -179,6 +210,12 @@ double PlotWidget::fromWidgetX(const QRectF& area, double x) const
 
 void PlotWidget::paintGrid(QPainter& painter, const QRectF& area) const
 {
+    const QColor base = palette().color(QPalette::Base);
+    const QColor text = palette().color(QPalette::Text);
+    const QColor grid = mix(base, text, 0.16f);
+    const QColor axis = mix(base, text, 0.45f);
+    const QColor label = mix(base, text, 0.7f);
+
     const double xStep = niceStep(m_xMax - m_xMin, std::max(2, int(area.width() / 70)));
     const double yStep = niceStep(m_yMax - m_yMin, std::max(2, int(area.height() / 40)));
 
@@ -190,33 +227,32 @@ void PlotWidget::paintGrid(QPainter& painter, const QRectF& area) const
         // Zero gets a stronger line: on a bump sweep it is the design position,
         // and it is the thing every curve is read against.
         const bool zero = std::abs(x) < xStep * 1e-6;
-        painter.setPen(QPen(zero ? kAxisColor : kGridColor, zero ? 1.0 : 1.0,
-                            zero ? Qt::SolidLine : Qt::DotLine));
+        painter.setPen(QPen(zero ? axis : grid, 1.0, zero ? Qt::SolidLine : Qt::DotLine));
         painter.drawLine(QPointF(px, area.top()), QPointF(px, area.bottom()));
 
-        painter.setPen(kAxisColor);
-        const QString text = tickText(x, xStep);
-        painter.drawText(QPointF(px - metrics.horizontalAdvance(text) / 2.0,
+        painter.setPen(label);
+        const QString tick = tickText(x, xStep);
+        painter.drawText(QPointF(px - metrics.horizontalAdvance(tick) / 2.0,
                                  area.bottom() + metrics.ascent() + 4.0),
-                         text);
+                         tick);
     }
 
     for (double y = std::ceil(m_yMin / yStep) * yStep; y <= m_yMax + yStep * 1e-6; y += yStep) {
         const double py = toWidget(area, QPointF(m_xMin, y)).y();
         const bool zero = std::abs(y) < yStep * 1e-6;
-        painter.setPen(QPen(zero ? kAxisColor : kGridColor, 1.0,
-                            zero ? Qt::SolidLine : Qt::DotLine));
+        painter.setPen(QPen(zero ? axis : grid, 1.0, zero ? Qt::SolidLine : Qt::DotLine));
         painter.drawLine(QPointF(area.left(), py), QPointF(area.right(), py));
 
-        painter.setPen(kAxisColor);
-        const QString text = tickText(y, yStep);
+        painter.setPen(label);
+        const QString tick = tickText(y, yStep);
         painter.drawText(
-            QPointF(area.left() - metrics.horizontalAdvance(text) - 6.0, py + metrics.ascent() / 2.0
+            QPointF(area.left() - metrics.horizontalAdvance(tick) - 6.0, py + metrics.ascent() / 2.0
                                                                             - 1.0),
-            text);
+            tick);
     }
 
-    painter.setPen(kAxisColor);
+    painter.setPen(axis);
+    painter.setBrush(Qt::NoBrush);
     painter.drawRect(area);
 }
 
@@ -251,35 +287,65 @@ void PlotWidget::paintMarkerAndReadout(QPainter& painter, const QRectF& area) co
     const double px = toWidget(area, QPointF(sample->input, m_yMin)).x();
     if (px < area.left() - 1.0 || px > area.right() + 1.0) return;
 
-    painter.setPen(QPen(kMarkerColor, 1.0, Qt::DashLine));
+    const QColor base = palette().color(QPalette::Base);
+    const QColor text = palette().color(QPalette::Text);
+    painter.setPen(QPen(mix(base, text, 0.55f), 1.0, Qt::DashLine));
     painter.drawLine(QPointF(px, area.top()), QPointF(px, area.bottom()));
 
-    const QFontMetricsF metrics(painter.font());
-    QStringList lines;
-    lines << QStringLiteral("%1 %2").arg(QString::number(sample->input, 'f', 2),
-                                         sweepInputUnit(m_result.kind));
+    struct Line {
+        QString text;
+        QColor swatch; ///< invalid for the line that is not a series
+    };
+    QList<Line> lines;
+    lines.append({ QStringLiteral("%1 %2").arg(QString::number(sample->input, 'f', 2),
+                                               sweepInputUnit(m_result.kind)),
+                   QColor() });
+    painter.setRenderHint(QPainter::Antialiasing, true);
     for (const Series& series : m_series) {
-        const bool left = series.color == kLeftColor;
         double value = 0.0;
-        if (!sweepMeasureValue(*sample, m_measure, left, &value)) continue;
+        if (!sweepMeasureValue(*sample, m_measure, series.left, &value)) continue;
         painter.setPen(QPen(series.color, 2.0));
+        painter.setBrush(base);
         painter.drawEllipse(toWidget(area, QPointF(sample->input, value)), 3.0, 3.0);
-        lines << QStringLiteral("%1  %2 %3")
-                     .arg(series.label, QString::number(value, 'f', 3),
-                          sweepMeasureUnit(m_measure));
+        lines.append({ QStringLiteral("%1  %2 %3")
+                           .arg(series.label, sweepValueText(value),
+                                sweepMeasureUnit(m_measure)),
+                       series.color });
     }
+    painter.setRenderHint(QPainter::Antialiasing, false);
 
+    const QFontMetricsF metrics(painter.font());
+    constexpr double kSwatch = 12.0;
     double width = 0.0;
-    for (const QString& line : lines) width = std::max(width, metrics.horizontalAdvance(line));
-    const QRectF box(area.left() + 8.0, area.top() + 6.0, width + 12.0,
-                     lines.size() * metrics.height() + 8.0);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(255, 255, 255, 216));
+    for (const Line& line : lines) width = std::max(width, metrics.horizontalAdvance(line.text));
+    width += kSwatch + 6.0;
+    // On the side away from the line, so it never sits over the stretch of the
+    // curve that is being read.
+    const bool right = px < area.center().x();
+    const double boxWidth = width + 12.0;
+    const QRectF box(right ? area.right() - 8.0 - boxWidth : area.left() + 8.0, area.top() + 6.0,
+                     boxWidth, lines.size() * metrics.height() + 8.0);
+
+    // The window's own colours, which are a readable pair on any theme. This
+    // used to be a white box written on in the palette's text colour: fine on
+    // a light desktop and white on white on a dark one.
+    const QColor window = palette().color(QPalette::Window);
+    QColor fill = window;
+    fill.setAlpha(235);
+    painter.setPen(QPen(mix(window, palette().color(QPalette::WindowText), 0.25f), 1.0));
+    painter.setBrush(fill);
     painter.drawRect(box);
-    painter.setPen(palette().color(QPalette::Text));
-    double y = box.top() + metrics.ascent() + 4.0;
-    for (const QString& line : lines) {
-        painter.drawText(QPointF(box.left() + 6.0, y), line);
+
+    double y = box.top() + 4.0;
+    for (const Line& line : lines) {
+        const double baseline = y + metrics.ascent();
+        if (line.swatch.isValid()) {
+            painter.setPen(QPen(line.swatch, 2.0));
+            const double mid = y + metrics.height() / 2.0;
+            painter.drawLine(QPointF(box.left() + 6.0, mid), QPointF(box.left() + 6.0 + kSwatch, mid));
+        }
+        painter.setPen(palette().color(QPalette::WindowText));
+        painter.drawText(QPointF(box.left() + 6.0 + kSwatch + 6.0, baseline), line.text);
         y += metrics.height();
     }
 }
@@ -291,12 +357,21 @@ void PlotWidget::paintEvent(QPaintEvent*)
     if (area.width() < 20.0 || area.height() < 20.0) return;
 
     if (!m_hasData) {
+        QString text;
+        if (m_result.isEmpty())
+            text = tr("Run a sweep to see a curve.");
+        else if (m_measure == SweepMeasure::Ackermann && m_result.kind != SweepKind::Steer)
+            text = tr("Ackermann is read off a steer sweep.");
+        else if (m_measure == SweepMeasure::Ackermann)
+            text = tr("Nothing to plot: Ackermann needs both wheels of this axle, and a second "
+                      "axle in the table to take the wheelbase to.");
+        else
+            text = tr("Nothing to plot: this axle has no %1.")
+                       .arg(sweepMeasureLabel(m_measure).toLower());
         painter.setPen(palette().color(QPalette::Disabled, QPalette::Text));
-        painter.drawText(rect(), Qt::AlignCenter,
-                         m_result.isEmpty()
-                             ? tr("Run a sweep to see a curve.")
-                             : tr("Nothing to plot: this axle has no %1.")
-                                   .arg(sweepMeasureLabel(m_measure).toLower()));
+        painter.drawText(QRectF(rect()).adjusted(16.0, 0.0, -16.0, 0.0),
+                         Qt::AlignCenter | Qt::TextWordWrap,
+                         QStringLiteral("%1\n\n%2").arg(sweepMeasureLabel(m_measure), text));
         return;
     }
 
@@ -327,12 +402,14 @@ void PlotWidget::mouseMoveEvent(QMouseEvent* event)
     m_hover = fromWidgetX(plotArea(), event->position().x());
     m_hovering = true;
     if (event->buttons() & Qt::LeftButton) emit markerMoved(m_hover);
+    emit hoverMoved(m_hover, true);
     update();
 }
 
 void PlotWidget::leaveEvent(QEvent*)
 {
     m_hovering = false;
+    emit hoverMoved(m_hover, false);
     update();
 }
 

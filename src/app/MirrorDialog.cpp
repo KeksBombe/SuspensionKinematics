@@ -25,10 +25,13 @@ QString escaped(const QString& text) { return text.toHtmlEscaped(); }
 
 } // namespace
 
-MirrorDialog::MirrorDialog(const HardpointTable& table, int selection, const MirrorSpec& spec,
-                           QWidget* parent)
-    : QDialog(parent), m_table(table), m_selection(selection)
+MirrorDialog::MirrorDialog(const HardpointTable& table, const QList<int>& selection,
+                           const MirrorSpec& spec, QWidget* parent)
+    : QDialog(parent), m_table(table)
 {
+    for (const int row : selection)
+        if (row >= 0 && row < static_cast<int>(table.size())) m_selection.push_back(row);
+
     setWindowTitle(tr("Mirror hardpoints"));
 
     m_axis = new QComboBox(this);
@@ -42,11 +45,15 @@ MirrorDialog::MirrorDialog(const HardpointTable& table, int selection, const Mir
 
     m_allRows = new QRadioButton(tr("All %1 hardpoints").arg(table.size()), this);
     m_selectedRow = new QRadioButton(this);
-    const bool hasSelection = selection >= 0 && selection < static_cast<int>(table.size());
-    m_selectedRow->setText(hasSelection
-                               ? tr("Only \"%1\"")
-                                     .arg(table.points[static_cast<std::size_t>(selection)].name)
-                               : tr("Only the selected hardpoint"));
+    const bool hasSelection = !m_selection.empty();
+    if (m_selection.size() == 1) {
+        m_selectedRow->setText(
+            tr("Only \"%1\"").arg(table.points[static_cast<std::size_t>(m_selection.front())].name));
+    } else if (hasSelection) {
+        m_selectedRow->setText(tr("Only the %1 selected hardpoints").arg(m_selection.size()));
+    } else {
+        m_selectedRow->setText(tr("Only the selected hardpoints"));
+    }
     m_selectedRow->setEnabled(hasSelection);
     (hasSelection ? m_selectedRow : m_allRows)->setChecked(true);
     // The selection is the more careful default when there is one: mirroring a
@@ -160,7 +167,7 @@ MirrorSpec MirrorDialog::spec() const
 
 std::vector<int> MirrorDialog::rows() const
 {
-    if (m_selectedRow->isChecked() && m_selection >= 0) return { m_selection };
+    if (m_selectedRow->isChecked() && !m_selection.empty()) return m_selection;
     return {};
 }
 

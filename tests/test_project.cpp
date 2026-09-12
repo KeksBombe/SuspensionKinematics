@@ -41,14 +41,23 @@ private slots:
     void rejectsSomethingThatIsNotAProject();
     void copiesImportedFilesIn();
     void keepsTheWheelCornersWithoutAnyModels();
+    void aProjectFileReadsBackAndCanThenBeReplaced();
+    void anOlderProjectsWheelModelIsItsTyre();
     void reimportingTheProjectsOwnCopyKeepsIt();
     void everySweepsTravelIsRememberedNotJustTheOneBeingSwept();
     void anOlderProjectsSingleRangeBecomesThatKindsOwnTravel();
+    void staticAnglesAreKeptPerAxle();
 
     void editsAreTheDifferenceFromTheWorkbook();
     void editsRoundTripThroughTheirFile();
     void anEmptyEditSetLeavesNoFileBehind();
     void appliedEditsRestoreTheTableExactly();
+    void removedPointsRoundTripThroughTheirFile();
+    void aRenamedWorkbookPointIsARemovalAndAnAddition();
+    void anAddedPointComesBackWhereItWasPut();
+    void anOlderEditsFileStillAppendsItsPoints();
+    void aSelectionOfOneFromAnOlderProjectIsStillASelection();
+    void aProjectCanMakeAWorkbookOfItsOwn();
 };
 
 void TestProject::createsADirectoryWithAManifest()
@@ -96,6 +105,9 @@ void TestProject::roundTripsEverythingItHolds()
     view.linksVisible = false;
     view.wheelsVisible = false;
     view.selectedHardpoint = 4;
+    // In the order they were picked, which is not row order: a chain of points
+    // picked for a new part is picked the way it is drawn.
+    view.selection = { 7, 4, 2 };
     project->setView(view);
 
     WindowState window;
@@ -139,8 +151,8 @@ void TestProject::roundTripsEverythingItHolds()
     project->setLinkageTemplate(linkage);
 
     WheelsRef wheels;
-    wheels.wheel.relativePath = QStringLiteral("wheels/wheel.step");
-    wheels.wheel.originalPath = QStringLiteral("/somewhere/tyre_205_50R15.step");
+    wheels.tyre.relativePath = QStringLiteral("wheels/tyre.step");
+    wheels.tyre.originalPath = QStringLiteral("/somewhere/tyre_205_50R15.step");
     wheels.rim.relativePath = QStringLiteral("wheels/rim.step");
     wheels.spec.setPoint(WheelCorner::FrontLeft, QStringLiteral("F_WheelCenter"));
     wheels.spec.setPoint(WheelCorner::RearRight, QStringLiteral("R_WheelCenter_R"));
@@ -166,6 +178,7 @@ void TestProject::roundTripsEverythingItHolds()
     QCOMPARE(reopened->view().linksVisible, false);
     QCOMPARE(reopened->view().wheelsVisible, false);
     QCOMPARE(reopened->view().selectedHardpoint, 4);
+    QCOMPARE(reopened->view().selection, (QList<int>{ 7, 4, 2 }));
     // Binary, with an embedded NUL: base64 in the manifest has to survive it.
     QCOMPARE(reopened->window().geometry, window.geometry);
     QCOMPARE(reopened->window().dockState, window.dockState);
@@ -173,8 +186,8 @@ void TestProject::roundTripsEverythingItHolds()
     QCOMPARE(reopened->geometry().relativePath, geometry.relativePath);
     QCOMPARE(reopened->geometry().originalPath, geometry.originalPath);
     QCOMPARE(reopened->linkageTemplate().relativePath, linkage.relativePath);
-    QCOMPARE(reopened->wheels().wheel.relativePath, wheels.wheel.relativePath);
-    QCOMPARE(reopened->wheels().wheel.originalPath, wheels.wheel.originalPath);
+    QCOMPARE(reopened->wheels().tyre.relativePath, wheels.tyre.relativePath);
+    QCOMPARE(reopened->wheels().tyre.originalPath, wheels.tyre.originalPath);
     QCOMPARE(reopened->wheels().rim.relativePath, wheels.rim.relativePath);
     // Corners the user did not pick stay unpicked rather than coming back empty
     // as some other corner's point.
@@ -211,6 +224,73 @@ void TestProject::keepsTheWheelCornersWithoutAnyModels()
     QCOMPARE(reopened->wheels().spec.point(WheelCorner::FrontLeft),
              QStringLiteral("F_WheelCenter"));
     QVERIFY(reopened->wheels().isEmpty());
+}
+
+void TestProject::aProjectFileReadsBackAndCanThenBeReplaced()
+{
+    QTemporaryDir directory;
+    QString error;
+    std::optional<Project> project =
+        Project::create(directory.filePath(QStringLiteral("P")), QStringLiteral("P"), &error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+
+    const QString relative = QStringLiteral("linkage/template.json");
+    QVERIFY2(project->writeFile(relative, QByteArray("{ \"a\": 1 }"), &error), qPrintable(error));
+    const std::optional<QByteArray> read = project->readFile(relative, &error);
+    QVERIFY2(read.has_value(), qPrintable(error));
+    QCOMPARE(*read, QByteArray("{ \"a\": 1 }"));
+
+    // Read, patched and written back over itself: what Linkage > Steering Rack
+    // does, and what Windows refused while the read was still holding it open.
+    QVERIFY2(project->writeFile(relative, *read + "\n", &error), qPrintable(error));
+    QCOMPARE(*project->readFile(relative, &error), QByteArray("{ \"a\": 1 }\n"));
+
+    // A file that is not there is nothing, and says why.
+    error.clear();
+    QVERIFY(!project->readFile(QStringLiteral("linkage/none.json"), &error).has_value());
+    QVERIFY(!error.isEmpty());
+}
+
+void TestProject::anOlderProjectsWheelModelIsItsTyre()
+{
+    // Before a wheel was understood to be the tyre and the rim together, the
+    // tyre was stored as the "wheel", in wheels/wheel.<ext>.
+    QTemporaryDir directory;
+    QString error;
+    std::optional<Project> project =
+        Project::create(directory.filePath(QStringLiteral("Old")), QStringLiteral("Old"), &error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+    QVERIFY2(project->save(&error), qPrintable(error));
+
+    QFile manifest(project->manifestPath());
+    QVERIFY(manifest.open(QIODevice::ReadOnly));
+    QJsonObject root = QJsonDocument::fromJson(manifest.readAll()).object();
+    manifest.close();
+    QJsonObject tyre;
+    tyre.insert(QStringLiteral("path"), QStringLiteral("wheels/wheel.stp"));
+    QJsonObject wheels;
+    wheels.insert(QStringLiteral("wheel"), tyre);
+    root.insert(QStringLiteral("wheels"), wheels);
+    QVERIFY(manifest.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    manifest.write(QJsonDocument(root).toJson());
+    manifest.close();
+
+    std::optional<Project> reopened = Project::open(project->manifestPath(), &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    // Still the file it always was: nothing on disk is renamed.
+    QCOMPARE(reopened->wheels().tyre.relativePath, QStringLiteral("wheels/wheel.stp"));
+
+    // Written back under its new name, and read back from there.
+    QVERIFY2(reopened->save(&error), qPrintable(error));
+    QVERIFY(manifest.open(QIODevice::ReadOnly));
+    const QJsonObject saved =
+        QJsonDocument::fromJson(manifest.readAll()).object().value(QStringLiteral("wheels")).toObject();
+    manifest.close();
+    QVERIFY(saved.contains(QStringLiteral("tyre")));
+    QVERIFY(!saved.contains(QStringLiteral("wheel")));
+    const std::optional<Project> again = Project::open(project->manifestPath(), &error);
+    QVERIFY2(again.has_value(), qPrintable(error));
+    QCOMPARE(again->wheels().tyre.relativePath, QStringLiteral("wheels/wheel.stp"));
 }
 
 void TestProject::opensByDirectoryAsWellAsByFile()
@@ -380,6 +460,166 @@ void TestProject::appliedEditsRestoreTheTableExactly()
     }
 }
 
+void TestProject::removedPointsRoundTripThroughTheirFile()
+{
+    const HardpointTable baseline = sample();
+    HardpointTable current = baseline;
+    current.points.erase(current.points.begin()); // F_LCA_O, deleted
+
+    const HardpointEdits edits = diffHardpoints(baseline, current);
+    QCOMPARE(edits.removed, QStringList{ QStringLiteral("F_LCA_O") });
+    // A deletion is an edit: the project has something the workbook does not.
+    QVERIFY(!edits.isEmpty());
+    QCOMPARE(edits.count(), 1);
+
+    QTemporaryDir directory;
+    const QString path = directory.filePath(QStringLiteral("edits.json"));
+    QString error;
+    QVERIFY2(writeHardpointEdits(path, edits, &error), qPrintable(error));
+
+    const std::optional<HardpointEdits> read = readHardpointEdits(path, &error);
+    QVERIFY2(read.has_value(), qPrintable(error));
+    QCOMPARE(read->removed, edits.removed);
+
+    // And reopening is deleting it again, not bringing it back.
+    const HardpointTable reopened = applyHardpointEdits(baseline, *read);
+    QCOMPARE(int(reopened.size()), 1);
+    QCOMPARE(reopened.indexOf(QStringLiteral("F_LCA_O")), -1);
+}
+
+void TestProject::aRenamedWorkbookPointIsARemovalAndAnAddition()
+{
+    const HardpointTable baseline = sample();
+    HardpointTable current = baseline;
+    current.points[0].name = QStringLiteral("F_LCA_OUT");
+
+    // The name is the key the workbook is written back through, so to the
+    // workbook a rename is its old rows going and a new point arriving.
+    const HardpointEdits edits = diffHardpoints(baseline, current);
+    QCOMPARE(edits.removed, QStringList{ QStringLiteral("F_LCA_O") });
+    QCOMPARE(int(edits.added.size()), 1);
+    QCOMPARE(edits.added.front().name, QStringLiteral("F_LCA_OUT"));
+    QVERIFY(edits.changed.empty());
+
+    // A point that exists only as an edit is renamed as itself: nothing in any
+    // workbook has to be taken out for it.
+    HardpointTable withNew = baseline;
+    withNew.points.push_back(make("NEW", 1, 2, 3));
+    HardpointTable renamedNew = withNew;
+    renamedNew.points.back().name = QStringLiteral("NEWER");
+    const HardpointEdits plain = diffHardpoints(baseline, renamedNew);
+    QVERIFY(plain.removed.isEmpty());
+    QCOMPARE(plain.added.front().name, QStringLiteral("NEWER"));
+}
+
+void TestProject::anAddedPointComesBackWhereItWasPut()
+{
+    HardpointTable baseline;
+    baseline.points.push_back(make("A", 1, 0, 0));
+    baseline.points.push_back(make("B", 2, 0, 0));
+    baseline.points.push_back(make("C", 3, 0, 0));
+
+    // A point added next to the one it belongs with, one added at the very top,
+    // a run of two added together, and a workbook point renamed in place.
+    HardpointTable current;
+    current.points.push_back(make("TOP", 0, 0, 0));
+    current.points.push_back(make("A", 1, 0, 0));
+    current.points.push_back(make("A2", 1.5, 0, 0));
+    current.points.push_back(make("A3", 1.7, 0, 0));
+    current.points.push_back(make("BEE", 2, 0, 0)); // was B
+    current.points.push_back(make("C", 3, 0, 0));
+
+    QTemporaryDir directory;
+    const QString path = directory.filePath(QStringLiteral("edits.json"));
+    QString error;
+    QVERIFY(writeHardpointEdits(path, diffHardpoints(baseline, current), &error));
+    const std::optional<HardpointEdits> read = readHardpointEdits(path, &error);
+    QVERIFY2(read.has_value(), qPrintable(error));
+
+    // Reopened, the table reads the way it was left, not with every new point
+    // piled up at the bottom.
+    const HardpointTable reopened = applyHardpointEdits(baseline, *read);
+    QCOMPARE(int(reopened.size()), int(current.size()));
+    for (std::size_t i = 0; i < current.points.size(); ++i)
+        QCOMPARE(reopened.points[i].name, current.points[i].name);
+}
+
+void TestProject::anOlderEditsFileStillAppendsItsPoints()
+{
+    // Written before positions were kept: no "after" on the added point.
+    QTemporaryDir directory;
+    const QString path = directory.filePath(QStringLiteral("edits.json"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(R"({"format": "suspkin-hardpoint-edits", "formatVersion": 1, "changed": [],
+                   "added": [{"name": "F_LCA_O_R", "coord": [1, -2, 3]}]})");
+    file.close();
+
+    QString error;
+    const std::optional<HardpointEdits> read = readHardpointEdits(path, &error);
+    QVERIFY2(read.has_value(), qPrintable(error));
+    QVERIFY(read->addedAfter.isEmpty());
+
+    const HardpointTable reopened = applyHardpointEdits(sample(), *read);
+    QCOMPARE(reopened.points.back().name, QStringLiteral("F_LCA_O_R"));
+}
+
+void TestProject::aSelectionOfOneFromAnOlderProjectIsStillASelection()
+{
+    QTemporaryDir directory;
+    QString error;
+    std::optional<Project> project =
+        Project::create(directory.filePath(QStringLiteral("Old")), QStringLiteral("Old"), &error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+    ViewState view;
+    view.selectedHardpoint = 3;
+    project->setView(view);
+    QVERIFY(project->save(&error));
+
+    // What a manifest from before multi-selection held: "selected" and nothing
+    // else.
+    QFile manifest(project->manifestPath());
+    QVERIFY(manifest.open(QIODevice::ReadOnly));
+    QJsonObject root = QJsonDocument::fromJson(manifest.readAll()).object();
+    manifest.close();
+    QJsonObject viewObject = root.value(QStringLiteral("view")).toObject();
+    viewObject.remove(QStringLiteral("selection"));
+    root.insert(QStringLiteral("view"), viewObject);
+    QVERIFY(manifest.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    manifest.write(QJsonDocument(root).toJson());
+    manifest.close();
+
+    const std::optional<Project> reopened = Project::open(project->manifestPath(), &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    QCOMPARE(reopened->view().selectedHardpoint, 3);
+    QCOMPARE(reopened->view().selection, QList<int>{ 3 });
+}
+
+void TestProject::aProjectCanMakeAWorkbookOfItsOwn()
+{
+    QTemporaryDir directory;
+    QString error;
+    std::optional<Project> project =
+        Project::create(directory.filePath(QStringLiteral("New")), QStringLiteral("New"), &error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+
+    // Nothing to write is nothing that could be read back, so it is refused.
+    QVERIFY(!project->createHardpointWorkbook(HardpointTable{}, &error).has_value());
+    QVERIFY(!error.isEmpty());
+
+    const std::optional<AssetRef> made = project->createHardpointWorkbook(sample(), &error);
+    QVERIFY2(made.has_value(), qPrintable(error));
+    QCOMPARE(made->relativePath, QStringLiteral("hardpoints/hardpoints.xlsx"));
+    // It did not come from anywhere, so it says so.
+    QVERIFY(made->originalPath.isEmpty());
+    QVERIFY(QFile::exists(project->absolutePath(made->relativePath)));
+
+    // A file already there is somebody's, and is not written over.
+    const std::optional<AssetRef> second = project->createHardpointWorkbook(sample(), &error);
+    QVERIFY2(second.has_value(), qPrintable(error));
+    QCOMPARE(second->relativePath, QStringLiteral("hardpoints/hardpoints-2.xlsx"));
+}
+
 void TestProject::everySweepsTravelIsRememberedNotJustTheOneBeingSwept()
 {
     QTemporaryDir directory;
@@ -402,7 +642,8 @@ void TestProject::everySweepsTravelIsRememberedNotJustTheOneBeingSwept()
     simulation.sweep.steerIncrement = 2.0;
     simulation.sweep.rackTravel = 4.0;
     simulation.position = 0.75;
-    simulation.measure = QStringLiteral("toe");
+    simulation.measures = { QStringLiteral("toe"), QStringLiteral("rollCentreHeight") };
+    simulation.sides = SweepSides::Right;
     simulation.animating = true;
     simulation.animationSeconds = 2.5;
     simulation.allAxles = false;
@@ -418,7 +659,10 @@ void TestProject::everySweepsTravelIsRememberedNotJustTheOneBeingSwept()
     QCOMPARE(back.axle, QStringLiteral("F"));
     QCOMPARE(back.kind, SweepKind::Roll);
     QCOMPARE(back.position, 0.75);
-    QCOMPARE(back.measure, QStringLiteral("toe"));
+    // Every plot, in the order they were on screen.
+    QCOMPARE(back.measures,
+             QStringList({ QStringLiteral("toe"), QStringLiteral("rollCentreHeight") }));
+    QCOMPARE(back.sides, SweepSides::Right);
     QCOMPARE(back.animating, true);
     QCOMPARE(back.animationSeconds, 2.5);
     QCOMPARE(back.allAxles, false);
@@ -461,6 +705,8 @@ void TestProject::anOlderProjectsSingleRangeBecomesThatKindsOwnTravel()
     simulation.insert(QStringLiteral("to"), 33.0);
     simulation.insert(QStringLiteral("steps"), 51);
     simulation.insert(QStringLiteral("rack"), 3.0);
+    // And one curve, from before there could be more than one plot.
+    simulation.insert(QStringLiteral("measure"), QStringLiteral("camber"));
     QJsonObject view = root.value(QStringLiteral("view")).toObject();
     view.insert(QStringLiteral("simulation"), simulation);
     root.insert(QStringLiteral("view"), view);
@@ -485,6 +731,69 @@ void TestProject::anOlderProjectsSingleRangeBecomesThatKindsOwnTravel()
     // rather than inheriting fifty millimetres of wheel travel.
     QCOMPARE(back.sweep.rollAngle, SweepSettings{}.rollAngle);
     QCOMPARE(back.sweep.steerTravel, SweepSettings{}.steerTravel);
+
+    // The one curve it was showing is a list of one, and both wheels are drawn,
+    // which is all an older build could do.
+    QCOMPARE(back.measures, QStringList{ QStringLiteral("camber") });
+    QCOMPARE(back.sides, SweepSides::Both);
+    // Nor did it state any static angles: every axle reads its own off the
+    // hardpoints, the way it always has.
+    QVERIFY(reopened->alignment().isEmpty());
+    QVERIFY(!reopened->alignmentFor(QStringLiteral("F")).has_value());
+}
+
+void TestProject::staticAnglesAreKeptPerAxle()
+{
+    QTemporaryDir directory;
+    QString error;
+    std::optional<Project> project =
+        Project::create(directory.filePath(QStringLiteral("A")), QStringLiteral("A"), &error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+
+    // The front stated, the rear not: an axle that is not in here reads its
+    // angles off its hardpoints, and that has to survive a reload as well.
+    QHash<QString, StaticAlignment> alignment;
+    alignment.insert(QStringLiteral("F"), StaticAlignment{ -1.5, 0.125 });
+    project->setAlignment(alignment);
+    QVERIFY2(project->save(&error), qPrintable(error));
+
+    std::optional<Project> reopened = Project::open(project->manifestPath(), &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    QCOMPARE(reopened->alignment().size(), 1);
+    const std::optional<StaticAlignment> front = reopened->alignmentFor(QStringLiteral("F"));
+    QVERIFY(front.has_value());
+    // Doubles, exactly: a setting typed as -1.5 comes back as -1.5.
+    QCOMPARE(front->camber, -1.5);
+    QCOMPARE(front->toe, 0.125);
+    QVERIFY(!reopened->alignmentFor(QStringLiteral("R")).has_value());
+
+    // An entry missing one of its two numbers is not half an answer, so it is
+    // left out rather than read as a zero somebody never typed.
+    QFile manifest(project->manifestPath());
+    QVERIFY(manifest.open(QIODevice::ReadOnly));
+    QJsonObject root = QJsonDocument::fromJson(manifest.readAll()).object();
+    manifest.close();
+    QJsonObject stated = root.value(QStringLiteral("alignment")).toObject();
+    QJsonObject half;
+    half.insert(QStringLiteral("camber"), -2.0);
+    stated.insert(QStringLiteral("R"), half);
+    root.insert(QStringLiteral("alignment"), stated);
+    QVERIFY(manifest.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    manifest.write(QJsonDocument(root).toJson());
+    manifest.close();
+
+    reopened = Project::open(project->manifestPath(), &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    QVERIFY(reopened->alignmentFor(QStringLiteral("F")).has_value());
+    QVERIFY(!reopened->alignmentFor(QStringLiteral("R")).has_value());
+
+    // Handing every axle back to its hardpoints leaves nothing behind.
+    reopened->setAlignment({});
+    QVERIFY2(reopened->save(&error), qPrintable(error));
+    QVERIFY(manifest.open(QIODevice::ReadOnly));
+    QVERIFY(!QJsonDocument::fromJson(manifest.readAll()).object().contains(
+        QStringLiteral("alignment")));
+    manifest.close();
 }
 
 QTEST_APPLESS_MAIN(TestProject)

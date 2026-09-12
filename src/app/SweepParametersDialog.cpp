@@ -214,7 +214,7 @@ void SweepParametersDialog::setSteeringAvailable(bool available)
     const QString why =
         available ? QString()
                   : tr("This axle has no steering: the linkage template names no hardpoint for a "
-                       "rack to drive. Parts > Steering names one.");
+                       "rack to drive. Linkage > Steering Rack names one.");
     m_steerGroup->setEnabled(available);
     m_steerGroup->setToolTip(why);
     // The held rack goes with it: on an axle with no rack it is a number that

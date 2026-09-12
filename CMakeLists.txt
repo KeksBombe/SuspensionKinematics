@@ -84,6 +84,10 @@ add_library(suspkin_core STATIC
     src/geom/Vec3.h
     src/geom/MeshTopology.h
     src/geom/MeshTopology.cpp
+    # Ray casting and distance against an imported mesh: what puts a generated
+    # chassis pivot on the chassis. A bounding volume hierarchy, not a library.
+    src/geom/MeshQuery.h
+    src/geom/MeshQuery.cpp
     src/io/MeshLoadResult.h
     src/io/MeshImport.h
     src/io/MeshImport.cpp
@@ -92,6 +96,7 @@ add_library(suspkin_core STATIC
     src/io/Zip.h
     src/io/Zip.cpp
     src/model/Hardpoint.h
+    src/model/Hardpoint.cpp
     src/model/HardpointMirror.h
     src/model/HardpointMirror.cpp
     # Where the wheel models are placed: pure geometry over the hardpoint table,
@@ -121,6 +126,13 @@ add_library(suspkin_core STATIC
     src/model/SuspensionSolver.cpp
     src/model/Sweep.h
     src/model/Sweep.cpp
+    # The other direction: from vehicle targets to hardpoints. Trigonometry over
+    # a few dozen numbers, ported from the team's Python geometry editor, and
+    # checked by feeding what it makes back through the solver above.
+    src/model/DesignParameters.h
+    src/model/DesignParameters.cpp
+    src/model/HardpointGenerator.h
+    src/model/HardpointGenerator.cpp
     src/io/LinkageTemplate.h
     src/io/LinkageTemplate.cpp
     src/io/XlsxHardpoints.h
@@ -153,6 +165,33 @@ qt_add_resources(suspkin_core "templates"
     BASE "resources/templates"
     FILES
         resources/templates/double_wishbone_pushrod.json
+)
+
+# The workbook a project gets when it has points and no workbook of its own:
+# one sheet with a Name/Value header. Generated at configure time, like the
+# test fixtures, so no binary is committed -- which makes python3 a build
+# dependency of the application and not only of the tests. Every timestamp in
+# it is fixed, so the bytes compiled in are the same on every build.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(SUSPKIN_GENERATED_TEMPLATES "${CMAKE_CURRENT_BINARY_DIR}/generated/templates")
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/make_blank_hardpoints_xlsx.py"
+            "${SUSPKIN_GENERATED_TEMPLATES}/blank_hardpoints.xlsx"
+    RESULT_VARIABLE _blank_result
+    OUTPUT_VARIABLE _blank_output
+    ERROR_VARIABLE _blank_output)
+if(NOT _blank_result EQUAL 0)
+    message(FATAL_ERROR "Generating the blank hardpoint workbook failed:\n${_blank_output}")
+endif()
+# Editing the generator reconfigures, so the resource never lags behind it.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/make_blank_hardpoints_xlsx.py")
+qt_add_resources(suspkin_core "blank_workbook"
+    PREFIX "/templates"
+    BASE "${SUSPKIN_GENERATED_TEMPLATES}"
+    FILES
+        "${SUSPKIN_GENERATED_TEMPLATES}/blank_hardpoints.xlsx"
 )
 
 # MSVC needs both of these; setting them now costs nothing and saves a confusing
@@ -189,8 +228,18 @@ qt_add_executable(suspkin
     src/app/ProjectLauncher.cpp
     src/app/MirrorDialog.h
     src/app/MirrorDialog.cpp
+    # Points and parts made here rather than imported: a new point, the
+    # generator's targets and preview, and a part through the selection.
+    src/app/PointDialog.h
+    src/app/PointDialog.cpp
+    src/app/GenerateDialog.h
+    src/app/GenerateDialog.cpp
+    src/app/PartDialogs.h
+    src/app/PartDialogs.cpp
     src/app/SteeringDialog.h
     src/app/SteeringDialog.cpp
+    src/app/StaticAnglesDialog.h
+    src/app/StaticAnglesDialog.cpp
     src/app/RecentProjects.h
     src/app/RecentProjects.cpp
     src/app/UpdateChecker.h

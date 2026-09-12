@@ -25,7 +25,7 @@ const char kNoPoint[] = "";
 } // namespace
 
 WheelDialog::WheelDialog(const HardpointTable& table, const WheelSpec& spec,
-                         const QString& wheelPath, const QString& rimPath,
+                         const QString& tyrePath, const QString& rimPath,
                          const QString& browseDirectory, QWidget* parent)
     : QDialog(parent), m_table(table), m_browseDirectory(browseDirectory)
 {
@@ -58,7 +58,8 @@ WheelDialog::WheelDialog(const HardpointTable& table, const WheelSpec& spec,
     // --- the two models ----------------------------------------------------
     auto* modelBox = new QGroupBox(tr("Models"), this);
     auto* modelForm = new QFormLayout(modelBox);
-    m_wheelPath = buildModelRow(modelForm, tr("Wheel:"), wheelPath, tr("Choose the wheel model"));
+    // A wheel is the two of them together: the tyre, and the rim it sits on.
+    m_tyrePath = buildModelRow(modelForm, tr("Tyre:"), tyrePath, tr("Choose the tyre model"));
     m_rimPath = buildModelRow(modelForm, tr("Rim:"), rimPath, tr("Choose the rim model"));
 
     auto* modelHint = new QLabel(
@@ -181,14 +182,14 @@ WheelSpec WheelDialog::spec() const
     return spec;
 }
 
-QString WheelDialog::wheelPath() const { return m_wheelPath->text().trimmed(); }
+QString WheelDialog::tyrePath() const { return m_tyrePath->text().trimmed(); }
 QString WheelDialog::rimPath() const { return m_rimPath->text().trimmed(); }
 
 void WheelDialog::refreshSummary()
 {
     QStringList warnings;
     const std::vector<WheelPlacement> placements = resolveWheels(spec(), m_table, &warnings);
-    const int models = int(!wheelPath().isEmpty()) + int(!rimPath().isEmpty());
+    const int models = int(!tyrePath().isEmpty()) + int(!rimPath().isEmpty());
 
     // Both halves are needed for anything to appear: a model with nowhere to go
     // and a centre with nothing to draw are equally invisible.
@@ -199,7 +200,7 @@ void WheelDialog::refreshSummary()
     if (placements.empty()) {
         lines << tr("Pick the hardpoint each wheel is centred on.");
     } else if (models == 0) {
-        lines << tr("Pick a wheel model, a rim model, or both.");
+        lines << tr("Pick a tyre model, a rim model, or both.");
     } else {
         int mirrored = 0;
         for (const WheelPlacement& placement : placements) mirrored += placement.mirrored ? 1 : 0;

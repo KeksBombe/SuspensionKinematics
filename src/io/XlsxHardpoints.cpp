@@ -168,18 +168,25 @@ QStringList parseSharedStrings(const QByteArray& xml)
     return strings;
 }
 
-SheetRows parseSheet(const QByteArray& xml, const QStringList& sharedStrings)
+/// The populated cells of a worksheet. @p lastRow, when given, is set to the
+/// last row the sheet has anything at all for -- an empty formatted row, a cell
+/// with no value -- which is what an append has to go below.
+SheetRows parseSheet(const QByteArray& xml, const QStringList& sharedStrings, int* lastRow = nullptr)
 {
     SheetRows rows;
     QXmlStreamReader reader(xml);
     int row = 0;
     int column = 0;
+    int highest = 0;
 
     while (!reader.atEnd()) {
         if (reader.readNext() != QXmlStreamReader::StartElement) continue;
 
         if (reader.name() == u"row") {
             row = reader.attributes().value(u"r").toInt();
+            // A row may leave out its number and simply follow the last one.
+            if (row <= 0) row = highest + 1;
+            highest = std::max(highest, row);
             column = 0;
             continue;
         }
@@ -190,6 +197,7 @@ SheetRows parseSheet(const QByteArray& xml, const QStringList& sharedStrings)
         const QStringView ref = attributes.value(u"r");
         if (!ref.isEmpty()) {
             if (!parseCellRef(ref, &row, &column)) continue;
+            highest = std::max(highest, row);
         } else {
             // A cell may omit its reference, in which case it simply follows the
             // previous one.
@@ -220,6 +228,7 @@ SheetRows parseSheet(const QByteArray& xml, const QStringList& sharedStrings)
 
         if (!cell.text.isEmpty() && row > 0) rows[row][column] = cell;
     }
+    if (lastRow) *lastRow = highest;
     return rows;
 }
 
@@ -251,6 +260,7 @@ struct Group {
     double value[3] = { 0.0, 0.0, 0.0 };
     QString ref[3];
     QString text[3];
+    QString nameRef[3];
     bool present[3] = { false, false, false };
 };
 
@@ -319,13 +329,14 @@ Extraction extractWith(const SheetRows& rows, int nameColumn, int valueColumn, i
         auto existing = indexByBase.find(base);
         if (existing == indexByBase.end()) {
             existing = indexByBase.insert(base, static_cast<int>(groups.size()));
-            groups.push_back(Group{ base, {}, {}, {}, {} });
+            groups.push_back(Group{ base, {}, {}, {}, {}, {} });
         }
         Group& group = groups[*existing];
         group.present[axis] = true;
         group.value[axis] = value;
         group.ref[axis] = cellRef(row, valueColumn);
         group.text[axis] = valueCell->second.text.trimmed();
+        group.nameRef[axis] = cellRef(row, nameColumn);
     }
 
     Extraction result;
@@ -343,7 +354,8 @@ Extraction extractWith(const SheetRows& rows, int nameColumn, int valueColumn, i
         result.table.points.push_back(std::move(point));
         result.rows.push_back(XlsxCellRow{ group.base,
                                            { group.ref[0], group.ref[1], group.ref[2] },
-                                           { group.text[0], group.text[1], group.text[2] } });
+                                           { group.text[0], group.text[1], group.text[2] },
+                                           { group.nameRef[0], group.nameRef[1], group.nameRef[2] } });
     }
 
     if (skippedRows > 0) {
@@ -477,15 +489,19 @@ std::vector<Attribute> parseAttributes(const QByteArray& text)
     return attributes;
 }
 
-/// Rewrite the value of specific cells, leaving every other byte of the sheet
-/// exactly as it was.
+/// Rewrite the value of specific cells, and empty others, leaving every other
+/// byte of the sheet exactly as it was.
 ///
 /// This is a splice rather than a parse-and-reserialise on purpose: a worksheet
 /// carries conditional formatting, data validation, merged ranges and markup
 /// from Excel extensions that a round trip through a generic XML writer would
 /// reorder or drop. Only the cells being edited are touched.
+///
+/// A cell in @p blanks keeps its element and its style -- the column still
+/// reads as formatted the way the author formatted it -- and loses its value.
 std::optional<QByteArray> patchCellValues(const QByteArray& xml,
-                                          const QHash<QString, QString>& values, QString* error)
+                                          const QHash<QString, QString>& values,
+                                          const QSet<QString>& blanks, QString* error)
 {
     QByteArray out;
     out.reserve(xml.size() + 32 * values.size());
@@ -540,7 +556,9 @@ std::optional<QByteArray> patchCellValues(const QByteArray& xml,
             if (attribute.name == "r") reference = attribute.value;
 
         if (isRow) {
-            row = reference.toInt();
+            // A row may leave out its number and follow the last one, which is
+            // how the reader counts it too.
+            row = reference.isEmpty() ? row + 1 : reference.toInt();
             column = 0;
             i = cursor + 1;
             continue;
@@ -556,7 +574,8 @@ std::optional<QByteArray> patchCellValues(const QByteArray& xml,
         }
 
         const auto replacement = values.find(ref);
-        if (replacement == values.end()) {
+        const bool blanking = replacement == values.end() && blanks.contains(ref);
+        if (replacement == values.end() && !blanking) {
             i = cursor + 1;
             continue;
         }
@@ -592,16 +611,22 @@ std::optional<QByteArray> patchCellValues(const QByteArray& xml,
         out.append(xml.constData() + copied, i - copied);
         out.append("<c");
         out.append(keptAttributes);
-        out.append("><v>");
-        out.append(replacement->toUtf8());
-        out.append("</v></c>");
+        if (blanking) {
+            out.append("/>");
+        } else {
+            out.append("><v>");
+            out.append(replacement->toUtf8());
+            out.append("</v></c>");
+            written.insert(ref);
+        }
 
-        written.insert(ref);
         copied = end;
         i = end;
     }
     out.append(xml.constData() + copied, xml.size() - copied);
 
+    // A cell that was meant to be blanked and is not there is already blank, so
+    // only the values are checked for.
     if (written.size() != values.size()) {
         for (auto it = values.begin(); it != values.end(); ++it) {
             if (!written.contains(it.key())) {
@@ -736,6 +761,76 @@ QByteArray withFullCalcOnLoad(const QByteArray& workbookXml)
     return out;
 }
 
+/// One worksheet, as the workbook lists it.
+struct SheetRef {
+    QString name;
+    QString part;
+};
+
+/// Where everything is inside an opened workbook: the workbook part, its sheets
+/// in the order it lists them, and the shared-string table the cells index.
+struct Package {
+    QString workbookPart;
+    std::vector<SheetRef> sheets;
+    QStringList sharedStrings;
+};
+
+/// Follow the package's relationships from the root to the sheets. Fails, with
+/// @p error set, when there is no workbook part or it lists no sheets.
+std::optional<Package> readPackage(const zip::Archive& archive, QString* error)
+{
+    Package package;
+
+    // Package root -> the workbook part.
+    package.workbookPart = QStringLiteral("xl/workbook.xml");
+    if (const std::optional<QByteArray> rootRels = archive.extract(QStringLiteral("_rels/.rels"))) {
+        const std::vector<Relationship> relationships = parseRelationships(*rootRels);
+        if (const Relationship* main = findByType(relationships, QLatin1StringView("/officeDocument")))
+            package.workbookPart = resolveTarget(QString(), main->target);
+    }
+
+    QString extractError;
+    const std::optional<QByteArray> workbookXml = archive.extract(package.workbookPart, &extractError);
+    if (!workbookXml) {
+        if (error) *error = tr("The workbook part is missing or unreadable. %1").arg(extractError);
+        return std::nullopt;
+    }
+
+    std::vector<Relationship> workbookRels;
+    if (const std::optional<QByteArray> rels = archive.extract(relsPartFor(package.workbookPart)))
+        workbookRels = parseRelationships(*rels);
+
+    {
+        QString sharedPart;
+        if (const Relationship* relationship =
+                findByType(workbookRels, QLatin1StringView("/sharedStrings")))
+            sharedPart = resolveTarget(package.workbookPart, relationship->target);
+        else
+            sharedPart = QStringLiteral("xl/sharedStrings.xml");
+        if (const std::optional<QByteArray> shared = archive.extract(sharedPart))
+            package.sharedStrings = parseSharedStrings(*shared);
+    }
+
+    QXmlStreamReader reader(*workbookXml);
+    while (!reader.atEnd()) {
+        if (reader.readNext() != QXmlStreamReader::StartElement) continue;
+        if (reader.name() != u"sheet") continue;
+        const QXmlStreamAttributes attributes = reader.attributes();
+        const QString id = attributes.value(kRelNamespace, u"id").toString();
+        const Relationship* relationship = findById(workbookRels, id);
+        if (!relationship) continue;
+        package.sheets.push_back({ attributes.value(u"name").toString(),
+                                   resolveTarget(package.workbookPart, relationship->target) });
+    }
+    if (package.sheets.empty()) {
+        if (error) *error = tr("The workbook has no worksheets.");
+        return std::nullopt;
+    }
+    return package;
+}
+
+const char kBlankWorkbookResource[] = ":/templates/blank_hardpoints.xlsx";
+
 } // namespace
 
 const XlsxCellRow* XlsxHardpointSource::find(const QString& name) const
@@ -767,74 +862,27 @@ HardpointLoadResult readHardpointsXlsx(const QString& path)
         return result;
     }
 
-    // Package root -> the workbook part.
-    QString workbookPart = QStringLiteral("xl/workbook.xml");
-    if (const std::optional<QByteArray> rootRels = archive->extract(QStringLiteral("_rels/.rels"))) {
-        const std::vector<Relationship> relationships = parseRelationships(*rootRels);
-        if (const Relationship* main = findByType(relationships, QLatin1StringView("/officeDocument")))
-            workbookPart = resolveTarget(QString(), main->target);
-    }
-
-    const std::optional<QByteArray> workbookXml = archive->extract(workbookPart, &error);
-    if (!workbookXml) {
-        result.error = tr("The workbook part is missing or unreadable. %1").arg(error);
-        return result;
-    }
-
-    std::vector<Relationship> workbookRels;
-    if (const std::optional<QByteArray> rels = archive->extract(relsPartFor(workbookPart)))
-        workbookRels = parseRelationships(*rels);
-
-    QStringList sharedStrings;
-    {
-        QString sharedPart;
-        if (const Relationship* relationship =
-                findByType(workbookRels, QLatin1StringView("/sharedStrings")))
-            sharedPart = resolveTarget(workbookPart, relationship->target);
-        else
-            sharedPart = QStringLiteral("xl/sharedStrings.xml");
-        if (const std::optional<QByteArray> shared = archive->extract(sharedPart))
-            sharedStrings = parseSharedStrings(*shared);
-    }
-
-    // Sheets, in the order the workbook lists them.
-    struct SheetRef {
-        QString name;
-        QString part;
-    };
-    std::vector<SheetRef> sheets;
-    {
-        QXmlStreamReader reader(*workbookXml);
-        while (!reader.atEnd()) {
-            if (reader.readNext() != QXmlStreamReader::StartElement) continue;
-            if (reader.name() != u"sheet") continue;
-            const QXmlStreamAttributes attributes = reader.attributes();
-            const QString id = attributes.value(kRelNamespace, u"id").toString();
-            const Relationship* relationship = findById(workbookRels, id);
-            if (!relationship) continue;
-            sheets.push_back({ attributes.value(u"name").toString(),
-                               resolveTarget(workbookPart, relationship->target) });
-        }
-    }
-    if (sheets.empty()) {
-        result.error = tr("The workbook has no worksheets.");
+    const std::optional<Package> package = readPackage(*archive, &error);
+    if (!package) {
+        result.error = error;
         return result;
     }
 
     // The first sheet that actually yields points wins, so a workbook with a
     // cover sheet in front of the table still imports.
-    for (const SheetRef& sheet : sheets) {
+    for (const SheetRef& sheet : package->sheets) {
         const std::optional<QByteArray> sheetXml = archive->extract(sheet.part);
         if (!sheetXml) continue;
 
-        const SheetRows parsed = parseSheet(*sheetXml, sharedStrings);
+        int lastRow = 0;
+        const SheetRows parsed = parseSheet(*sheetXml, package->sharedStrings, &lastRow);
         Extraction extraction = extractHardpoints(parsed);
         if (extraction.table.isEmpty()) continue;
 
         result.table = std::move(extraction.table);
         result.warnings = std::move(extraction.warnings);
         result.source.workbook = std::move(bytes);
-        result.source.workbookPart = workbookPart;
+        result.source.workbookPart = package->workbookPart;
         result.source.sheetPart = sheet.part;
         result.source.sheetName = sheet.name;
         result.source.rows = std::move(extraction.rows);
@@ -842,7 +890,10 @@ HardpointLoadResult readHardpointsXlsx(const QString& path)
         result.source.valueColumn = extraction.valueColumn;
         // The last row of the sheet, not of the table: appending below anything
         // the author wrote is the only placement that cannot land on top of it.
-        result.source.lastRow = parsed.empty() ? 0 : parsed.rbegin()->first;
+        // Counted from the row elements rather than from the values, because a
+        // row that holds only formatting -- or a deleted point's blanked cells --
+        // is still a row an appended one must not be numbered the same as.
+        result.source.lastRow = std::max(lastRow, parsed.empty() ? 0 : parsed.rbegin()->first);
         result.elapsedMs = timer.elapsed();
         return result;
     }
@@ -902,10 +953,23 @@ QString writeHardpointsXlsx(const QString& path, const HardpointTable& table,
             .arg(newPoints.size());
     }
 
+    // The other direction: points the workbook holds and the table does not.
+    // Deleted, or renamed -- to a workbook the two are the same thing, since the
+    // name is the key -- so the name and the value go and the rest of the row
+    // stays.
+    QSet<QString> blanks;
+    for (const XlsxCellRow& row : source.rows) {
+        if (table.indexOf(row.name) >= 0) continue;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (!row.ref[axis].isEmpty()) blanks.insert(row.ref[axis]);
+            if (!row.nameRef[axis].isEmpty()) blanks.insert(row.nameRef[axis]);
+        }
+    }
+
     const std::optional<QByteArray> sheetXml = archive->extract(source.sheetPart, &error);
     if (!sheetXml) return tr("The worksheet could not be read back. %1").arg(error);
 
-    std::optional<QByteArray> patched = patchCellValues(*sheetXml, values, &error);
+    std::optional<QByteArray> patched = patchCellValues(*sheetXml, values, blanks, &error);
     if (!patched) return error;
 
     if (!newPoints.empty()) {
@@ -945,6 +1009,69 @@ QString writeHardpointsXlsx(const QString& path, const HardpointTable& table,
         return tr("Cannot write to %1: %2").arg(path, out.errorString());
 
     return QString();
+}
+
+QByteArray blankHardpointWorkbookBytes()
+{
+    QFile file{ QString::fromLatin1(kBlankWorkbookResource) };
+    if (!file.open(QIODevice::ReadOnly)) {
+        // Compiled into the binary, so a missing one is a build problem rather
+        // than anything the user did.
+        qWarning("Blank hardpoint workbook is missing from the binary (%s).",
+                 kBlankWorkbookResource);
+        return {};
+    }
+    return file.readAll();
+}
+
+std::optional<XlsxHardpointSource> blankHardpointSource(const QByteArray& bytes, QString* error)
+{
+    QString openError;
+    const std::optional<zip::Archive> archive = zip::Archive::open(bytes, &openError);
+    if (!archive) {
+        if (error) *error = tr("The blank workbook is not a readable .xlsx. %1").arg(openError);
+        return std::nullopt;
+    }
+    const std::optional<Package> package = readPackage(*archive, error);
+    if (!package) return std::nullopt;
+
+    // The first sheet, where the header row is. Its columns are found the way
+    // the reader finds them, so a blank workbook laid out differently in some
+    // later release is still filled in the columns its header names.
+    const SheetRef& sheet = package->sheets.front();
+    const std::optional<QByteArray> sheetXml = archive->extract(sheet.part, &openError);
+    if (!sheetXml) {
+        if (error) *error = tr("The blank workbook's sheet is unreadable. %1").arg(openError);
+        return std::nullopt;
+    }
+    int lastRow = 0;
+    const SheetRows parsed = parseSheet(*sheetXml, package->sharedStrings, &lastRow);
+
+    XlsxHardpointSource source;
+    source.workbook = bytes;
+    source.workbookPart = package->workbookPart;
+    source.sheetPart = sheet.part;
+    source.sheetName = sheet.name;
+    if (!findHeaderRow(parsed, &source.nameColumn, &source.valueColumn)) {
+        source.nameColumn = 1;
+        source.valueColumn = 2;
+    }
+    // Below the header, which is the one row there is.
+    source.lastRow = std::max(lastRow, 1);
+    return source;
+}
+
+QString writeNewHardpointsXlsx(const QString& path, const HardpointTable& table)
+{
+    const QByteArray bytes = blankHardpointWorkbookBytes();
+    if (bytes.isEmpty()) return tr("The blank workbook is missing from this build.");
+
+    QString error;
+    const std::optional<XlsxHardpointSource> source = blankHardpointSource(bytes, &error);
+    if (!source) return error;
+    // Every point goes down the append path, because the source holds none:
+    // the same code that adds a mirrored point to an imported workbook.
+    return writeHardpointsXlsx(path, table, *source);
 }
 
 QString hardpointFileFilter()

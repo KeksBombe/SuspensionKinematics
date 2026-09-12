@@ -72,6 +72,9 @@ public:
 protected:
     void resizeEvent(QResizeEvent* event) override;
     QModelIndex moveCursor(CursorAction action, Qt::KeyboardModifiers modifiers) override;
+    /// An editor for a frozen column opens in the frozen copy, which is the one
+    /// on top. Opened here it would be underneath it, out of sight.
+    bool edit(const QModelIndex& index, EditTrigger trigger, QEvent* event) override;
 
 private:
     int frozenWidth() const;
@@ -93,9 +96,12 @@ FrozenColumnView::FrozenColumnView(int frozenColumns, QWidget* parent)
     m_frozen->setAlternatingRowColors(true);
     m_frozen->setWordWrap(false);
     m_frozen->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_frozen->setSelectionMode(QAbstractItemView::SingleSelection);
-    // Both frozen columns are read-only, so there is nothing to edit in here.
-    m_frozen->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_frozen->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    // The name is editable -- a rename -- and it is only ever seen in here, so
+    // a double-click in here is what edits it. The number is read-only in the
+    // model, which is what keeps that column out of it.
+    m_frozen->setEditTriggers(QAbstractItemView::DoubleClicked
+                              | QAbstractItemView::SelectedClicked);
     m_frozen->verticalHeader()->hide();
     m_frozen->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
     m_frozen->horizontalHeader()->setHighlightSections(false);
@@ -198,6 +204,19 @@ QModelIndex FrozenColumnView::moveCursor(CursorAction action, Qt::KeyboardModifi
     return current;
 }
 
+bool FrozenColumnView::edit(const QModelIndex& index, EditTrigger trigger, QEvent* event)
+{
+    if (!index.isValid() || index.column() >= m_frozenColumns)
+        return QTableView::edit(index, trigger, event);
+
+    // Only for a trigger this view actually answers to -- a key press on the
+    // name, F2 -- and only for a cell that can be edited at all.
+    const bool wanted = trigger == AllEditTriggers || (editTriggers() & trigger);
+    if (!wanted || !(index.flags() & Qt::ItemIsEditable)) return false;
+    m_frozen->edit(index);
+    return true;
+}
+
 void FrozenColumnView::scrollTo(const QModelIndex& index, ScrollHint hint)
 {
     // A frozen column is always in view horizontally, but its row still has to
@@ -247,13 +266,16 @@ HardpointPanel::HardpointPanel(HardpointModel* model, QWidget* parent)
             &QSortFilterProxyModel::setFilterFixedString);
 
     connect(m_view->selectionModel(), &QItemSelectionModel::currentRowChanged, this,
-            [this](const QModelIndex& current) {
+            [this](const QModelIndex&) {
                 // Moving on is the acknowledgement of a refused edit.
                 m_rejection.clear();
                 updateStatusLine();
-                if (m_syncing) return;
-                emit rowSelected(current.isValid() ? m_proxy->mapToSource(current).row() : -1);
+                announceSelection();
             });
+    // Ctrl and Shift change the selection without moving the cursor, so the
+    // selection is listened to as well as the current row.
+    connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            [this] { announceSelection(); });
 
     // The store is what says whether anything is wrong; the panel only reports
     // it. Every path that can change that ends up here.
@@ -280,7 +302,9 @@ void HardpointPanel::buildTable()
     m_view->setModel(m_proxy);
 
     m_view->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_view->setSelectionMode(QAbstractItemView::SingleSelection);
+    // More than one row, so a delete can take several points and a new part
+    // can be made through them.
+    m_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_view->setSortingEnabled(true);
     m_view->setAlternatingRowColors(true);
     m_view->setShowGrid(false);
@@ -444,23 +468,60 @@ void HardpointPanel::updateStatusLine()
 
 void HardpointPanel::setSelectedRow(int row)
 {
+    setSelectedRows(row >= 0 ? QList<int>{ row } : QList<int>{}, row);
+}
+
+void HardpointPanel::setSelectedRows(const QList<int>& rows, int current)
+{
     m_syncing = true;
-    if (row < 0 || row >= m_model->rowCount()) {
-        m_view->selectionModel()->clearSelection();
-        m_view->selectionModel()->clearCurrentIndex();
-    } else {
-        const QModelIndex source = m_model->index(row, HardpointModel::NameColumn);
-        const QModelIndex proxy = m_proxy->mapFromSource(source);
-        // An active filter can hide the row the viewport just picked; there is
-        // nothing sensible to select then, so the table simply stays put.
-        if (proxy.isValid()) {
-            m_view->selectionModel()->setCurrentIndex(
-                proxy, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-            m_view->scrollTo(proxy, QAbstractItemView::EnsureVisible);
-        }
+    QItemSelectionModel* model = m_view->selectionModel();
+
+    QItemSelection selection;
+    for (const int row : rows) {
+        if (row < 0 || row >= m_model->rowCount()) continue;
+        // An active filter can hide a row the viewport just picked; there is
+        // nothing sensible to show for it, so it is simply left out.
+        const QModelIndex proxy = m_proxy->mapFromSource(m_model->index(row, 0));
+        if (proxy.isValid()) selection.select(proxy, proxy);
+    }
+    model->select(selection, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+
+    const QModelIndex centred =
+        current >= 0 && current < m_model->rowCount()
+            ? m_proxy->mapFromSource(m_model->index(current, HardpointModel::NameColumn))
+            : QModelIndex();
+    if (centred.isValid()) {
+        model->setCurrentIndex(centred, QItemSelectionModel::NoUpdate);
+        m_view->scrollTo(centred, QAbstractItemView::EnsureVisible);
+    } else if (selection.isEmpty()) {
+        model->clearCurrentIndex();
     }
     m_syncing = false;
     updateStatusLine();
+}
+
+QList<int> HardpointPanel::selectedRows() const
+{
+    QList<int> rows;
+    for (const QModelIndex& index : m_view->selectionModel()->selectedRows()) {
+        const int row = m_proxy->mapToSource(index).row();
+        if (row >= 0 && !rows.contains(row)) rows.append(row);
+    }
+    return rows;
+}
+
+void HardpointPanel::announceSelection()
+{
+    if (m_syncing) return;
+    const int current = currentModelRow();
+    QList<int> rows = selectedRows();
+    // The row the cursor is on is the one the selection is centred on, and it
+    // goes last, the way a click in the viewport adds to the end.
+    if (current >= 0 && rows.contains(current)) {
+        rows.removeAll(current);
+        rows.append(current);
+    }
+    emit selectionChanged(rows, rows.contains(current) ? current : -1);
 }
 
 } // namespace suspkin

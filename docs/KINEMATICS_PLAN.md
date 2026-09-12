@@ -91,13 +91,13 @@ converts a requested travel into `θ`. Same routine, different target, for
 
 | Measure | How |
 |---|---|
-| Camber, toe | The upright rotation applied to the design spin axis. That axis is `normalize(WheelAxis − WC)`, oriented outboard, which is static camber *and* static toe straight out of the table. With no axis point named it falls back to `normalize(cross(WC − CP, x̂))`, which captures camber only and assumes zero toe -- which is why toe is also reported as **change from design** (that curve being the bump steer) alongside the absolute number. |
+| Camber, toe | The upright rotation applied to the design spin axis. That axis is built from the axle's **stated static camber and toe** when the project has them (`spinAxisFor()`, Linkage ▸ Static Camber and Toe); otherwise it is `normalize(WheelAxis − WC)`, oriented outboard, which is static camber *and* static toe straight out of the table. With no axis point named it falls back to `normalize(cross(WC − CP, x̂))`, which captures camber only and assumes zero toe -- which is why toe is also reported as **change from design** (that curve being the bump steer) alongside the absolute number. **Camber to ground** is the same axis against the road rather than the body, which in roll is tilted: `z = -y tan(roll)`. |
 | Caster, KPI | The steering axis `LCA_O → UCA_O`, in side view and front view. |
 | Scrub radius, mechanical trail | Where that axis pierces the ground plane through the contact patch, against the contact patch itself. The patch is computed per pose -- a tyre radius from the wheel centre, straight down the wheel's own plane -- so it walks round the tyre as the wheel leans instead of being carried rigidly by the upright. |
 | Track / half-track change, wheelbase change | The contact patch's `y` and `x` against design. |
-| Front-view instant centre | Each arm's pivot axis is crossed with the transverse plane through the wheel centre to give its front-view pivot; the two arm lines are then intersected in the `YZ` view. |
+| Front-view instant centre | The RCVD construction: each wishbone's plane runs through its pivot axis and its ball joint where the joint is now, and the line the two planes share is pierced by the transverse plane through the wheel centre (`planesCrossing()`). Not the arm lines from pivot to ball joint flattened into `YZ`, which is what this was until 2026-09-11 -- see the progress log. |
 | Roll centre | Per axle: the two `contact patch → instant centre` lines intersected. Falls back to the centre plane `y = 0` with one side only. |
-| Damper length, motion ratio | `|Damper_O − Damper_I|`; the ratio is the central difference of damper length against wheel travel across the sweep. |
+| Damper length, motion ratio | `|Damper_O − Damper_I|`; the ratio is the central difference of damper **compression** against wheel travel across the sweep -- positive for a damper bump compresses, the way a motion ratio is quoted. Until 2026-09-12 it was the length change, the same number with the sign turned round. |
 | Anti-roll bar | Each arm's angle from design. Bodily rotation is their mean, **twist** is their difference — so pure bump shows the bar doing nothing and roll shows it working, which is the honest kinematic answer without inventing a stiffness model. |
 
 ## 4. Work breakdown and status
@@ -191,19 +191,24 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started
 - [x] `HardpointEdits` gains `removed` (names), round-tripped through
       `edits.json`; `applyHardpointEdits()` drops them, removals first so a
       delete-then-re-add comes back as the addition.
-- [ ] `HardpointModel` — insert / remove rows, and an editable name column,
+- [x] `HardpointModel` — insert / remove rows, and an editable name column,
       guarded so a rename of a workbook-backed point is recorded as
-      remove + add.
-- [ ] `MainWindow` — `Hardpoints ▸ Add Point…` (seeded from the selection),
+      remove + add. *(Landed as `HARDPOINT_GENERATOR_PLAN.md` Phase A, which
+      superseded these four; the remove + add falls out of `diffHardpoints()`.)*
+- [x] `MainWindow` — `Hardpoints ▸ Add Point…` (seeded from the selection),
       `Delete Point`, `Rename Point…`.
-- [ ] `writeHardpointsXlsx()` — a removed point's three rows have their **name
+- [x] `writeHardpointsXlsx()` — a removed point's three rows have their **name
       and value cells blanked**, leaving everything else in those rows intact.
       (Deleting whole `<row>` elements would take neighbouring columns with them.)
-- [ ] Multi-select in `HardpointPanel` and in the viewport (ctrl-click).
-- [ ] `Parts ▸ New Part from Selection…` — writes a part into the project's
+- [x] Multi-select in `HardpointPanel` and in the viewport (ctrl-click).
+- [x] `Parts ▸ New Part from Selection…` — writes a part into the project's
       `linkage/template.json`. Needs a per-part `"perCorner": false` so a part
       naming literal points is instantiated once rather than once per corner.
-- [ ] `Parts ▸ Edit Parts…` — list, rename, delete.
+      *(Literal means literal: no `{corner}`, no mirror. The part is patched into
+      the file, not the file rewritten -- `addTemplatePart()`.)*
+- [x] `Parts ▸ Edit Parts…` — list, rename, delete. *(Rename is the label; the
+      id is the key and stays. A relabelled part renames its body in the
+      configuration table too, so the rows naming it do not all turn red.)*
 
 ### Phase E — tests
 
@@ -220,7 +225,12 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started
 - [x] `tests/test_linkage.cpp` — `"mechanism"` block round-trips; a template
       without one still loads; every name the mechanism asks for is one the
       parts already draw.
-- [ ] `tests/test_project.cpp` — `removed` round-trips through `edits.json`.
+- [x] `tests/test_project.cpp` — `removed` round-trips through `edits.json`.
+      *(`removedPointsRoundTripThroughTheirFile`, and reopening deletes it
+      again rather than bringing it back.)*
+- [x] `tests/test_linkage.cpp` — a literal part is drawn once through the names
+      it gives and says so when it loses one; adding, removing and relabelling a
+      part leaves the rest of a hand-written template byte for byte.
 - [x] `tests/test_kinematics.cpp` — a travel and an increment become a range and
       a step count; bump and rebound are not assumed equal; each kind keeps its
       own travel in its own unit; an increment of nothing is bounded rather than
@@ -350,3 +360,62 @@ solved the right branch at every step.
     rear not), the stored `kind: steer` on the rear axle comes back as `bump`,
     and a rear steer pose renders pixel-identical to the bump pose it fell back
     to. The front axle still steers.
+
+- **2026-09-11** -- **Phase D done**, the points half of it as
+  `HARDPOINT_GENERATOR_PLAN.md` Phase A (see its progress log). The parts half:
+  a per-part `"perCorner": false` drawn once through literal names, New Part
+  from Selection and Edit Parts, all three patching the template rather than
+  rewriting it. The selection is a list now, kept in the order it was picked,
+  because that is the order a new part is drawn through.
+  - **Open question for this plan's measures.** The hardpoint generator places
+    the front-view instant centre where the arm *planes* cross the transverse
+    plane through the wheel centre. The measure in section 3 draws each arm's
+    line to its *ball joint*, which ignores a caster's worth of fore-aft offset:
+    on the 2025 car's front axle the roll centre reads 26.8 mm where the
+    generator put 30. The two agree exactly with no caster and no trail.
+    Changing section 3 to the arm-plane construction is a decision, not a fix,
+    because it moves every existing project's roll centre curve.
+
+- **2026-09-11** -- **The open question above is decided: the arm planes.** The
+  team's own car answered it. Leon's 26_DY workbook was designed to a 10 mm
+  front and 30 mm rear roll centre; the arm-plane construction reads 10.0002
+  and 30.0012 off it, and the old one read 6.33 and 29.83 -- which was reported
+  as "the roll centre heights are wrong". The front's upper pivot axis falls
+  38 mm over 281 mm and its joints sit a caster's worth apart, which is exactly
+  the case the two constructions disagree on. Every existing project's roll
+  centre curve moves, to where its designer put it.
+  `aGeneratedCarSweepsWithoutAWorkbook` now holds both axles to 1e-6, and
+  `theInstantCentreIsWhereTheArmPlanesCross` pins the construction on a corner
+  with an inclined axis and offset joints.
+  - The same feedback asked for several plots at once (a Curves menu, one plot
+    per tick, persisted as `SimulationState::measures`) and called the roll
+    centre offset "wild": it was a centreline roll centre drawn at the solver's
+    rounding, now floored at `sweepMeasureResolution()`.
+
+- **2026-09-12** -- **Every measure checked, and the three things the check
+  found.** Feedback: the camber curves "do not match Lotus", the left/right pair
+  should be switchable to one side, the contact patch should be computed from a
+  static camber that can be set, with a wheel axis doing the same for toe, and
+  the installation ratio is negative where 1 mm of wheel is 1 mm of compression.
+  - An independent solve of the 26_DY car -- the upright as a free rigid body,
+    six unknowns, Newton with a numerical Jacobian, no code shared with
+    `CornerSolver` -- reproduces all 146 columns of `sweepToCsv()` for bump, roll
+    and steer on both axles to the CSV's 5e-5 rounding. The arithmetic is right.
+  - What differed from Lotus is set-up and convention. The static camber came
+    from the workbook's contact patch, 0.8 mm outboard of a wheel centre 228.6 mm
+    up: -0.2°, whatever Lotus's Set Static Angles holds. **Linkage > Static
+    Camber and Toe** now states it per axle (`StaticAlignment`, manifest
+    `alignment`), outranking the wheel axis point and the patch, and the patch is
+    computed from it. Lotus's frame is X rearward and Y right and its positive
+    roll leans the body left; both are written up in README's Analysis section.
+  - Steering at a held wheel centre against a held contact patch moved camber by
+    at most 0.001° on this car (0.07 mm of jacking), so that is not it. Front-view
+    against true camber differs by 0.11° at full rack; kept as true camber.
+  - **Camber to ground** is a measure of its own: in roll the road tilts under
+    the car and it parts from body camber by the whole roll angle, which is the
+    number the rolled-body picture in the viewport shows.
+  - **Both sides / Left only / Right only** beside the Curves button,
+    `SimulationState::sides`.
+  - **The installation ratio's sign is turned round**: compression per bump, so
+    the 26_DY front reads +1.04 where it read -1.04. Its tests only ever checked
+    the magnitude.

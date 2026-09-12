@@ -25,10 +25,18 @@ namespace suspkin {
 /// row. Neither one leaves the store holding something the solver could not
 /// read.
 ///
-/// The name is deliberately read-only. It is the key the workbook is written
-/// back through -- and the key the configuration itself is stored under -- so
-/// letting it be edited here would either rename cells the user never looked at
-/// or quietly break the round trip.
+/// The name can be edited, and is guarded the same way a configuration cell is:
+/// hardpointNameProblem() refuses an empty name, one already taken, or one the
+/// workbook would read back as somebody else's coordinate, and the refusal goes
+/// out through editRejected(). It is the key everything else is stored under,
+/// so a rename carries the point's configuration and anything mirrored from it
+/// across to the new name. What a rename means to the workbook -- the old rows
+/// left behind, the new name arriving as a new point -- is not decided here:
+/// it falls out of diffHardpoints(), which sees a name gone and a name added.
+///
+/// Rows are inserted and removed through beginInsertRows() and
+/// beginRemoveRows() rather than a reset, so the sort and filter the panel has
+/// in front of this model stay where the user left them.
 class HardpointModel : public QAbstractTableModel {
     Q_OBJECT
 
@@ -63,6 +71,18 @@ public:
     /// Drops the points and their configuration together: a table with no
     /// points has nothing left to describe.
     void clear();
+
+    /// Put @p point in at @p row, which is clamped to the table. The caller has
+    /// already checked the name; a name that is taken is refused here too,
+    /// because two points under one key cannot both be written back.
+    bool insertPoint(int row, const Hardpoint& point);
+    /// Take out every row in @p rows, and the configuration stored under each
+    /// of their names -- a description of a point that is not there is not
+    /// something to keep.
+    void removePoints(std::vector<int> rows);
+    /// Rename the point at @p row. Refused, through editRejected(), for any name
+    /// hardpointNameProblem() has something to say about.
+    bool renamePoint(int row, const QString& name);
 
     /// The configuration for every point, keyed by name.
     void setConfig(HardpointConfigMap config);
@@ -100,6 +120,9 @@ signals:
     void coordinateChanged(int row);
     /// The configuration of @p row was edited: its type, a body, or its bushing.
     void configChanged(int row);
+    /// The point at @p row is now called @p to rather than @p from. Everything
+    /// resolved by name -- the parts, the solve, the wheels -- has to look again.
+    void pointRenamed(int row, const QString& from, const QString& to);
     /// An edit was refused because it could not mean anything. The row is the
     /// model row; the reason is meant to be shown to whoever typed it.
     void editRejected(int row, const QString& reason);

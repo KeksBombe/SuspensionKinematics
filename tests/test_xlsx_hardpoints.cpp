@@ -52,6 +52,11 @@ private slots:
     void roundTripsThroughItsOwnOutput();
     void savingAddsRowsForPointsTheWorkbookDoesNotHave();
     void reReadingPicksUpAppendedRowsSoTheyAreNotAddedTwice();
+
+    void aDeletedPointsRowKeepsItsNeighbouringColumns();
+    void aRenamedPointLeavesNoTraceOfItsOldName();
+    void appendingGoesBelowARowThatHoldsOnlyFormatting();
+    void theBlankWorkbookIsFilledNeverReadFirst();
 };
 
 void TestXlsxHardpoints::readsNamedTriples()
@@ -356,6 +361,148 @@ void TestXlsxHardpoints::reReadingPicksUpAppendedRowsSoTheyAreNotAddedTwice()
     QVERIFY(third.ok());
     QCOMPARE(int(third.table->size()), int(second.table->size()));
     QCOMPARE(findPoint(*third.table, "F_LCA_O_R")->coord[1], -1.5);
+}
+
+void TestXlsxHardpoints::aDeletedPointsRowKeepsItsNeighbouringColumns()
+{
+    const HardpointLoadResult result = readHardpointsXlsx(dataPath("extra_columns.xlsx"));
+    QVERIFY2(result.ok(), qPrintable(result.error));
+    QCOMPARE(result.table->size(), std::size_t(2));
+    QCOMPARE(result.source.rows.front().nameRef[0], QStringLiteral("A2"));
+
+    HardpointTable table = *result.table;
+    table.points.erase(table.points.begin()); // F_LCA_O
+
+    QTemporaryDir directory;
+    const QString out = directory.filePath(QStringLiteral("deleted.xlsx"));
+    QCOMPARE(writeHardpointsXlsx(out, table, result.source), QString());
+
+    const QByteArray sheet = partOf(out, "xl/worksheets/sheet1.xml");
+    // The name and the value are gone, and their cells -- with the style the
+    // value column was formatted in -- are still there, empty.
+    QVERIFY(sheet.contains("<c r=\"A2\"/>"));
+    QVERIFY(sheet.contains("<c r=\"B2\" s=\"1\"/>"));
+    QVERIFY(!sheet.contains("<v>-544.26</v>"));
+    // The unit and the note beside it are the author's, and stay.
+    QVERIFY(sheet.contains("<c r=\"C2\" t=\"s\">"));
+    QVERIFY(sheet.contains("<c r=\"D2\" t=\"s\">"));
+    QVERIFY(sheet.contains("<row r=\"2\">"));
+
+    const HardpointLoadResult reread = readHardpointsXlsx(out);
+    QVERIFY2(reread.ok(), qPrintable(reread.error));
+    QCOMPARE(reread.table->size(), std::size_t(1));
+    QVERIFY(!findPoint(*reread.table, "F_LCA_O"));
+    QCOMPARE(findPoint(*reread.table, "F_UCA_O")->coord[0], -556.894);
+    // A row with a unit in it and no name is a row with nothing to say, not one
+    // to warn about.
+    QVERIFY(reread.warnings.isEmpty());
+}
+
+void TestXlsxHardpoints::aRenamedPointLeavesNoTraceOfItsOldName()
+{
+    const HardpointLoadResult result = readHardpointsXlsx(dataPath("hardpoints.xlsx"));
+    QVERIFY2(result.ok(), qPrintable(result.error));
+
+    HardpointTable table = *result.table;
+    const int row = table.indexOf(QStringLiteral("F_LCA_O"));
+    QVERIFY(row >= 0);
+    table.points[std::size_t(row)].name = QStringLiteral("F_LCA_OUTER");
+
+    QTemporaryDir directory;
+    const QString out = directory.filePath(QStringLiteral("renamed.xlsx"));
+    QCOMPARE(writeHardpointsXlsx(out, table, result.source), QString());
+
+    const HardpointLoadResult reread = readHardpointsXlsx(out);
+    QVERIFY2(reread.ok(), qPrintable(reread.error));
+    QCOMPARE(reread.table->size(), result.table->size());
+    QVERIFY(!findPoint(*reread.table, "F_LCA_O"));
+    const Hardpoint* renamed = findPoint(*reread.table, "F_LCA_OUTER");
+    QVERIFY(renamed);
+    QCOMPARE(renamed->coord[1], 554.41200000000003);
+    // Nothing is left of it that the reader could half-recognise as a point.
+    QCOMPARE(reread.warnings.size(), result.warnings.size());
+}
+
+void TestXlsxHardpoints::appendingGoesBelowARowThatHoldsOnlyFormatting()
+{
+    // Row 10 of the fixture is styled and holds nothing. The last row with a
+    // value in it is 7, and appending at 8, 9 and then 10 would write a second
+    // row 10 -- which Excel refuses to open.
+    const HardpointLoadResult result = readHardpointsXlsx(dataPath("extra_columns.xlsx"));
+    QVERIFY2(result.ok(), qPrintable(result.error));
+    QCOMPARE(result.source.lastRow, 10);
+
+    HardpointTable table = *result.table;
+    Hardpoint added;
+    added.name = QStringLiteral("F_TieRod_O");
+    added.coord[0] = -600.0;
+    added.coord[1] = 560.0;
+    added.coord[2] = 150.0;
+    table.points.push_back(added);
+
+    QTemporaryDir directory;
+    const QString out = directory.filePath(QStringLiteral("appended.xlsx"));
+    QCOMPARE(writeHardpointsXlsx(out, table, result.source), QString());
+
+    const QByteArray sheet = partOf(out, "xl/worksheets/sheet1.xml");
+    QCOMPARE(sheet.count("<row r=\"10\""), qsizetype(1));
+    QVERIFY(sheet.contains("<row r=\"11\">"));
+    QVERIFY(sheet.contains("<row r=\"13\">"));
+
+    const HardpointLoadResult reread = readHardpointsXlsx(out);
+    QVERIFY2(reread.ok(), qPrintable(reread.error));
+    QCOMPARE(findPoint(*reread.table, "F_TieRod_O")->coord[2], 150.0);
+}
+
+void TestXlsxHardpoints::theBlankWorkbookIsFilledNeverReadFirst()
+{
+    const QByteArray blank = blankHardpointWorkbookBytes();
+    QVERIFY(!blank.isEmpty());
+
+    QTemporaryDir directory;
+    // Read on its own it is refused, which is exactly why it is never read
+    // first: a sheet with no points in it is what the reader rejects.
+    const QString empty = directory.filePath(QStringLiteral("empty.xlsx"));
+    QFile file(empty);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(blank);
+    file.close();
+    QVERIFY(!readHardpointsXlsx(empty).ok());
+
+    QString error;
+    const std::optional<XlsxHardpointSource> source = blankHardpointSource(blank, &error);
+    QVERIFY2(source.has_value(), qPrintable(error));
+    QVERIFY(source->canAppend());
+    QVERIFY(source->rows.empty());
+
+    HardpointTable table;
+    const char* names[] = { "F_LCA_O", "F_LCA_IF", "F_WheelCenter" };
+    for (int i = 0; i < 3; ++i) {
+        Hardpoint point;
+        point.name = QLatin1String(names[i]);
+        point.coord[0] = -539.1 - i;
+        point.coord[1] = 554.41200000000003 + i;
+        point.coord[2] = 1.0 / 3.0 + i;
+        table.points.push_back(point);
+    }
+
+    const QString out = directory.filePath(QStringLiteral("new.xlsx"));
+    QCOMPARE(writeNewHardpointsXlsx(out, table), QString());
+
+    // Written, then read: exactly the points that went in, in that order, to
+    // the last bit.
+    const HardpointLoadResult reread = readHardpointsXlsx(out);
+    QVERIFY2(reread.ok(), qPrintable(reread.error));
+    QCOMPARE(reread.source.sheetName, QStringLiteral("Hardpoints"));
+    QVERIFY(reread.warnings.isEmpty());
+    QCOMPARE(reread.table->size(), table.size());
+    for (std::size_t i = 0; i < table.size(); ++i) {
+        QCOMPARE(reread.table->points[i].name, table.points[i].name);
+        for (int axis = 0; axis < 3; ++axis)
+            QCOMPARE(reread.table->points[i].coord[axis], table.points[i].coord[axis]);
+    }
+    // Under the header, not on top of it.
+    QCOMPARE(reread.source.rows.front().ref[0], QStringLiteral("B2"));
 }
 
 QTEST_MAIN(TestXlsxHardpoints)

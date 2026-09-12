@@ -6,11 +6,16 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QStandardItemModel>
 #include <QStyle>
@@ -19,10 +24,37 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
 
 namespace suspkin {
 namespace {
+
+/// Wide enough for the tick labels, a title and a curve worth reading. A dock
+/// narrower than two of these gets its plots one above the other.
+constexpr int kMinPlotWidth = 360;
+
+/// Tall enough to read a curve off. More plots than fit at this height scroll,
+/// rather than being squashed into slivers.
+constexpr int kMinPlotHeight = 180;
+
+/// A menu that stays open while its ticks are clicked, so several curves can be
+/// picked in one visit instead of one visit per curve.
+class StayOpenMenu : public QMenu {
+public:
+    using QMenu::QMenu;
+
+protected:
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        QAction* action = actionAt(event->position().toPoint());
+        if (action && action->isEnabled() && action->isCheckable()) {
+            action->trigger();
+            return;
+        }
+        QMenu::mouseReleaseEvent(event);
+    }
+};
 
 /// The slider works in steps of this many per full range, which is fine enough
 /// that dragging it looks continuous and coarse enough that every step is a
@@ -40,11 +72,12 @@ const std::vector<SweepMeasure>& readoutMeasures()
 {
     static const std::vector<SweepMeasure> measures = {
         SweepMeasure::WheelTravel,       SweepMeasure::Camber,
+        SweepMeasure::CamberToGround,
         SweepMeasure::Toe,               SweepMeasure::Caster,
         SweepMeasure::KingpinInclination, SweepMeasure::ScrubRadius,
         SweepMeasure::HalfTrackChange,   SweepMeasure::DamperTravel,
         SweepMeasure::InstallationRatio, SweepMeasure::RollCentreHeight,
-        SweepMeasure::AntiRollTwist,
+        SweepMeasure::AntiRollTwist,     SweepMeasure::Ackermann,
     };
     return measures;
 }
@@ -120,17 +153,66 @@ void AnalysisPanel::buildUi()
     layout->addLayout(controls);
 
     auto* curveRow = new QHBoxLayout;
-    curveRow->addWidget(new QLabel(tr("Curve"), this));
-    m_measureBox = new QComboBox(this);
-    for (SweepMeasure measure : sweepMeasures())
-        m_measureBox->addItem(QStringLiteral("%1 [%2]").arg(sweepMeasureLabel(measure),
-                                                            sweepMeasureUnit(measure)),
-                              sweepMeasureKey(measure));
-    curveRow->addWidget(m_measureBox, 1);
+    curveRow->addWidget(new QLabel(tr("Curves"), this));
+    m_curveButton = new QToolButton(this);
+    m_curveButton->setPopupMode(QToolButton::InstantPopup);
+    m_curveButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_curveButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_curveMenu = new StayOpenMenu(m_curveButton);
+    for (SweepMeasure measure : sweepMeasures()) {
+        QAction* action = m_curveMenu->addAction(
+            QStringLiteral("%1 [%2]").arg(sweepMeasureLabel(measure), sweepMeasureUnit(measure)));
+        action->setCheckable(true);
+        action->setData(sweepMeasureKey(measure));
+        connect(action, &QAction::toggled, this, [this, action](bool checked) {
+            QList<SweepMeasure> picked;
+            for (const QAction* entry : m_curveMenu->actions())
+                if (entry->isChecked()) picked << sweepMeasureFromKey(entry->data().toString());
+            if (picked.isEmpty()) {
+                // The last curve stays: taking it away would leave an empty
+                // panel that looks like a fault rather than a choice.
+                const QSignalBlocker blocker(action);
+                action->setChecked(!checked);
+                return;
+            }
+            m_measures = picked;
+            syncPlots();
+            if (!m_updating) emit measuresChanged();
+        });
+    }
+    m_curveButton->setMenu(m_curveMenu);
+    curveRow->addWidget(m_curveButton, 1);
+
+    m_sidesBox = new QComboBox(this);
+    m_sidesBox->addItem(tr("Both sides"), int(SweepSides::Both));
+    m_sidesBox->addItem(tr("Left only"), int(SweepSides::Left));
+    m_sidesBox->addItem(tr("Right only"), int(SweepSides::Right));
+    m_sidesBox->setToolTip(
+        tr("Which wheels to plot. On a car whose two sides mirror each other, one of them is "
+           "all there is to read: the left wheel at +10 mm of rack is the right wheel at -10. "
+           "The roll centre and the other axle-wide curves are drawn either way."));
+    connect(m_sidesBox, &QComboBox::currentIndexChanged, this, [this] {
+        const auto picked = static_cast<SweepSides>(m_sidesBox->currentData().toInt());
+        if (picked == m_sides) return;
+        m_sides = picked;
+        for (PlotWidget* plot : std::as_const(m_plots)) plot->setSides(m_sides);
+        syncReadoutColumns();
+        if (!m_updating) emit sidesChanged();
+    });
+    curveRow->addWidget(m_sidesBox);
     layout->addLayout(curveRow);
 
-    m_plot = new PlotWidget(this);
-    layout->addWidget(m_plot, 1);
+    m_plotHost = new QWidget;
+    m_plotGrid = new QGridLayout(m_plotHost);
+    m_plotGrid->setContentsMargins(0, 0, 0, 0);
+    m_plotGrid->setSpacing(6);
+    m_plotScroll = new QScrollArea(this);
+    m_plotScroll->setWidgetResizable(true);
+    m_plotScroll->setFrameShape(QFrame::NoFrame);
+    m_plotScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_plotScroll->setWidget(m_plotHost);
+    m_plotScroll->viewport()->installEventFilter(this);
+    layout->addWidget(m_plotScroll, 1);
 
     m_readout = new QTableWidget(int(readoutMeasures().size()), 2, this);
     m_readout->setHorizontalHeaderLabels({ tr("Left"), tr("Right") });
@@ -171,10 +253,6 @@ void AnalysisPanel::buildUi()
         // left half way to.
         if (!on && m_playButton->isChecked()) m_playButton->setChecked(false);
         if (!m_updating) emit simulatingChanged(on);
-    });
-    connect(m_measureBox, &QComboBox::currentIndexChanged, this, [this] {
-        m_plot->setMeasure(measure());
-        if (!m_updating) emit measureChanged();
     });
     connect(m_exportButton, &QPushButton::clicked, this, &AnalysisPanel::exportCsvRequested);
     connect(m_parametersButton, &QPushButton::clicked, this, &AnalysisPanel::showParameters);
@@ -226,11 +304,7 @@ void AnalysisPanel::buildUi()
         m_updating = true;
         m_positionSlider->setValue(positionToSlider(value));
         m_updating = false;
-        m_plot->setMarker(value);
-        emit positionChanged(value);
-    });
-    connect(m_plot, &PlotWidget::markerMoved, this, [this](double value) {
-        setPosition(value);
+        setPlotMarker(value);
         emit positionChanged(value);
     });
 
@@ -240,7 +314,130 @@ void AnalysisPanel::buildUi()
         if (!m_updating) emit specChanged();
     });
 
+    syncPlots();
     syncPositionRange();
+}
+
+PlotWidget* AnalysisPanel::makePlot(SweepMeasure measure)
+{
+    auto* plot = new PlotWidget(m_plotHost);
+    plot->setMeasure(measure);
+    plot->setSides(m_sides);
+    plot->setSweep(m_result);
+    plot->setMarker(m_positionBox->value());
+    connect(plot, &PlotWidget::markerMoved, this, [this](double value) {
+        setPosition(value);
+        emit positionChanged(value);
+    });
+    // Every plot reads out wherever the pointer is over any of them, so two
+    // curves can be compared at one position without moving the model there.
+    connect(plot, &PlotWidget::hoverMoved, this, [this, plot](double input, bool hovering) {
+        for (PlotWidget* other : std::as_const(m_plots))
+            if (other != plot) other->setHover(input, hovering);
+    });
+    return plot;
+}
+
+void AnalysisPanel::syncPlots()
+{
+    // A plot that is still wanted is kept rather than made again, so it does
+    // not flicker or lose its hover when another curve is added beside it.
+    QList<PlotWidget*> wanted;
+    for (const SweepMeasure measure : std::as_const(m_measures)) {
+        const auto existing = std::find_if(m_plots.begin(), m_plots.end(), [measure](PlotWidget* plot) {
+            return plot->measure() == measure;
+        });
+        wanted << (existing != m_plots.end() ? *existing : makePlot(measure));
+    }
+    for (PlotWidget* plot : std::as_const(m_plots)) {
+        if (wanted.contains(plot)) continue;
+        m_plotGrid->removeWidget(plot);
+        plot->hide();
+        plot->deleteLater();
+    }
+    m_plots = wanted;
+    layOutPlots(true);
+    syncCurveMenu();
+}
+
+void AnalysisPanel::layOutPlots(bool force)
+{
+    const int count = int(m_plots.size());
+    const int columns =
+        std::clamp(m_plotScroll->viewport()->width() / kMinPlotWidth, 1, std::max(1, count));
+    if (!force && columns == m_plotColumns) return;
+    m_plotColumns = columns;
+
+    // A grid does not reflow on its own, so everything comes out and goes back
+    // in at its new place.
+    for (PlotWidget* plot : std::as_const(m_plots)) m_plotGrid->removeWidget(plot);
+    for (int row = 0; row < m_plotGrid->rowCount(); ++row) m_plotGrid->setRowStretch(row, 0);
+    for (int column = 0; column < m_plotGrid->columnCount(); ++column)
+        m_plotGrid->setColumnStretch(column, 0);
+
+    for (int i = 0; i < count; ++i) {
+        PlotWidget* plot = m_plots[i];
+        // One plot fills the dock, however short it is. Several are each kept
+        // tall enough to read, and scroll when the dock cannot hold them all.
+        plot->setMinimumHeight(count > 1 ? kMinPlotHeight : 0);
+        // The last one takes whatever is left of its row, rather than leaving a
+        // hole beside it.
+        const int column = i % columns;
+        const int span = i == count - 1 ? columns - column : 1;
+        m_plotGrid->addWidget(plot, i / columns, column, 1, span);
+        plot->show();
+    }
+    const int rows = (count + columns - 1) / columns;
+    for (int row = 0; row < rows; ++row) m_plotGrid->setRowStretch(row, 1);
+    for (int column = 0; column < columns; ++column) m_plotGrid->setColumnStretch(column, 1);
+}
+
+void AnalysisPanel::syncCurveMenu()
+{
+    for (QAction* action : m_curveMenu->actions()) {
+        const QSignalBlocker blocker(action);
+        action->setChecked(
+            m_measures.contains(sweepMeasureFromKey(action->data().toString())));
+    }
+
+    QStringList names;
+    for (const SweepMeasure measure : std::as_const(m_measures))
+        names << QStringLiteral("%1 [%2]").arg(sweepMeasureLabel(measure), sweepMeasureUnit(measure));
+    // A count rather than the list when there are several: a button's text is
+    // not elided, and a long one would force the dock wider than the user made
+    // it. The plots are titled, and the tooltip has the whole list.
+    m_curveButton->setText(names.size() == 1 ? names.front()
+                                             : tr("%n curve(s)", "", int(names.size())));
+    m_curveButton->setToolTip(
+        tr("Which curves to plot. Tick as many as you like; each gets a plot of its own.\n\n%1")
+            .arg(names.join(QLatin1Char('\n'))));
+}
+
+void AnalysisPanel::setPlotMarker(double input)
+{
+    for (PlotWidget* plot : std::as_const(m_plots)) plot->setMarker(input);
+}
+
+void AnalysisPanel::setSides(SweepSides sides)
+{
+    const int index = m_sidesBox->findData(int(sides));
+    if (index < 0) return;
+    m_updating = true;
+    m_sidesBox->setCurrentIndex(index);
+    m_updating = false;
+}
+
+void AnalysisPanel::syncReadoutColumns()
+{
+    m_readout->setColumnHidden(0, m_sides == SweepSides::Right);
+    m_readout->setColumnHidden(1, m_sides == SweepSides::Left);
+}
+
+bool AnalysisPanel::eventFilter(QObject* watched, QEvent* event)
+{
+    if (m_plotScroll && watched == m_plotScroll->viewport() && event->type() == QEvent::Resize)
+        layOutPlots(false);
+    return QWidget::eventFilter(watched, event);
 }
 
 void AnalysisPanel::setAxles(const QList<AxleEntry>& axles)
@@ -301,7 +498,7 @@ void AnalysisPanel::syncSteerAvailability()
             item->setEnabled(steered);
             item->setToolTip(steered ? QString()
                                      : tr("This axle has no steering: the linkage template names "
-                                          "no hardpoint for a rack to drive. Parts > Steering "
+                                          "no hardpoint for a rack to drive. Linkage > Steering Rack "
                                           "names one."));
         }
     }
@@ -387,7 +584,7 @@ void AnalysisPanel::setPosition(double position)
     m_positionBox->setValue(position);
     m_positionSlider->setValue(positionToSlider(m_positionBox->value()));
     m_updating = false;
-    m_plot->setMarker(m_positionBox->value());
+    setPlotMarker(m_positionBox->value());
 }
 
 bool AnalysisPanel::simulating() const { return m_simulate->isChecked(); }
@@ -399,19 +596,17 @@ void AnalysisPanel::setSimulating(bool simulating)
     m_updating = false;
 }
 
-SweepMeasure AnalysisPanel::measure() const
+void AnalysisPanel::setMeasures(const QList<SweepMeasure>& measures)
 {
-    return sweepMeasureFromKey(m_measureBox->currentData().toString());
-}
-
-void AnalysisPanel::setMeasure(SweepMeasure measure)
-{
-    const int index = m_measureBox->findData(sweepMeasureKey(measure));
-    if (index < 0) return;
-    m_updating = true;
-    m_measureBox->setCurrentIndex(index);
-    m_updating = false;
-    m_plot->setMeasure(measure);
+    // In the menu's order and each once, whatever order they were handed over
+    // in, so the plots come back where the menu says they are.
+    QList<SweepMeasure> ordered;
+    for (const SweepMeasure measure : sweepMeasures())
+        if (measures.contains(measure)) ordered << measure;
+    if (ordered.isEmpty()) ordered << SweepMeasure::Camber;
+    if (ordered == m_measures) return;
+    m_measures = ordered;
+    syncPlots();
 }
 
 bool AnalysisPanel::animating() const { return m_playButton->isChecked(); }
@@ -461,15 +656,22 @@ void AnalysisPanel::stepAnimation()
     m_positionBox->setValue(position);
     m_positionSlider->setValue(positionToSlider(position));
     m_updating = false;
-    m_plot->setMarker(position);
+    setPlotMarker(position);
     emit positionChanged(position);
 }
 
-void AnalysisPanel::setResult(const SweepResult& result) { m_plot->setSweep(result); }
+void AnalysisPanel::setResult(const SweepResult& result)
+{
+    m_result = result;
+    for (PlotWidget* plot : std::as_const(m_plots)) plot->setSweep(result);
+}
 
 void AnalysisPanel::setReadout(const AxleSample& sample, SweepKind kind)
 {
     Q_UNUSED(kind);
+    // An axle-wide number is written once rather than twice -- a roll centre
+    // does not have a left and a right -- in whichever column is showing.
+    const int axleColumn = m_sides == SweepSides::Right ? 1 : 0;
     const std::vector<SweepMeasure>& measures = readoutMeasures();
     for (std::size_t row = 0; row < measures.size(); ++row) {
         const SweepMeasure measure = measures[row];
@@ -477,15 +679,13 @@ void AnalysisPanel::setReadout(const AxleSample& sample, SweepKind kind)
         for (int column = 0; column < 2; ++column) {
             QTableWidgetItem* item = m_readout->item(int(row), column);
             if (!item) continue;
-            // An axle-wide number is written once, in the left column, rather
-            // than twice: a roll centre does not have a left and a right.
-            if (!perSide && column == 1) {
+            if (!perSide && column != axleColumn) {
                 item->setText(QString());
                 continue;
             }
             double value = 0.0;
             item->setText(sweepMeasureValue(sample, measure, column == 0, &value)
-                              ? QString::number(value, 'f', 3)
+                              ? sweepValueText(value)
                               : QStringLiteral("--"));
         }
     }
@@ -519,7 +719,7 @@ void AnalysisPanel::syncPositionRange()
     m_positionBox->setSingleStep(current.kind == SweepKind::Roll ? 0.1 : 1.0);
     m_positionSlider->setValue(positionToSlider(m_positionBox->value()));
     m_updating = false;
-    m_plot->setMarker(m_positionBox->value());
+    setPlotMarker(m_positionBox->value());
 }
 
 double AnalysisPanel::sliderToPosition(int value) const
@@ -544,7 +744,7 @@ void AnalysisPanel::emitPositionFromSlider(int value)
     m_updating = true;
     m_positionBox->setValue(position);
     m_updating = false;
-    m_plot->setMarker(position);
+    setPlotMarker(position);
     emit positionChanged(position);
 }
 

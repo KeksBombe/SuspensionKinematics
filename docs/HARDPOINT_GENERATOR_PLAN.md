@@ -132,6 +132,15 @@ Verified by reading `Geo_Math/Math/geo_math.py`:
   equation, once per point. It is a dot product. This is most of why the Python
   tool is unusably slow.
 
+Two more, found while porting:
+
+- **`:201`/`:203`** -- a leg's planform is laid out as `sin(alpha) * 100` along
+  the car per 100 mm across it, so a 30 degree leg comes out at 26.6 degrees. The
+  angle a leg makes in top view is its tangent.
+- **`:132`** -- the *rear* anti-lift angle is divided by the *front* brake share.
+  Anti-lift is measured against the braking the rear axle does, which is
+  `1 - bias`.
+
 ## 4. Work breakdown and status
 
 Legend: `[x]` done - `[~]` in progress - `[ ]` not started
@@ -140,31 +149,31 @@ Legend: `[x]` done - `[~]` in progress - `[ ]` not started
 
 The primitive everything else needs. Useful shipped alone.
 
-- [ ] `HardpointModel` -- `insertPoint(int row, Hardpoint)` and
+- [x] `HardpointModel` -- `insertPoint(int row, Hardpoint)` and
       `removePoints(std::vector<int>)`, both through
       `beginInsertRows`/`beginRemoveRows` so the panel's
       `QSortFilterProxyModel` stays correct. Config entries are keyed by name
       and move with the point, not with the row.
-- [ ] `HardpointModel` -- make `NameColumn` editable, guarded: a rename must be
+- [x] `HardpointModel` -- make `NameColumn` editable, guarded: a rename must be
       rejected when the new name is empty, already taken, or ends in `_x`/`_y`/
       `_z` (which would collide with the workbook's own coordinate suffixes).
       Route it through the existing `editRejected()` path.
-- [ ] **The rename rule for a workbook-backed point is remove + add.** The name
+- [x] **The rename rule for a workbook-backed point is remove + add.** The name
       is the key `XlsxHardpointSource` writes back through, so a renamed point
       has to leave its old rows behind and arrive as a new one. Renaming a point
       that is *already* only in `edits.json` is a plain rename.
-- [ ] `MainWindow` -- `Hardpoints > Add Point...` (seeded from the selection, so
+- [x] `MainWindow` -- `Hardpoints > Add Point...` (seeded from the selection, so
       a new point starts next to the one being worked on), `Delete Point`,
       `Rename Point...`. Wire into `updateActionState()`.
-- [ ] **Every add and delete goes through `setHardpointTable()`**, which is what
+- [x] **Every add and delete goes through `setHardpointTable()`**, which is what
       calls `rebuildLinkage()`. `Linkage` holds *indices into the table*
       (CLAUDE.md), so inserting or removing a row without that rebuild leaves
       the viewport drawing parts between the wrong points. This is the single
       biggest hazard in the phase.
-- [ ] `writeHardpointsXlsx()` -- a removed point's three rows have their **name
+- [x] `writeHardpointsXlsx()` -- a removed point's three rows have their **name
       and value cells blanked**, leaving the rest of each row intact. Deleting
       whole `<row>` elements would take neighbouring columns with them.
-- [ ] Multi-select in `HardpointPanel` and ctrl-click in the viewport, so a
+- [x] Multi-select in `HardpointPanel` and ctrl-click in the viewport, so a
       delete can take more than one point.
 
 ### Phase B -- a project can hold points with no workbook
@@ -176,17 +185,17 @@ workbook for the points to be a delta *against*.
 Chosen approach: **a blank workbook shipped as a resource**, filled by the
 append path that already exists.
 
-- [ ] `tools/make_blank_hardpoints_xlsx.py` -- stdlib only, following
+- [x] `tools/make_blank_hardpoints_xlsx.py` -- stdlib only, following
       `tools/make_test_xlsx.py`, emitting a one-sheet workbook whose only
       content is a `Name` / `Value` header row. Generated at configure time like
       the other fixtures; no binary in git (CLAUDE.md).
-- [ ] `CMakeLists.txt:147` -- add the generated file to the existing
+- [x] `CMakeLists.txt:147` -- add the generated file to the existing
       `qt_add_resources(suspkin_core "templates" ...)` so it ships as
       `:/templates/blank_hardpoints.xlsx` and the tests read the same bytes the
       application does.
-- [ ] `Project` -- write the resource into `hardpoints/` on demand, the way
+- [x] `Project` -- write the resource into `hardpoints/` on demand, the way
       `installBuiltinLinkageTemplate()` installs the built-in template.
-- [ ] **Fill it through the writer, not a new one.** Build an
+- [x] **Fill it through the writer, not a new one.** Build an
       `XlsxHardpointSource` by hand for the blank file (`nameColumn = 1`,
       `valueColumn = 2`, `lastRow = 1`, empty `rows`) and call
       `writeHardpointsXlsx()`. Every point is then "not in the workbook" and
@@ -194,51 +203,51 @@ append path that already exists.
       (`src/io/XlsxHardpoints.cpp:911`). Then **re-read the file** to get the
       real baseline and cell map -- the same re-read Overwrite Workbook already
       does, and for the same reason.
-- [ ] Note the trap: `readHardpointsXlsx()` skips a sheet that yields no points
+- [x] Note the trap: `readHardpointsXlsx()` skips a sheet that yields no points
       (`XlsxHardpoints.cpp:832`), so the blank workbook cannot be read *before*
       it is filled. It is written into, then read. Never read first.
-- [ ] `MainWindow` -- `Hardpoints > New Hardpoint Table` for a project with no
+- [x] `MainWindow` -- `Hardpoints > New Hardpoint Table` for a project with no
       workbook at all, so Phase A is reachable without an import.
 
 ### Phase C -- the generator (core maths)
 
-- [ ] `src/model/DesignParameters.h` -- the parameter set of section 3, grouped
+- [x] `src/model/DesignParameters.h` -- the parameter set of section 3, grouped
       vehicle / per-axle, with the units in the field comments and sane
       defaults. Round-trip helpers for the manifest. **Static camber and static
       toe are both real parameters here**, not the "not implemented" they are in
       the Python tool: the wheel axis point is what carries them into the table,
       and toe has nowhere else to live.
-- [ ] `src/model/HardpointGenerator.h` / `.cpp` -- `generateCorner(const
+- [x] `src/model/HardpointGenerator.h` / `.cpp` -- `generateCorner(const
       DesignParameters&, Axle)` returning roles and coordinates, plus the
       warnings a set of targets can earn (a ball joint outside the rim, a
       steering arm longer than the packaging circle, an unreachable trail).
-- [ ] The **wheel axis** role among them, and the contact patch built with the
+- [x] The **wheel axis** role among them, and the contact patch built with the
       solver's own `contactPatchFor()` / `tireRadiusToGround()` rather than a
       second copy of that trigonometry. The two must not be able to drift.
-- [ ] A generated corner writes the **steering** role on the axle it generates a
+- [x] A generated corner writes the **steering** role on the axle it generates a
       rack for, and explicitly none on the other (`CornerSpec::steeringRack` /
       `steeringStated`). A generator that leaves it silent hands back a car whose
       rear axle steers.
-- [ ] Role-to-name binding against the open `MechanismTemplate`, so what comes
+- [x] Role-to-name binding against the open `MechanismTemplate`, so what comes
       out is a `HardpointTable` in the project's own vocabulary.
-- [ ] The coplanarity advisory of step 12, returned alongside rather than
+- [x] The coplanarity advisory of step 12, returned alongside rather than
       applied.
-- [ ] `CMakeLists.txt` -- added to `suspkin_core`.
+- [x] `CMakeLists.txt` -- added to `suspkin_core`.
 
 ### Phase D -- parameters, the dialog and the action
 
-- [ ] `DesignParameters` stored in the manifest next to `MirrorSpec` and
+- [x] `DesignParameters` stored in the manifest next to `MirrorSpec` and
       `WheelSpec`, read and written by `src/project/Project.cpp`. Per CLAUDE.md
       this is part of the feature, not a follow-up.
-- [ ] `src/app/GenerateDialog.*` -- the parameters, grouped, with the corner to
+- [x] `src/app/GenerateDialog.*` -- the parameters, grouped, with the corner to
       generate and the side to generate it on.
-- [ ] **A preview before anything is written**: which points would be added,
+- [x] **A preview before anything is written**: which points would be added,
       which existing ones would move and by how much, and which are hand-edited
       and therefore about to be overwritten. Decision 6 lives or dies here.
-- [ ] `Hardpoints > Generate from Design...`, then mirror through the project's
+- [x] `Hardpoints > Generate from Design...`, then mirror through the project's
       `MirrorSpec` for the far side, then `setHardpointTable()` ->
       `rebuildLinkage()` -> solvers, and `markDirty()`.
-- [ ] The advisory from step 12 surfaced on the status bar and in the dialog,
+- [x] The advisory from step 12 surfaced on the status bar and in the dialog,
       never applied silently.
 
 ### Phase E -- chassis clearance for the inboard points
@@ -246,11 +255,11 @@ append path that already exists.
 Optional, and the highest-value piece after the generator itself: we already
 load the chassis mesh and today do nothing with it but draw it.
 
-- [ ] `src/geom/MeshQuery.*` -- ray/triangle intersection and unsigned
+- [x] `src/geom/MeshQuery.*` -- ray/triangle intersection and unsigned
       distance-to-mesh over the imported `TriMesh`. Core library, no OpenGL.
       A BVH over the triangles; the Python tool leaned on Open3D for this and
       we are not taking that dependency.
-- [ ] Inboard placement: intersect the pivot ray with the chassis, then back off
+- [x] Inboard placement: intersect the pivot ray with the chassis, then back off
       along it until the distance to the mesh reaches the clearance parameter
       (bisection, as `geo_math.py:246` does). Report a ray that never hits
       rather than inventing `y = 200`, which is what the Python code does at
@@ -258,7 +267,7 @@ load the chassis mesh and today do nothing with it but draw it.
 
 ### Phase F -- tests
 
-- [ ] `tests/test_hardpoint_generator.cpp` -- registered in
+- [x] `tests/test_hardpoint_generator.cpp` -- registered in
       `tests/CMakeLists.txt`. The 2025 car from `variables.py` as the fixture:
       wheel centre and contact patch at known coordinates; both ball joints
       exactly on the steering axis; the axis reproducing the requested caster
@@ -266,16 +275,16 @@ load the chassis mesh and today do nothing with it but draw it.
       outboard as camber goes negative; the wheel axis point reproducing the
       requested camber **and toe**; each wishbone plane containing its outboard
       joint and both instant centres to 1e-9.
-- [ ] **The round trip that matters**: generate a corner, feed it to
+- [x] **The round trip that matters**: generate a corner, feed it to
       `CornerSolver::bind()`, and check the design pose reports back the camber,
       toe, caster, kingpin, scrub and trail that were asked for. The generator
       and the solver are inverses; this is the test that proves it. Camber and
       toe only close this loop because of the wheel axis point -- before it,
       toe went in and nothing came back out.
-- [ ] `tests/test_project.cpp` -- `removed` round-trips through `edits.json`
+- [x] `tests/test_project.cpp` -- `removed` round-trips through `edits.json`
       (already outstanding in `KINEMATICS_PLAN.md`); `DesignParameters`
       round-trips through the manifest.
-- [ ] `tests/test_xlsx_hardpoints.cpp` -- the blank resource workbook, filled
+- [x] `tests/test_xlsx_hardpoints.cpp` -- the blank resource workbook, filled
       through `writeHardpointsXlsx()` and read back, yields exactly the points
       that were written; a renamed point leaves no trace of its old name; a
       deleted point's row keeps its neighbouring columns.
@@ -320,6 +329,57 @@ stack behind them in one go.
   - The Python tool's generator is ~400 lines of trigonometry with no real
     dependencies; the numpy and sympy in it are doing nothing that a dot product
     would not. Porting it is not a dependency decision.
+
+- **2026-09-11** -- **All six phases landed.** All 14 test binaries green, two
+  of them new: `test_hardpoint_generator` (23 cases) and `test_mesh_query`.
+  Verified in the real application headless: a project made by the generator
+  with no workbook ever imported opens, draws both axles and both sides, and the
+  analysis poses it -- the end-to-end check of section 5. Where the build
+  differs from the text above, and why:
+  - **Track is measured between the contact patches**, not at the wheel centres
+    (step 1): the wheel is moved across until its computed patch is where the
+    track says. It is where every rulebook and every data sheet measures it, and
+    under camber the two differ.
+  - **Phase C's "given arm length" is a pivot line**: each wishbone's chassis
+    pivots go on a line at a stated distance from the centreline
+    (`upperPivotY`, `lowerPivotY`, default 200 mm -- the Python tool's own
+    fallback). Both legs of an arm then end at one chassis pickup line, which is
+    how a frame is built; a length would put two legs of different sweep at two
+    different widths. With both lines at one distance the four pivots share a
+    vertical plane and step 12 has nothing to advise, which is the correct
+    answer, not a missing one.
+  - **The two bugs added to section 3.1** -- planform by tangent, rear anti-lift
+    against the rear's own braking.
+  - "Every add and delete goes through `setHardpointTable()`" is kept in
+    substance: row-level changes use the model's insert and remove signals and
+    then `syncTableToViewport()`, which is the half of `setHardpointTable()` that
+    re-resolves the parts. **`captureHardpointConfig()` has to run before it**,
+    or the refill from the project undoes the model's move -- found by reading,
+    written into CLAUDE.md.
+  - Row order survives a reopen: `HardpointEdits::addedAfter` records the point
+    above each added one, so a point added next to its neighbour, or a renamed
+    workbook point, comes back where it was rather than at the bottom.
+  - The writer's `lastRow` now counts every `<row>` element, not only rows with
+    values. An empty formatted row below the table, or a deleted point's
+    emptied cells, used to be a row number an append could collide with.
+  - The planner writes steering only where it changes what a corner already
+    means, and states the other corners of a template that said nothing, so
+    generating the rear alone does not stop the front steering.
+  - **Open question -- the front roll centre.** The generator places the
+    front-view instant centre where the two arm planes cross the transverse plane
+    through the wheel centre (the RCVD construction). The solver reads its front
+    view off the ball joints themselves (`KINEMATICS_PLAN.md`, "Front-view
+    instant centre"), which does not see a caster's worth of fore-aft offset. For
+    the 2025 car the analysis therefore reports **26.8 mm against the 30 mm
+    asked for** on the front axle; the rear, with no caster or trail, agrees to
+    the micron. Changing the solver to take its front view from the arm planes
+    would make them agree -- and would move every existing project's roll centre
+    curve slightly -- so it is left for a decision rather than made here.
+    `aGeneratedCarSweepsWithoutAWorkbook` pins both numbers.
+    **Decided the same day: the arm planes.** The solver now builds its front
+    view the way this generator does, and the 2025 car's front reads 30 mm to
+    1e-6. What settled it was a real workbook designed to 10 mm that the old
+    construction read as 6.3; see `KINEMATICS_PLAN.md`'s progress log.
 
 - **2026-09-09** -- The **wheel's own axis** landed in the solver ahead of this
   plan (`mechanism.upright.wheelAxis`, `{corner}_WheelAxis`), so section 3 has
