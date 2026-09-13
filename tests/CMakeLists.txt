@@ -65,6 +65,66 @@ target_link_libraries(test_hardpoint_model PRIVATE suspkin_core Qt6::Test)
 target_include_directories(test_hardpoint_model PRIVATE ../src)
 add_test(NAME hardpoint_model COMMAND test_hardpoint_model)
 
+# The icons are application code too, but they need a palette and QtSvg, not a
+# window. The test embeds the same SUSPKIN_ICONS list the application does,
+# which is what ties that list to the table in Icons.cpp. Offscreen, so it never
+# opens anything on a developer's desktop -- and so a build chroot with no
+# display can run it at all.
+qt_add_executable(test_icons
+    test_icons.cpp
+    ../src/app/Icons.cpp)
+target_link_libraries(test_icons PRIVATE Qt6::Gui Qt6::Svg Qt6::Test)
+target_include_directories(test_icons PRIVATE ../src)
+qt_add_resources(test_icons "icons"
+    PREFIX "/icons"
+    BASE "${SUSPKIN_ICONS_DIR}"
+    FILES ${SUSPKIN_ICONS})
+target_compile_definitions(test_icons PRIVATE
+    SUSPKIN_ICONS_DIR="${SUSPKIN_ICONS_DIR}")
+add_test(NAME icons COMMAND test_icons)
+set_tests_properties(icons PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+
+# The licence texts, read out of the binary exactly as the dialog reads them:
+# the same three qt_add_resources calls as in the top-level CMakeLists, so what
+# this test walks is what the application ships. A licence missing here means a
+# licence missing from every copy handed out.
+qt_add_executable(test_licenses
+    test_licenses.cpp
+    ../src/app/LicensesDialog.cpp)
+target_link_libraries(test_licenses PRIVATE Qt6::Widgets Qt6::Test)
+target_include_directories(test_licenses PRIVATE ../src)
+qt_add_resources(test_licenses "license_own"
+    PREFIX "/licenses"
+    BASE "${CMAKE_SOURCE_DIR}"
+    FILES "${CMAKE_SOURCE_DIR}/LICENSE")
+qt_add_resources(test_licenses "license_texts"
+    PREFIX "/licenses"
+    BASE "${CMAKE_SOURCE_DIR}/licenses"
+    FILES
+        "${CMAKE_SOURCE_DIR}/licenses/THIRD-PARTY-NOTICES.md"
+        "${CMAKE_SOURCE_DIR}/licenses/LGPL-3.0.txt"
+        "${CMAKE_SOURCE_DIR}/licenses/LGPL-2.1.txt"
+        "${CMAKE_SOURCE_DIR}/licenses/OCCT-exception.txt"
+        "${CMAKE_SOURCE_DIR}/licenses/qt-third-party.txt"
+        "${CMAKE_SOURCE_DIR}/licenses/zlib.txt"
+        "${CMAKE_SOURCE_DIR}/licenses/mesa-llvmpipe.txt")
+qt_add_resources(test_licenses "license_icons"
+    PREFIX "/licenses"
+    BASE "${SUSPKIN_ICONS_DIR}"
+    FILES "${SUSPKIN_ICONS_DIR}/LICENSE-tabler.txt")
+add_test(NAME licenses COMMAND test_licenses)
+set_tests_properties(licenses PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+
+# Real docks in a real main window, because what it tests is how Qt reports a
+# dock tabbed behind another -- which no mock would say anything true about.
+qt_add_executable(test_panel_action
+    test_panel_action.cpp
+    ../src/app/PanelAction.cpp)
+target_link_libraries(test_panel_action PRIVATE Qt6::Widgets Qt6::Test)
+target_include_directories(test_panel_action PRIVATE ../src)
+add_test(NAME panel_action COMMAND test_panel_action)
+set_tests_properties(panel_action PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+
 qt_add_executable(test_linkage test_linkage.cpp)
 target_link_libraries(test_linkage PRIVATE suspkin_core Qt6::Test)
 add_test(NAME linkage COMMAND test_linkage)

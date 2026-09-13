@@ -13,6 +13,14 @@ Work lives in a **project**: the tool opens with a list of them, and everything
 you do from then on — the files you import, the coordinates you change, the view
 you left it in — is kept there. See [Projects](#projects).
 
+Commands sit on a **ribbon**: a File button, one tab per area (Geometry,
+Hardpoints, Linkage, Analysis, View, Help) and, at the right-hand end of the tab
+row on every tab, the panel toggles — hardpoint table, analysis, sweep
+parameters — and a chevron that folds the ribbon down to its tabs. There is no
+menu bar: the tabs say what the menus used to, and `Alt`+a letter still reaches
+them. Which tab you were on, and whether the ribbon was folded, are part of the
+project like everything else.
+
 ## Download
 
 Every push to `main` republishes the [`latest` release](https://github.com/KeksBombe/SuspensionKinematics/releases/tag/latest).
@@ -70,8 +78,13 @@ so its normals come from the real surface and a bore shades as the cylinder it i
 | `Ctrl+Shift+S` / `Ctrl+E` | Overwrite the workbook / Export a workbook |
 | `Ctrl+L` | Show or hide the hardpoint labels |
 | `Ctrl+Shift+W` | Show or hide the wheels |
+| `Ctrl+K` / `Ctrl+Shift+P` | Analysis panel / sweep parameters |
+| `Ctrl+F1` | Collapse or expand the ribbon |
+| `Alt+F` | The File menu; `Alt+G`, `Alt+H`, `Alt+L`, `Alt+A`, `Alt+V`, `Alt+P` switch ribbon tab |
 
 Display mode and the navigation gizmo also sit in the viewport's top-right corner.
+A panel toggle opens its panel, brings it to the front when it is tabbed behind
+another, and closes it when it is already in front.
 
 Coordinate convention is **ISO 8855 / DIN 70000**: X forward, Y left, Z up,
 right-handed — the convention the vehicle-dynamics literature uses, so camber and
@@ -509,7 +522,8 @@ src/io/      STL and STEP readers behind one importMeshFile() entry point,
 src/project/ the project format: manifest, copied assets, view state, edits
 src/render/  Camera, GPU buffers, the OpenGL viewport, gizmo and mode selector
 src/app/     MainWindow and the controller that owns it, the project launcher,
-             the mirror and wheel dialogs, menus, the hardpoint table and dock
+             the mirror and wheel dialogs, the ribbon and its icons, the panel
+             toggles, the hardpoint table and dock
 tests/       Qt Test suites; STL and XLSX fixtures are generated, STEP committed
 tools/       make_test_stl.py, make_test_xlsx.py -- stdlib-only fixture generators
 ```
@@ -538,4 +552,36 @@ change it and sell it. Whoever passes it on, changed or not, has to pass it on
 under the same license together with its source code, so nobody can turn it
 into a closed product. It comes without any warranty.
 
-Qt and Open CASCADE, which the Windows builds bundle, keep their own licenses.
+### Third-party software
+
+This program is built out of other people's free software, and the Windows
+download bundles it. Every license is in [`licenses/`](licenses), compiled into
+the binary as well, and shown by **Help ▸ Licenses** — so a copy of the program
+is a complete copy, whether it arrived as an installer, a portable zip or a
+memory stick. An installed copy also has them as files: a `licenses/` folder
+beside the exe on Windows, `/usr/share/licenses/suspensionkinematics/` on Linux.
+
+| Component | License | How it is used | Source |
+|---|---|---|---|
+| **Qt 6** — Core, Gui, Widgets, Network, OpenGL, Svg | LGPL v3 | Dynamically linked, so it can be replaced: its own DLLs on Windows, the distribution's `qt6-base`/`qt6-svg` on Linux | [qt.io 6.9.3 submodules](https://download.qt.io/official_releases/qt/6.9/6.9.3/submodules/) |
+| **Open CASCADE Technology 7.9.3** | LGPL v2.1 + OCCT exception | Dynamically linked; the geometry kernel behind STEP import | [OCCT at `V7_9_3`](https://github.com/Open-Cascade-SAS/OCCT/tree/V7_9_3) |
+| **zlib 1.3.1** | zlib | An `.xlsx` is a ZIP: statically linked into the exe on Windows, the system library on Linux | [zlib.net](https://zlib.net/) |
+| **Tabler Icons v3.46.0** | MIT | The outline SVGs the ribbon and menus draw, compiled in as resources | [tabler-icons](https://github.com/tabler/tabler-icons) |
+| **Mesa llvmpipe, LLVM** | MIT, NCSA | Windows only: `opengl32sw.dll`, Qt's software OpenGL for a machine whose driver cannot manage 3.3 | [mesa3d](https://gitlab.freedesktop.org/mesa/mesa) |
+| **Microsoft C++ runtime, D3D shader compilers** | Microsoft redistributable terms | Windows only, placed beside the exe by the install and by Qt's deployment tool | — |
+
+Both LGPL licenses ask that the source of the library be available to whoever
+receives the binaries, so each release mirrors the Qt and Open CASCADE sources
+it was built from as assets of the release itself, next to the downloads. The
+build flags Open CASCADE was built with are in
+[`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+Two of these ask for a sentence rather than only a license text, so: this
+program makes use of facilities provided by the Open CASCADE Technology
+software, and it is based in part on the work of the Independent JPEG Group,
+through the JPEG plugin inside Qt.
+
+[`licenses/THIRD-PARTY-NOTICES.md`](licenses/THIRD-PARTY-NOTICES.md) is the long
+version of this table — what each component is, how it is linked and where its
+source can be had. Python 3, CMake and Inno Setup build the program and are not
+part of what ships.

@@ -57,6 +57,7 @@ private slots:
     void anAddedPointComesBackWhereItWasPut();
     void anOlderEditsFileStillAppendsItsPoints();
     void aSelectionOfOneFromAnOlderProjectIsStillASelection();
+    void aProjectFromBeforeTheRibbonOpensOnTheFirstTab();
     void aProjectCanMakeAWorkbookOfItsOwn();
 };
 
@@ -113,6 +114,9 @@ void TestProject::roundTripsEverythingItHolds()
     WindowState window;
     window.geometry = QByteArray("\x01\x02\x00\x03", 4);
     window.dockState = QByteArray("dock-state");
+    // The ribbon is window layout too: which tab, and whether it is folded up.
+    window.ribbonPage = QStringLiteral("hardpoints");
+    window.ribbonCollapsed = true;
     project->setWindow(window);
 
     MirrorSpec mirror;
@@ -182,6 +186,10 @@ void TestProject::roundTripsEverythingItHolds()
     // Binary, with an embedded NUL: base64 in the manifest has to survive it.
     QCOMPARE(reopened->window().geometry, window.geometry);
     QCOMPARE(reopened->window().dockState, window.dockState);
+    // By key rather than by position, so a tab added later cannot change which
+    // one this project opens on.
+    QCOMPARE(reopened->window().ribbonPage, QStringLiteral("hardpoints"));
+    QCOMPARE(reopened->window().ribbonCollapsed, true);
     QCOMPARE(reopened->mirror(), mirror);
     QCOMPARE(reopened->geometry().relativePath, geometry.relativePath);
     QCOMPARE(reopened->geometry().originalPath, geometry.originalPath);
@@ -593,6 +601,50 @@ void TestProject::aSelectionOfOneFromAnOlderProjectIsStillASelection()
     QVERIFY2(reopened.has_value(), qPrintable(error));
     QCOMPARE(reopened->view().selectedHardpoint, 3);
     QCOMPARE(reopened->view().selection, QList<int>{ 3 });
+}
+
+void TestProject::aProjectFromBeforeTheRibbonOpensOnTheFirstTab()
+{
+    QTemporaryDir directory;
+    QString error;
+    std::optional<Project> project =
+        Project::create(directory.filePath(QStringLiteral("Old")), QStringLiteral("Old"), &error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+    WindowState window;
+    window.geometry = QByteArray("geometry");
+    window.dockState = QByteArray("dock-state");
+    window.ribbonPage = QStringLiteral("linkage");
+    window.ribbonCollapsed = true;
+    project->setWindow(window);
+    QVERIFY(project->save(&error));
+
+    // What a manifest written before the ribbon holds: the window's size and
+    // its docks, and nothing about any ribbon.
+    QFile manifest(project->manifestPath());
+    QVERIFY(manifest.open(QIODevice::ReadOnly));
+    QJsonObject root = QJsonDocument::fromJson(manifest.readAll()).object();
+    manifest.close();
+    QJsonObject windowObject = root.value(QStringLiteral("window")).toObject();
+    windowObject.remove(QStringLiteral("ribbonPage"));
+    windowObject.remove(QStringLiteral("ribbonCollapsed"));
+    root.insert(QStringLiteral("window"), windowObject);
+    QVERIFY(manifest.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    manifest.write(QJsonDocument(root).toJson());
+    manifest.close();
+
+    const std::optional<Project> reopened = Project::open(project->manifestPath(), &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    // The first tab, expanded -- and the layout it did save, unharmed.
+    QVERIFY(reopened->window().ribbonPage.isEmpty());
+    QCOMPARE(reopened->window().ribbonCollapsed, false);
+    QCOMPARE(reopened->window().dockState, QByteArray("dock-state"));
+
+    // A window state that is only a ribbon is still a window state: were it
+    // read as empty, nothing about it would ever be written.
+    WindowState onlyRibbon;
+    onlyRibbon.ribbonPage = QStringLiteral("view");
+    QVERIFY(!onlyRibbon.isEmpty());
+    QVERIFY(WindowState{}.isEmpty());
 }
 
 void TestProject::aProjectCanMakeAWorkbookOfItsOwn()

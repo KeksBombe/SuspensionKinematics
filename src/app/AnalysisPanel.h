@@ -121,6 +121,8 @@ public:
 public slots:
     /// Open the parameters window and bring it to the front.
     void showParameters();
+    /// Close it, the way its own Close button would.
+    void hideParameters();
 
 signals:
     void axleChanged();
@@ -135,6 +137,10 @@ signals:
     /// Something that is remembered but does not change the curve: how fast the
     /// animation runs, whether the parameters window is open.
     void playbackChanged();
+    /// The parameters window opened or closed, by any route -- this panel's
+    /// button, the window's own Close, Escape, a restored project. What the
+    /// window's toggle for it follows.
+    void parametersVisibilityChanged(bool visible);
     void exportCsvRequested();
 
 protected:

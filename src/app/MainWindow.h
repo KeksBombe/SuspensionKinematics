@@ -27,6 +27,8 @@ class AnalysisPanel;
 class HardpointModel;
 class HardpointPanel;
 class MeshQuery;
+class PanelAction;
+class Ribbon;
 class UpdateChecker;
 
 /// The application window, which always has exactly one project open.
@@ -57,6 +59,9 @@ public:
     /// Render one frame and return it. Used by --screenshot to verify the
     /// renderer without a human looking at the window.
     QImage captureViewport();
+    /// The whole window -- menu bar, ribbon, docks and viewport -- as it would
+    /// be on screen. Used by --screenshot-window, the same way.
+    QImage captureWindow();
 
     const Project& project() const { return m_project; }
 
@@ -104,11 +109,29 @@ private slots:
     void openProject();
 
 private:
+    /// Every command, each one a QAction that the menus and the ribbon both
+    /// show. Built after the docks, because the panel toggles are actions on
+    /// them.
     void buildActions();
-    void buildMenus();
+    /// The tooltip each command's ribbon button shows, and every command put
+    /// on the window itself, so its shortcut works whichever tab is showing.
+    void finishActions();
+    /// The File menu, which the ribbon's accent button opens. It is the only
+    /// menu the window has: everything else is a tab.
+    void buildFileMenu();
+    /// The ribbon, as the window's menu widget. There is no menu bar -- see
+    /// the definition.
+    void buildRibbon();
     void buildHardpointDock();
     void buildAnalysisDock();
     void refreshRecentProjectsMenu();
+    /// The collapse chevron says what clicking it will do, so its text, its
+    /// icon and its tooltip follow the ribbon.
+    void updateCollapseAction();
+    /// Put every panel back where a new project has it, docked, and keep open
+    /// the ones that were open. What rescues a panel floated onto a monitor
+    /// that is not plugged in today.
+    void resetPanelLayout();
 
     /// Wire up the update checker and, unless the user has turned it off, ask
     /// GitHub once shortly after the window is up. Does nothing for a portable
@@ -242,6 +265,7 @@ private:
     QAction* m_openProjectAction = nullptr;
     QAction* m_saveProjectAction = nullptr;
     QAction* m_projectListAction = nullptr;
+    QAction* m_revealProjectAction = nullptr;
     QAction* m_importAction = nullptr;
     QAction* m_closeAction = nullptr;
     QAction* m_quitAction = nullptr;
@@ -264,16 +288,42 @@ private:
     QAction* m_linksAction = nullptr;
     QAction* m_importLinkageAction = nullptr;
     QAction* m_resetLinkageAction = nullptr;
+    QAction* m_revealTemplateAction = nullptr;
     QAction* m_steeringAction = nullptr;
     QAction* m_staticAnglesAction = nullptr;
     QAction* m_addWheelsAction = nullptr;
     QAction* m_removeWheelsAction = nullptr;
     QAction* m_wheelsAction = nullptr;
+    QAction* m_exportSweepAction = nullptr;
+    /// Front, Rear, Left, Right, Top, Bottom, Isometric, in that order.
+    QList<QAction*> m_presetActions;
     QActionGroup* m_modeGroup = nullptr;
     QMenu* m_recentProjectsMenu = nullptr;
     QAction* m_checkUpdatesAction = nullptr;
     QAction* m_autoUpdateAction = nullptr;
+    QAction* m_aboutAction = nullptr;
+    QAction* m_licensesAction = nullptr;
+    QAction* m_aboutQtAction = nullptr;
     UpdateChecker* m_updates = nullptr;
+
+    /// Open a panel, bring it forward when it is behind another, or close it
+    /// when it is in front. In the menus and on every ribbon tab.
+    PanelAction* m_hardpointsPanelAction = nullptr;
+    PanelAction* m_analysisPanelAction = nullptr;
+    PanelAction* m_parametersPanelAction = nullptr;
+    QAction* m_collapseRibbonAction = nullptr;
+    QAction* m_resetLayoutAction = nullptr;
+
+    /// The only menu there is: File, from the ribbon's accent button.
+    /// Everything else is a ribbon tab.
+    QMenu* m_fileMenu = nullptr;
+    /// The view presets, for the ribbon's Views button.
+    QMenu* m_viewsMenu = nullptr;
+    Ribbon* m_ribbon = nullptr;
+    /// Where the docks sit in a project that has never been laid out: taken
+    /// before the project's own layout is restored, and what Reset Panel
+    /// Layout goes back to.
+    QByteArray m_defaultDockState;
 
     HardpointModel* m_hardpointModel = nullptr;
     HardpointPanel* m_hardpointPanel = nullptr;

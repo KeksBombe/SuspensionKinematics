@@ -477,6 +477,10 @@ std::optional<Project> Project::open(const QString& manifestPath, QString* error
         QByteArray::fromBase64(window.value(QStringLiteral("geometry")).toString().toLatin1());
     project.m_window.dockState =
         QByteArray::fromBase64(window.value(QStringLiteral("state")).toString().toLatin1());
+    // Absent in a project from before the ribbon, which then opens on the
+    // first tab, expanded.
+    project.m_window.ribbonPage = window.value(QStringLiteral("ribbonPage")).toString();
+    project.m_window.ribbonCollapsed = window.value(QStringLiteral("ribbonCollapsed")).toBool(false);
 
     if (root.contains(QStringLiteral("mirror")))
         project.m_mirror = mirrorFromJson(root.value(QStringLiteral("mirror")).toObject());
@@ -598,6 +602,9 @@ bool Project::save(QString* error) const
         window.insert(QStringLiteral("geometry"),
                       QString::fromLatin1(m_window.geometry.toBase64()));
         window.insert(QStringLiteral("state"), QString::fromLatin1(m_window.dockState.toBase64()));
+        if (!m_window.ribbonPage.isEmpty())
+            window.insert(QStringLiteral("ribbonPage"), m_window.ribbonPage);
+        window.insert(QStringLiteral("ribbonCollapsed"), m_window.ribbonCollapsed);
         root.insert(QStringLiteral("window"), window);
     }
 

@@ -12,7 +12,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Network)
+# Svg is the application's alone: the icons are rendered through QSvgRenderer
+# directly, so suspkin_core stays Core and Gui, and nothing depends on the
+# qsvgicon plugin being deployed.
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Network Svg)
 qt_standard_project_setup()
 
 # Warnings that catch real portability bugs. Not -Werror: GCC 16 is new enough
@@ -240,6 +243,10 @@ qt_add_executable(suspkin
     src/app/SteeringDialog.cpp
     src/app/StaticAnglesDialog.h
     src/app/StaticAnglesDialog.cpp
+    # What the program is made of and under what terms. Help > Licenses, and
+    # the only copy of those texts a portable unzip carries.
+    src/app/LicensesDialog.h
+    src/app/LicensesDialog.cpp
     src/app/RecentProjects.h
     src/app/RecentProjects.cpp
     src/app/UpdateChecker.h
@@ -257,6 +264,15 @@ qt_add_executable(suspkin
     src/app/SweepParametersDialog.cpp
     src/app/AppController.h
     src/app/AppController.cpp
+    # How commands are reached: an icon per command, drawn in the palette's
+    # colours, the ribbon that lays them out in tabs, and the action that opens
+    # or brings forward a panel rather than blindly toggling it.
+    src/app/Icons.h
+    src/app/Icons.cpp
+    src/app/Ribbon.h
+    src/app/Ribbon.cpp
+    src/app/PanelAction.h
+    src/app/PanelAction.cpp
     src/render/GpuMesh.h
     src/render/GpuMesh.cpp
     src/render/GpuPoints.h
@@ -276,6 +292,7 @@ target_link_libraries(suspkin PRIVATE
     Qt6::Widgets
     Qt6::OpenGL
     Qt6::OpenGLWidgets
+    Qt6::Svg
     suspkin_warnings
 )
 # The release workflow's run number, which only ever goes up. It is what the
@@ -299,6 +316,62 @@ qt_add_resources(suspkin "shaders"
         resources/shaders/line.frag
         resources/shaders/point.vert
         resources/shaders/point.frag
+)
+
+# The icons: Tabler outline SVGs, committed because the Arch package is built
+# with no network, and fetched in the first place by tools/fetch_icons.py. This
+# list and the table in src/app/Icons.cpp are the only two places an icon is
+# named, and test_icons -- which embeds this same list -- checks they agree.
+set(SUSPKIN_ICON_NAMES
+    adjustments-horizontal angle braces chart-line chevron-down chevron-up
+    cloud-download cube device-floppy edit file-export file-import
+    file-spreadsheet file-type-csv file-x flip-horizontal focus-centered
+    folder-open folder-plus folder-search forms history info-circle info-square-rounded
+    layout-dashboard license line list-details logout refresh restore row-insert-bottom
+    row-remove sphere steering-wheel table table-export table-minus table-plus
+    tag template trash triangles vector wand wheel)
+set(SUSPKIN_ICONS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons")
+set(SUSPKIN_ICONS "")
+foreach(_icon IN LISTS SUSPKIN_ICON_NAMES)
+    list(APPEND SUSPKIN_ICONS "${SUSPKIN_ICONS_DIR}/${_icon}.svg")
+endforeach()
+# The licence texts, compiled in. Qt's LGPL and Open CASCADE's LGPL both ask
+# that a copy of the licence go with every copy of the program, and the MIT
+# licence the icons carry asks the same -- so they go *inside* the binary, where
+# a portable unzip cannot lose them, rather than only beside it. Help > Licenses
+# is what shows them; they are installed as files further down as well.
+#
+# Three calls because qt_add_resources takes one BASE and the texts live in
+# three places: the project's own licence at the root, the collected texts in
+# licenses/, and the icons' own licence where fetch_icons.py writes it. They
+# share one prefix, so the dialog reads them all from :/licenses.
+qt_add_resources(suspkin "license_own"
+    PREFIX "/licenses"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}"
+    FILES LICENSE
+)
+qt_add_resources(suspkin "license_texts"
+    PREFIX "/licenses"
+    BASE "licenses"
+    FILES
+        licenses/THIRD-PARTY-NOTICES.md
+        licenses/LGPL-3.0.txt
+        licenses/LGPL-2.1.txt
+        licenses/OCCT-exception.txt
+        licenses/qt-third-party.txt
+        licenses/zlib.txt
+        licenses/mesa-llvmpipe.txt
+)
+qt_add_resources(suspkin "license_icons"
+    PREFIX "/licenses"
+    BASE "${SUSPKIN_ICONS_DIR}"
+    FILES "${SUSPKIN_ICONS_DIR}/LICENSE-tabler.txt"
+)
+
+qt_add_resources(suspkin "icons"
+    PREFIX "/icons"
+    BASE "${SUSPKIN_ICONS_DIR}"
+    FILES ${SUSPKIN_ICONS}
 )
 
 set_target_properties(suspkin PROPERTIES WIN32_EXECUTABLE ON)
@@ -327,6 +400,29 @@ endif()
 install(TARGETS suspkin
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     BUNDLE  DESTINATION .)
+
+# The licence texts as files as well as inside the binary. Windows gets them in
+# a licenses/ folder beside the exe, which is what puts them in the portable zip
+# and -- through the installer's recursive [Files] glob -- in the installed tree.
+# Linux gets them where a package manager looks for them; the Arch package
+# installs exactly this path.
+set(SUSPKIN_LICENSE_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/THIRD-PARTY-NOTICES.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/LGPL-3.0.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/LGPL-2.1.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/OCCT-exception.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/qt-third-party.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/zlib.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/licenses/mesa-llvmpipe.txt"
+    "${SUSPKIN_ICONS_DIR}/LICENSE-tabler.txt")
+if(WIN32)
+    install(FILES ${SUSPKIN_LICENSE_FILES}
+            DESTINATION "${CMAKE_INSTALL_BINDIR}/licenses")
+else()
+    install(FILES ${SUSPKIN_LICENSE_FILES}
+            DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/suspensionkinematics")
+endif()
 
 if(UNIX AND NOT APPLE)
     install(FILES packaging/linux/suspkin.desktop

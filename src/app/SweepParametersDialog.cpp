@@ -7,7 +7,9 @@
 #include <QFont>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHideEvent>
 #include <QLabel>
+#include <QShowEvent>
 #include <QVBoxLayout>
 
 namespace suspkin {
@@ -249,6 +251,18 @@ void SweepParametersDialog::closeEvent(QCloseEvent* event)
 {
     QDialog::closeEvent(event);
     if (event->isAccepted()) emit closedByUser();
+}
+
+void SweepParametersDialog::showEvent(QShowEvent* event)
+{
+    QDialog::showEvent(event);
+    if (!event->spontaneous()) emit visibilityChanged(true);
+}
+
+void SweepParametersDialog::hideEvent(QHideEvent* event)
+{
+    QDialog::hideEvent(event);
+    if (!event->spontaneous()) emit visibilityChanged(false);
 }
 
 } // namespace suspkin

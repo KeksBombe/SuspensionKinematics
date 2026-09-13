@@ -146,6 +146,10 @@ jobs:
           path: ${{ github.workspace }}/occt-install
           key: occt-${{ env.OCCT_TAG }}-windows-ninja-x64-v2
 
+      # Qt Svg -- which the icons are rendered through -- is part of the base
+      # desktop install, so there is no modules: line here. If a future Qt
+      # splits it out, find_package(Qt6 ... Svg) fails loudly at configure and
+      # `modules: qtsvg` is the fix.
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -291,7 +295,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed \
-            git cmake ninja qt6-base opencascade python sudo
+            git cmake ninja qt6-base qt6-svg opencascade python sudo
 
       - uses: actions/checkout@v4
 
@@ -394,6 +398,26 @@ jobs:
           JSON
           cat artifacts/version.json
 
+      # The LGPL asks that whoever receives these binaries can get the source of
+      # the libraries inside them. Open CASCADE's LGPL v2.1 asks for it "from the
+      # same place" as the object code, which is this release -- so the source is
+      # mirrored here rather than only linked, and a dead upstream mirror cannot
+      # turn a published build into a non-compliant one. The versions come from
+      # the env at the top of this file, so what is attached is always what the
+      # Windows job actually built against.
+      - name: Mirror the source of the LGPL libraries
+        run: |
+          set -Eeuo pipefail
+          qt_series="${QT_VERSION%.*}"
+          base="https://download.qt.io/official_releases/qt/${qt_series}/${QT_VERSION}/submodules"
+          for module in qtbase qtsvg; do
+            file="${module}-everywhere-src-${QT_VERSION}.tar.xz"
+            curl -fsSL --retry 3 -o "artifacts/$file" "$base/$file"
+          done
+          curl -fsSL --retry 3 -o "artifacts/opencascade-${OCCT_TAG}-source.tar.gz" \
+            "https://codeload.github.com/Open-Cascade-SAS/OCCT/tar.gz/refs/tags/${OCCT_TAG}"
+          ls -l artifacts
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -414,6 +438,14 @@ jobs:
             echo "| \`SuspensionKinematics-windows-x64-setup.exe\` | Windows 10/11 x64 | Installer. Qt and Open CASCADE are bundled. |"
             echo "| \`SuspensionKinematics-windows-x64.zip\` | Windows 10/11 x64 | Portable, same files without the installer. |"
             echo "| \`*.pkg.tar.zst\` | Arch Linux x86_64 | \`sudo pacman -U <file>\` |"
+            echo
+            echo "Qt is used under the LGPL v3 and Open CASCADE under the LGPL v2.1 with"
+            echo "the Open CASCADE exception. Both are linked dynamically, so either can be"
+            echo "replaced with a build of your own. Their complete source, as built here, is"
+            echo "attached to this release (\`qtbase-\`, \`qtsvg-\`, \`opencascade-\`); the source"
+            echo "of SuspensionKinematics itself is this repository at the commit above. Every"
+            echo "licence text is inside the download, and in the application under Help >"
+            echo "Licenses."
             echo
             echo "Built from $(git log -1 --pretty='%s')"
           } > notes.md

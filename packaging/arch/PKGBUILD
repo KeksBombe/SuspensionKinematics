@@ -9,8 +9,13 @@ pkgrel=1
 pkgdesc="Suspension kinematics tool for Bremergy - 3D viewport for STL and STEP geometry"
 arch=('x86_64')
 url="https://github.com/KeksBombe/SuspensionKinematics"
-license=('GPL-3.0-or-later')
-depends=('qt6-base' 'opencascade' 'hicolor-icon-theme')
+# MIT as well as the GPL: the Tabler icons are compiled into the binary, and
+# their licence asks to travel with it. cmake --install puts every licence text
+# in /usr/share/licenses/$pkgname, which is where pacman looks for the ones
+# outside Arch's common set.
+license=('GPL-3.0-or-later' 'MIT')
+# qt6-svg: the icons are Tabler SVGs, rendered through QSvgRenderer.
+depends=('qt6-base' 'qt6-svg' 'opencascade' 'hicolor-icon-theme')
 makedepends=('cmake' 'ninja' 'python')
 # Without this makepkg splits out a -debug package, which would show up as a
 # second, confusing download on the release page.

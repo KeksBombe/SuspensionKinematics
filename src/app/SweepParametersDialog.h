@@ -61,9 +61,15 @@ signals:
     /// The window was closed by the user. Its being open is project state like
     /// anything else, so somebody has to hear about it.
     void closedByUser();
+    /// The window was shown or hidden, however that happened -- including
+    /// Escape, which closes a dialog without a close event. Not emitted for
+    /// the window system hiding it along with a minimised main window.
+    void visibilityChanged(bool visible);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
     QDoubleSpinBox* addNumber(QFormLayout* form, const QString& label, double minimum,

@@ -53,9 +53,16 @@ int main(int argc, char* argv[])
         QStringLiteral("screenshot"),
         QStringLiteral("Render one frame to this PNG and exit. For verification and CI."),
         QStringLiteral("path"));
+    const QCommandLineOption windowScreenshotOption(
+        QStringLiteral("screenshot-window"),
+        QStringLiteral("Render the whole window -- menu bar, ribbon, docks and viewport -- to this "
+                       "PNG and exit. For checking the window's chrome the way --screenshot "
+                       "checks the renderer."),
+        QStringLiteral("path"));
     parser.addOption(importOption);
     parser.addOption(modeOption);
     parser.addOption(screenshotOption);
+    parser.addOption(windowScreenshotOption);
     parser.process(app);
 
     suspkin::AppController controller;
@@ -85,19 +92,27 @@ int main(int argc, char* argv[])
             window->loadFile(file);
     }
 
-    if (parser.isSet(screenshotOption)) {
-        const QString path = parser.value(screenshotOption);
+    if (parser.isSet(screenshotOption) || parser.isSet(windowScreenshotOption)) {
+        const QString viewportPath = parser.value(screenshotOption);
+        const QString windowPath = parser.value(windowScreenshotOption);
         // Queued so the widget has a live context and one painted frame first.
-        QTimer::singleShot(0, window, [window, path] {
-            const QImage frame = window->captureViewport();
-            if (frame.isNull() || !frame.save(path)) {
-                qCritical("Could not write screenshot to %s", qPrintable(path));
+        QTimer::singleShot(0, window, [window, viewportPath, windowPath] {
+            const auto write = [](const QImage& image, const QString& path) {
+                if (image.isNull() || !image.save(path)) {
+                    qCritical("Could not write screenshot to %s", qPrintable(path));
+                    return false;
+                }
+                qInfo("Wrote %dx%d screenshot to %s", image.width(), image.height(),
+                      qPrintable(path));
+                return true;
+            };
+            bool ok = true;
+            if (!viewportPath.isEmpty()) ok = write(window->captureViewport(), viewportPath) && ok;
+            if (!windowPath.isEmpty()) ok = write(window->captureWindow(), windowPath) && ok;
+            if (ok)
+                QCoreApplication::quit();
+            else
                 QCoreApplication::exit(1);
-                return;
-            }
-            qInfo("Wrote %dx%d screenshot to %s", frame.width(), frame.height(),
-                  qPrintable(path));
-            QCoreApplication::quit();
         });
     }
 

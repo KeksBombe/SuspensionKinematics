@@ -509,6 +509,61 @@ Windows holds its own files open, so nothing can overwrite them from inside, and
 there is no uninstaller to repair a half-finished swap. Linux is packaged by
 pacman, which owns those files.
 
+## Commands, the ribbon and icons
+
+Every command is **one `QAction`**, made in `MainWindow::buildActions()`, and
+every place it appears is a view of that one object: a ribbon button
+(`setDefaultAction()`), a menu entry, a shortcut. Enabled state
+(`updateActionState()`), checked state and tooltip therefore cannot disagree
+between them. No ribbon button has a slot of its own.
+
+- **There is no menu bar.** `setMenuWidget(m_ribbon)` makes the ribbon the whole
+  of the window's chrome; the tabs say what the menus said, Help among them.
+  **File is the only `QMenu` left** (beside the Views split menu), opened by the
+  ribbon's accent button, because what is in it -- the project itself, and the
+  way out -- is not a tab's worth of commands. **Never call
+  `QMainWindow::menuBar()`**: on a
+  window whose menu widget is not a `QMenuBar` it makes one and installs it
+  through `setMenuWidget()`, which `deleteLater()`s the ribbon.
+- **Every command action is added to the window** (`finishActions()` ends in
+  `addActions()`). A shortcut is live only while a widget the action is on is
+  visible, and a button on a tab that is not showing is not visible -- without
+  this, `Ctrl+I` would die whenever another tab was selected.
+- `setIconText()` is the ribbon's shorter label, which the menus never see; a
+  `\n` in it is where a large button's label breaks. `commandToolTip()` builds
+  "*Label* (*shortcut*)" plus the status tip, because a tool button shows the
+  tooltip and Qt adds neither by itself.
+- **Icons only through `Icons::get(Icon::...)`** -- an enum, so a typo is a
+  compile error rather than a blank button. They are Tabler SVGs committed under
+  `resources/icons/` (the Arch build has no network), fetched by
+  `tools/fetch_icons.py` at the pinned tag. A new one needs the file, a name in
+  `SUSPKIN_ICONS` in CMakeLists.txt and a line in the table in `Icons.cpp`;
+  `test_icons` fails until the three agree. `ThemedIconEngine` writes the
+  palette's colour into the SVG before rendering, per mode, and caches by
+  `QPalette::cacheKey()`, so light and dark need nothing from the caller. Qt6::Svg
+  is linked by the **application only**; `suspkin_core` stays Core + Gui.
+- A checkable action sets `setIconVisibleInMenu(false)`: a menu marks it with its
+  tick, and the icon is for the ribbon. A checked button that is disabled draws
+  its highlight at half strength -- still saying the setting is on, without
+  reading as something that can be pressed.
+- **Panel toggles are not `toggleViewAction()`.** `PanelAction` opens a panel,
+  raises it when it is tabbed behind another -- where `toggleViewAction()` would
+  *close* the panel the user was reaching for -- and closes it only when it is
+  already in front. A dock tabbed behind another is not hidden but moved out of
+  the window, so what answers "is it in front" is `visibleRegion()`, not
+  `isVisible()`. `Ctrl+H` and `Ctrl+K` live on these actions alone: two actions
+  sharing a shortcut fire neither.
+- **The ribbon's own state is project state**, in `WindowState`: which tab (by
+  **key**, not index, so a tab added later cannot move an older project) and
+  whether it is collapsed. Restored under `m_loading`, every change ends in
+  `markDirty()`.
+- `Ribbon`, `RibbonPage` and `RibbonGroup` are a few hundred lines rather than a
+  library: `QTabBar`, `QStackedWidget` and buttons that paint themselves from the
+  palette, the same rule as the hardpoint table. Nothing in it holds a colour of
+  its own.
+- `--screenshot-window <png>` grabs the whole window, so the ribbon is checked
+  headlessly the same way the renderer is.
+
 ## Layout and layering
 
 ```

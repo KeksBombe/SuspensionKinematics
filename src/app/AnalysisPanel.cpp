@@ -272,6 +272,8 @@ void AnalysisPanel::buildUi()
     connect(m_parameters, &SweepParametersDialog::closedByUser, this, [this] {
         if (!m_updating) emit playbackChanged();
     });
+    connect(m_parameters, &SweepParametersDialog::visibilityChanged, this,
+            &AnalysisPanel::parametersVisibilityChanged);
 
     m_animation = new QTimer(this);
     m_animation->setInterval(kAnimationIntervalMs);
@@ -574,6 +576,13 @@ void AnalysisPanel::showParameters()
     m_parameters->raise();
     m_parameters->activateWindow();
     if (!wasVisible && !m_updating) emit playbackChanged();
+}
+
+void AnalysisPanel::hideParameters()
+{
+    // Through close(), so closedByUser says so exactly as the window's own
+    // Close button does.
+    m_parameters->close();
 }
 
 double AnalysisPanel::position() const { return m_positionBox->value(); }

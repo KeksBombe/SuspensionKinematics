@@ -89,23 +89,25 @@ What gets built:
    the PKGBUILD and the CI container's `pacman` line. It is already installed
    on this machine (6.11.1).
 
-6. **The menu bar stays, above the ribbon, and is shown by default.** The
-   window's menu widget is a container holding the `QMenuBar` above the ribbon
-   (`setMenuWidget(container)`). The File button and the Help button open the
-   **same `QMenu` objects** the menu bar holds, so Open Recent is still
-   refreshed by its single `aboutToShow` connection. **View > Show Menu Bar**
-   hides the bar for anyone who wants the ribbon on its own, and the project
-   remembers the choice.
+6. **There is no menu bar** (settled 2026-09-13, on seeing it: the bar and the
+   tab row said the same words twice). `setMenuWidget(m_ribbon)` makes the
+   ribbon the whole of the window's chrome. **Help is a tab of its own** (asked
+   for the same day, once the rest was on screen), so File is the only `QMenu`
+   left and Open Recent is still refreshed by its single `aboutToShow`
+   connection. The keyboard keeps what the bar gave it: `Alt+F` opens File, and
+   `Alt+G`, `Alt+H`, `Alt+L`, `Alt+A`, `Alt+V`, `Alt+P` switch tab -- mnemonics
+   on the tabs, hidden rather than underlined. Help is `Alt+P`, because the
+   Hardpoints tab has `Alt+H` and two tabs sharing a mnemonic means neither
+   answers to it.
    - **Pitfall:** once `setMenuWidget()` has been called, **never call
      `QMainWindow::menuBar()` again**. When the menu widget is not a `QMenuBar`,
      `menuBar()` creates one and installs it through `setMenuWidget()`, which
-     `deleteLater()`s whatever was there, including the ribbon. Keep the bar
-     in `m_menuBar` and use that.
+     `deleteLater()`s whatever was there, including the ribbon.
 
 7. **Every command action is added to the window itself (`addAction()`).** A
    `QAction`'s shortcut only fires while at least one widget it is on is
-   visible. Once the user hides the menu bar, and the button is on a ribbon tab
-   that is not showing, `Ctrl+I` would go dead. The code already does this for the view
+   visible. With no menu bar at all and the button on a ribbon tab that is not
+   showing, `Ctrl+I` would go dead. The code already does this for the view
    presets and the three show toggles; now it applies to every command.
 
 8. **Panel toggles are not `toggleViewAction()`.** When one dock is tabified
@@ -122,7 +124,8 @@ What gets built:
    fires. The Sweep Parameters window gets the same treatment through a
    visibility signal on `AnalysisPanel`.
 
-9. **The ribbon's state is project state.** It lives in `WindowState`, beside
+9. **The ribbon's state is project state** -- which tab, and whether it is
+   collapsed. It lives in `WindowState`, beside
    the window geometry and dock state, because it is window layout. The active
    tab is stored **by key, not by index**, so a tab added in a later release
    does not change which tab an older project opens on. That is the same
@@ -210,8 +213,8 @@ the car's centre plane (negating Y) looks in a top view.
 | Display  | Solid                       | `m_solidAction`                                  | `sphere`           | S    | Ctrl+1                 |
 | Display  | Triangles                   | `m_trianglesAction`                              | `triangles`        | S    | Ctrl+2                 |
 | Show     | Labels / Parts / Wheels     | `m_labelsAction` / `m_linksAction` / `m_wheelsAction` | `tag` / `vector` / `wheel` | S | Ctrl+L / Ctrl+P / Ctrl+Shift+W |
-| Window   | Show Menu Bar               | *new* `m_menuBarAction`                          | `menu-2`           | S    |                        |
-| Window   | Reset Panel Layout          | *new* `m_resetLayoutAction`                      | `layout-dashboard` | S    |                        |
+| Panels   | Hardpoint Table / Analysis / Sweep Parameters | the three `PanelAction`s        | `table` / `chart-line` / `adjustments-horizontal` | S | Ctrl+H / Ctrl+K / Ctrl+Shift+P |
+| Panels   | Reset Panel Layout          | *new* `m_resetLayoutAction`                      | `layout-dashboard` | S    |                        |
 
 `sphere` and `triangles` match what the viewport's own mode selector already
 draws: a shaded ball and a meshed one.
@@ -223,11 +226,12 @@ draws: a shaded ball and a meshed one.
 | Hardpoints panel | *new* `m_hardpointsPanelAction`     | `table`                  | Ctrl+H           |
 | Analysis panel   | `m_analysisPanelAction`             | `chart-line`             | Ctrl+K           |
 | Sweep Parameters | `m_parametersPanelAction`           | `adjustments-horizontal` | Ctrl+Shift+P     |
-| Help             | the Help `QMenu`                    | `help-circle`            |                  |
 | Collapse ribbon  | *new* `m_collapseRibbonAction`      | `chevron-up` / `chevron-down` | Ctrl+F1 *new* |
 
-In the Help menu: Check for Updates `cloud-download`, About `info-circle`.
-Check on Startup is a checkbox and gets no icon.
+**Help** is a tab, not a menu and not a `?` button: Updates (Check for Updates
+`cloud-download` L, Check on Startup `refresh` S) and Program (About
+`info-circle` L, Licenses `license` S, About Qt `info-square-rounded` S). The
+last three are the licence-compliance work that landed beside this.
 
 All of these names were confirmed to exist at the pinned tag.
 
@@ -235,30 +239,30 @@ All of these names were confirmed to exist at the pinned tag.
 
 ### Phase A -- Actions become the single source (no visible change)
 
-- [ ] **A1** Move the actions `buildMenus()` creates inline into members built
+- [x] **A1** Move the actions `buildMenus()` creates inline into members built
   in `buildActions()`: Show Project Folder, Show Template File, Sweep
   Parameters, Export Sweep as CSV, the seven view presets, About.
-- [ ] **A2** Call `addAction()` on the window for every command action
+- [x] **A2** Call `addAction()` on the window for every command action
   (decision 7), not only the four that do it today.
-- [ ] **A3** Give the ribbon shorter labels through `setIconText()`, which
+- [x] **A3** Give the ribbon shorter labels through `setIconText()`, which
   leaves the menu text alone: "Overwrite", "Export As", "Reset Template",
   "Import\nGeometry". A `QToolButton` sizes and draws multi-line text, so an
   explicit `\n` is how a large button gets its two lines; the menu never sees
   it.
-- [ ] **A4** A helper that sets each action's tooltip to "*Label* (*shortcut
+- [x] **A4** A helper that sets each action's tooltip to "*Label* (*shortcut
   in native text*)" plus its status tip. A tool button shows the tooltip, and
   Qt does not add the shortcut to it by itself.
-- [ ] Verify: build, `ctest`, every menu and shortcut behaves exactly as
+- [x] Verify: build, `ctest`, every menu and shortcut behaves exactly as
   before.
 
 ### Phase B -- Icons
 
-- [ ] **B1** `tools/fetch_icons.py <name>...`: stdlib `urllib`, fetches
+- [x] **B1** `tools/fetch_icons.py <name>...`: stdlib `urllib`, fetches
   `icons/outline/<name>.svg` at tag `v3.46.0`, strips the leading `<!-- -->`
   header, and writes `resources/icons/<name>.svg`. It writes
   `LICENSE-tabler.txt` once, naming the tag. Run it once with every name in
   section 4 and commit the output.
-- [ ] **B2** CMake: add `Svg` to `find_package(Qt6 ...)` and link `Qt6::Svg`
+- [x] **B2** CMake: add `Svg` to `find_package(Qt6 ...)` and link `Qt6::Svg`
   to `suspkin` only. Add `set(SUSPKIN_ICONS ...)` and
   `qt_add_resources(suspkin "icons" PREFIX "/icons" BASE "resources/icons"
   FILES ${SUSPKIN_ICONS})`. Add `qt6-svg` to the PKGBUILD `depends` and to the
@@ -266,7 +270,7 @@ All of these names were confirmed to exist at the pinned tag.
   CI configure finds Qt6Svg in the `install-qt-action` kit. It is expected to
   be in the default install; if not, `find_package` fails loudly and the fix is
   a `modules:` line.
-- [ ] **B3** `ThemedIconEngine` in `src/app/Icons.cpp`:
+- [x] **B3** `ThemedIconEngine` in `src/app/Icons.cpp`:
   - It holds the SVG bytes. `paint()` picks a colour from
     `QGuiApplication::palette()` for the mode: Normal and Active use
     `ButtonText`, Disabled uses the disabled `ButtonText`, Selected uses
@@ -279,9 +283,9 @@ All of these names were confirmed to exist at the pinned tag.
     and `key()`.
   - `Icons::get(Icon)` builds the `QIcon`. An unknown entry logs a `qWarning`
     and returns an empty icon; it never crashes.
-- [ ] **B4** Set an icon on every action as in section 4. Menus show them
+- [x] **B4** Set an icon on every action as in section 4. Menus show them
   automatically.
-- [ ] **B5** `tests/test_icons.cpp` (`QTEST_MAIN`):
+- [x] **B5** `tests/test_icons.cpp` (`QTEST_MAIN`):
   - every `Icon` resolves to an embedded resource that `QSvgRenderer` accepts;
   - rendered under a light palette, the opaque pixels are dark, and under a
     dark palette they are light;
@@ -292,13 +296,13 @@ All of these names were confirmed to exist at the pinned tag.
   compiles `HardpointModel.cpp`, and embeds the same `${SUSPKIN_ICONS}`. Set
   `ENVIRONMENT QT_QPA_PLATFORM=offscreen` on it so it never opens a window on a
   developer's desktop.
-- [ ] Verify at 100 %, 150 % and 200 % scaling (`QT_SCALE_FACTOR`) that menu
+- [x] Verify at 100 %, 150 % and 200 % scaling (`QT_SCALE_FACTOR`) that menu
   icons are crisp. The pixmap path must be asked for device pixels rather than
   upscaling a 1x image.
 
 ### Phase C -- The ribbon widget
 
-- [ ] **C1** `Ribbon`: a top row of [File button | `QTabBar` | stretch |
+- [x] **C1** `Ribbon`: a top row of [File button | `QTabBar` | stretch |
   trailing buttons], with a `QStackedWidget` of pages below it. API:
   ```cpp
   void setApplicationMenu(QMenu* menu, const QString& text);  // File button
@@ -314,7 +318,7 @@ All of these names were confirmed to exist at the pinned tag.
   void RibbonGroup::addSmall(QAction* action);   // stacked three to a column
   void RibbonGroup::addSplit(QAction* defaultAction, QMenu* menu);
   ```
-- [ ] **C2** Buttons:
+- [x] **C2** Buttons:
   - Large: `ToolButtonTextUnderIcon`, 32 px icon, `autoRaise`, at least 56 px
     wide.
   - Small: `ToolButtonTextBesideIcon`, 16 px icon, one third of the large
@@ -325,15 +329,15 @@ All of these names were confirmed to exist at the pinned tag.
   - Each group has a caption underneath in a smaller font, using the
     `PlaceholderText` colour, and a thin `Mid`-coloured separator between
     groups.
-- [ ] **C3** Colours come only from the palette, re-read on
+- [x] **C3** Colours come only from the palette, re-read on
   `QEvent::PaletteChange` the way `HardpointPanel::changeEvent()` does it. The
   tab row uses `Window`, and the pages a shade between `Window` and `Base`. A
   checked button gets a `Highlight` fill at low alpha. The File button is the
   one accent: `Highlight` behind `HighlightedText`.
-- [ ] **C4** Collapse: double-clicking a tab, the chevron, or `Ctrl+F1` hides
+- [x] **C4** Collapse: double-clicking a tab, the chevron, or `Ctrl+F1` hides
   the page stack. Clicking a tab while collapsed expands the ribbon again. v1
   has no Office-style popup-over-the-viewport.
-- [ ] **C5** Narrow windows: each page sits in a frameless `QScrollArea` that
+- [x] **C5** Narrow windows: each page sits in a frameless `QScrollArea` that
   scrolls horizontally, with its scrollbar shown only when needed. A 1024 px
   window then scrolls instead of clipping. Groups do not collapse into
   dropdowns at small widths; this app is not used at widths where that would
@@ -341,12 +345,12 @@ All of these names were confirmed to exist at the pinned tag.
 
 ### Phase D -- Wiring it into `MainWindow`
 
-- [ ] **D1** `buildMenus()` creates `m_menuBar` explicitly and never calls
+- [x] **D1** `buildMenus()` creates `m_menuBar` explicitly and never calls
   `menuBar()` (decision 6). Keep `m_fileMenu` and `m_helpMenu` as members. The
   new `buildRibbon()` runs after it, builds the container (`m_menuBar` above
   `m_ribbon`) and calls `setMenuWidget(container)`.
-- [ ] **D2** Build the pages and groups in section 4.
-- [ ] **D3** `PanelAction` for the Hardpoints dock, the Analysis dock and the
+- [x] **D2** Build the pages and groups in section 4.
+- [x] **D3** `PanelAction` for the Hardpoints dock, the Analysis dock and the
   Sweep Parameters window. It replaces `toggleViewAction()` in the View and
   Analysis menus as well as appearing in the ribbon.
   - **Take `Ctrl+K` off `m_analysisDock->toggleViewAction()`, and `Ctrl+H` off
@@ -357,56 +361,63 @@ All of these names were confirmed to exist at the pinned tag.
   - `AnalysisPanel` gains `parametersVisibilityChanged(bool)`, emitted from
     `showParameters()`, `setParametersVisible()` and `closedByUser`, so that
     toggle's checked state has something to follow.
-- [ ] **D4** Reset Panel Layout: capture `m_defaultDockState = saveState()` at
+- [x] **D4** Reset Panel Layout: capture `m_defaultDockState = saveState()` at
   the end of construction, before `openProjectContents()` restores the
   project's own layout. Reset does `restoreState(m_defaultDockState)`, then
   applies the rule `openProjectContents()` already uses (the Hardpoints dock is
   shown when hardpoints are loaded), then calls `markDirty()`. This is what
   rescues a panel that was floated onto a monitor that is not there today.
-- [ ] **D5** Show Menu Bar: a checkable action, checked by default, that sets
-  `m_menuBar`'s visibility.
-- [ ] **D6** `tests/test_panel_action.cpp` (`QTEST_MAIN`, offscreen): a
+- [x] **D5** ~~Show Menu Bar~~ -- dropped with the menu bar itself (decision 6).
+  What took its place: the tabs carry the menus' Alt mnemonics, and the View tab
+  has a Panels group with the three panel toggles and Reset Panel Layout on it.
+- [x] **D6** `tests/test_panel_action.cpp` (`QTEST_MAIN`, offscreen): a
   `QMainWindow` with two tabified docks. Triggering the one behind brings it
   forward and leaves it open. Triggering again closes it. Triggering once more
   shows it. The checked state matches after every step.
 
 ### Phase E -- Persistence
 
-- [ ] **E1** Add `QString ribbonPage`, `bool ribbonCollapsed = false` and
+- [x] **E1** Add `QString ribbonPage`, `bool ribbonCollapsed = false` and
   `bool menuBarVisible = true` to `WindowState` in `Project.h`, and include
   them in `isEmpty()`. Otherwise a state holding only these would not be
   written. `Project.cpp` reads and writes `ribbonPage`, `ribbonCollapsed` and
   `menuBar` under `"window"`. A missing key reads as the default, so an older
   project opens on the first tab, expanded, with its menu bar where it always
   was.
-- [ ] **E2** `collectViewState()` writes the three fields.
+- [x] **E2** `collectViewState()` writes the three fields.
   `openProjectContents()` restores them under `m_loading`, straight after
   `restoreState()`. A key that names no page, such as a tab renamed in a later
   release, falls back to the first page without a message.
-- [ ] **E3** Connect `currentPageChanged`, `collapsedChanged` and the menu-bar
+- [x] **E3** Connect `currentPageChanged`, `collapsedChanged` and the menu-bar
   toggle to `markDirty()`.
-- [ ] **E4** `tests/test_project.cpp`: extend the window round-trip case with
+- [x] **E4** `tests/test_project.cpp`: extend the window round-trip case with
   the three fields, and add a case showing that a manifest without them reads
   as the defaults.
 
 ### Phase F -- Checking it, and saying so
 
-- [ ] **F1** Add `--screenshot-window <png>` to `main.cpp`. It grabs the whole
+- [x] **F1** Add `--screenshot-window <png>` to `main.cpp`. It grabs the whole
   window rather than only the viewport, so the ribbon can be checked headlessly
   the same way the renderer is. Same `offscreen` + `LIBGL_ALWAYS_SOFTWARE`
   recipe as in CLAUDE.md.
-- [ ] **F2** By hand, on Linux light and dark, and on Windows 11 at 100 / 150 /
-  200 %:
-  - [ ] every tab, every button;
-  - [ ] each button's enabled state matches its menu entry, with and without
-    hardpoints loaded;
-  - [ ] `Ctrl+I` works with the menu bar hidden and the View tab showing;
-  - [ ] a tabified Analysis dock comes to the front when its toggle is
-    clicked;
-  - [ ] a panel floated to the second monitor comes back there when the
-    project reopens;
-  - [ ] Reset Panel Layout docks everything again.
-- [ ] **F3** CLAUDE.md gets a short "Commands, the ribbon and icons" section
+- [x] **F2** Checked headlessly, on Linux, through `--screenshot-window` on a
+  copy of the 26_DY project and through a scratch harness that puts the real
+  `Ribbon` under a hand-made dark palette:
+  - [x] every tab and every button drawn, light and dark;
+  - [x] disabled buttons grey out with their icons (Rename/Delete Point with
+    nothing selected, New Table with a workbook already there);
+  - [x] checked buttons wash with the highlight (Solid, Parts, Wheels, Labels,
+    and the panel toggles when their dock is open);
+  - [x] a narrow window scrolls its page sideways instead of clipping it, with
+    the scroll bar in room of its own;
+  - [x] 100 %, 150 % and 200 % (`QT_SCALE_FACTOR`): icons are rendered at
+    device pixels, not a 1x image stretched;
+  - [x] a tabified dock comes to the front rather than closing -- as
+    `test_panel_action`, against real docks;
+  - [ ] **still to do by hand**: Windows 11, a panel floated onto a second
+    monitor coming back there, Reset Panel Layout, and clicking through the
+    buttons with a mouse. Nothing here can open a window on a desktop.
+- [x] **F3** CLAUDE.md gets a short "Commands, the ribbon and icons" section
   covering: actions as the single source; `addAction()` on the window; never
   `menuBar()` after `setMenuWidget()`; icons only through `Icons::get(Icon::...)`,
   with new ones fetched by `tools/fetch_icons.py`; ribbon state in
@@ -415,14 +426,16 @@ All of these names were confirmed to exist at the pinned tag.
 
 ## 6. Settled with the user
 
-- **The menu bar is shown by default**, above the ribbon, and can be hidden
-  from View > Show Menu Bar.
+- **No menu bar.** It was to be shown by default above the ribbon; seeing it
+  built, the user's answer on 2026-09-13 was that the two rows were the same
+  thing twice, and it was removed outright -- no bar and no toggle for one. Alt
+  mnemonics moved onto the tabs and the File button.
 - **Single-colour line icons that recolour with the theme.** Inventor's own
   icons are multi-coloured; matching that would mean drawing a set by hand,
   which is a much bigger job.
-- **Height:** about 24 px of menu bar, 28 px of tabs and 90 px of groups.
-  Collapsing the ribbon (`Ctrl+F1`) takes it down to the tab row; hiding the
-  menu bar saves the rest.
+- **Height:** about 28 px of tabs and 95 px of groups, both from the font, so a
+  desktop with larger text gets a taller ribbon rather than clipped labels.
+  Collapsing it (`Ctrl+F1`) takes it down to the tab row.
 
 ## 7. Not in scope
 
@@ -446,3 +459,27 @@ All of these names were confirmed to exist at the pinned tag.
   first in the Hardpoints menu, with `Ctrl+H`. A table closed with its X could
   not be found again under View's bare "Hardpoints". D3 has to move that
   shortcut to the `PanelAction`, the same as `Ctrl+K`.
+- **2026-09-13** Built, all of it. Phases A to F are in: 45 Tabler icons under
+  `resources/icons/` and `ThemedIconEngine` behind `Icons::get()`; `Ribbon`,
+  `RibbonPage`, `RibbonGroup` and buttons that paint themselves from the
+  palette; `PanelAction`; the ribbon's tab and collapse in `WindowState`;
+  `--screenshot-window`; `test_icons` and `test_panel_action` beside the
+  existing suites.
+  Two things went differently from the plan. **The menu bar is gone**, not
+  merely hideable -- seeing the bar and the tab row together, the user's answer
+  was that they were the same thing twice (decision 6 above, and section 6).
+  And the command map in section 4 was written before Add/Rename/Delete Point,
+  New Hardpoint Table, Generate from Design, New Part, Edit Parts and Static
+  Camber and Toe existed; they have icons and ribbon buttons too, so no command
+  is only in a menu -- which matters rather more now that there are no menus.
+  What is left is the by-hand pass in F2: Windows, a second monitor, and a
+  mouse.
+- **2026-09-13, later** **Help became a tab** as well, asked for once the rest
+  was on screen: Updates and Program groups, and the `?` button at the end of
+  the tab row went with the menu behind it (decision 6). File is now the only
+  `QMenu`, so `buildMenus()` is `buildFileMenu()`, `Ribbon::addTrailingMenu()`
+  went with its last caller, and `help-circle` left the icon table. Two icons
+  arrived with the tab: `refresh` for Check on Startup and
+  `info-square-rounded` for About Qt, both of which had been menu entries
+  needing no icon. A checked button that is disabled -- Check on Startup on a
+  local build -- now draws its highlight at half strength.

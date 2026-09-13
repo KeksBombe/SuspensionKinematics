@@ -83,14 +83,25 @@ struct ViewState {
     SimulationState simulation;
 };
 
-/// The window's own layout: its size and position, and where the docks sit.
-/// Opaque Qt blobs, stored per project because a project the user works on in a
-/// particular arrangement should come back in that arrangement.
+/// The window's own layout: its size and position, where the docks sit, and
+/// how the ribbon is left. The first two are opaque Qt blobs. All of it is
+/// stored per project because a project the user works on in a particular
+/// arrangement should come back in that arrangement.
 struct WindowState {
     QByteArray geometry;
     QByteArray dockState;
+    /// The ribbon tab showing, by its key ("hardpoints"), not its position: a
+    /// tab added in a later release must not change which one a project opens
+    /// on. Empty is the first tab.
+    QString ribbonPage;
+    /// Folded down to its tab row.
+    bool ribbonCollapsed = false;
 
-    bool isEmpty() const { return geometry.isEmpty() && dockState.isEmpty(); }
+    bool isEmpty() const
+    {
+        return geometry.isEmpty() && dockState.isEmpty() && ribbonPage.isEmpty()
+               && !ribbonCollapsed;
+    }
 };
 
 /// An asset the project owns: a file that was imported from somewhere on disk

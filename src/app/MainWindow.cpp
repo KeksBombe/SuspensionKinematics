@@ -4,11 +4,15 @@
 #include "app/GenerateDialog.h"
 #include "app/HardpointModel.h"
 #include "app/HardpointPanel.h"
+#include "app/Icons.h"
+#include "app/LicensesDialog.h"
 #include "app/MirrorDialog.h"
+#include "app/PanelAction.h"
 #include "app/PartDialogs.h"
 #include "app/PointDialog.h"
 #include "app/ProjectLauncher.h"
 #include "app/RecentProjects.h"
+#include "app/Ribbon.h"
 #include "app/StaticAnglesDialog.h"
 #include "app/SteeringDialog.h"
 #include "app/UpdateChecker.h"
@@ -35,8 +39,9 @@
 #include <QLocale>
 #include <QMatrix3x3>
 #include <QMatrix4x4>
-#include <QMenuBar>
+#include <QMenu>
 #include <QMessageBox>
+#include <QPainter>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QQuaternion>
@@ -149,10 +154,13 @@ MainWindow::MainWindow(Project project, QWidget* parent)
     m_saveTimer->setInterval(kAutoSaveDelayMs);
     connect(m_saveTimer, &QTimer::timeout, this, [this] { saveProject(); });
 
-    buildActions();
+    // The docks before the actions: the panel toggles are actions on them.
     buildHardpointDock();
     buildAnalysisDock();
-    buildMenus();
+    buildActions();
+    buildFileMenu();
+    buildRibbon();
+    finishActions();
 
     // The overlay buttons and the menu entries are two views of one mode.
     connect(m_viewport, &ViewportWidget::displayModeChanged, this, [this](DisplayMode mode) {
@@ -168,6 +176,9 @@ MainWindow::MainWindow(Project project, QWidget* parent)
     });
 
     resize(1280, 820);
+    // Before the project's own layout goes on: this is the layout a project
+    // that has never been arranged gets, and what Reset Panel Layout restores.
+    m_defaultDockState = saveState();
     openProjectContents();
 
     // After the project is in, so a slow or failing network never delays the
@@ -313,16 +324,27 @@ void MainWindow::buildAnalysisDock()
 
 void MainWindow::buildActions()
 {
+    // Every command is one QAction, made here, and every place it appears -- a
+    // menu, a ribbon button, a shortcut -- is a view of that one object. The
+    // icon, the ribbon's shorter label (setIconText, which the menu never
+    // shows; a \n in it is where a large button's label breaks) and the status
+    // tip, which the ribbon's tooltip is built from, are all set here with it.
+
     m_newProjectAction = new QAction(tr("&New Project..."), this);
     m_newProjectAction->setShortcut(QKeySequence::New);
+    m_newProjectAction->setIcon(Icons::get(Icon::FolderPlus));
+    m_newProjectAction->setStatusTip(tr("Start a new project in a folder of its own."));
     connect(m_newProjectAction, &QAction::triggered, this, &MainWindow::newProject);
 
     m_openProjectAction = new QAction(tr("&Open Project..."), this);
     m_openProjectAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")));
+    m_openProjectAction->setIcon(Icons::get(Icon::FolderOpen));
+    m_openProjectAction->setStatusTip(tr("Open another project. This one is saved first."));
     connect(m_openProjectAction, &QAction::triggered, this, &MainWindow::openProject);
 
     m_saveProjectAction = new QAction(tr("&Save Project"), this);
     m_saveProjectAction->setShortcut(QKeySequence::Save);
+    m_saveProjectAction->setIcon(Icons::get(Icon::DeviceFloppy));
     m_saveProjectAction->setStatusTip(
         tr("The project saves itself as you work; this writes it out now."));
     connect(m_saveProjectAction, &QAction::triggered, this, [this] {
@@ -330,15 +352,26 @@ void MainWindow::buildActions()
     });
 
     m_projectListAction = new QAction(tr("&Project List..."), this);
+    m_projectListAction->setIcon(Icons::get(Icon::ListDetails));
+    m_projectListAction->setStatusTip(tr("Go back to the list of projects."));
     connect(m_projectListAction, &QAction::triggered, this, [this] {
         saveProject();
         emit projectListRequested();
+    });
+
+    m_revealProjectAction = new QAction(tr("Show Project &Folder"), this);
+    m_revealProjectAction->setIcon(Icons::get(Icon::FolderSearch));
+    m_revealProjectAction->setStatusTip(tr("Open the project's folder in the file manager."));
+    connect(m_revealProjectAction, &QAction::triggered, this, [this] {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(m_project.rootPath()));
     });
 
     // "Chassis" rather than "geometry": the wheels are geometry too, and have
     // their own entries below. This is the car the suspension is bolted to.
     m_importAction = new QAction(tr("&Import Chassis..."), this);
     m_importAction->setShortcut(QKeySequence::Open);
+    m_importAction->setIcon(Icons::get(Icon::FileImport));
+    m_importAction->setIconText(tr("Import\nChassis"));
     m_importAction->setStatusTip(
         tr("Bring in the chassis or monocoque as STEP or STL. It is copied into the project."));
     connect(m_importAction, &QAction::triggered, this, &MainWindow::importFileDialog);
@@ -346,57 +379,99 @@ void MainWindow::buildActions()
     m_closeAction = new QAction(tr("&Remove Chassis"), this);
     m_closeAction->setShortcut(QKeySequence::Close);
     m_closeAction->setEnabled(false);
+    m_closeAction->setIcon(Icons::get(Icon::FileX));
+    m_closeAction->setStatusTip(
+        tr("Take the chassis out of the project. The file it was imported from is not touched."));
     connect(m_closeAction, &QAction::triggered, this, &MainWindow::closeModel);
 
     m_quitAction = new QAction(tr("&Quit"), this);
     m_quitAction->setShortcut(QKeySequence::Quit);
+    m_quitAction->setIcon(Icons::get(Icon::Logout));
     connect(m_quitAction, &QAction::triggered, this, &QWidget::close);
 
     m_modeGroup = new QActionGroup(this);
     m_modeGroup->setExclusive(true);
 
-    const auto addMode = [this](const QString& text, const QString& shortcut, DisplayMode mode) {
+    const auto addMode = [this](const QString& text, const QString& shortcut, DisplayMode mode,
+                                Icon icon, const QString& tip) {
         auto* action = new QAction(text, this);
         action->setCheckable(true);
         action->setShortcut(QKeySequence(shortcut));
+        action->setIcon(Icons::get(icon));
+        // A menu marks a checkable entry with its tick or its radio button, not
+        // with an icon, so the icon is for the ribbon alone.
+        action->setIconVisibleInMenu(false);
+        action->setStatusTip(tip);
         m_modeGroup->addAction(action);
         connect(action, &QAction::triggered, this,
                 [this, mode] { m_viewport->setDisplayMode(mode); });
         return action;
     };
-    m_solidAction     = addMode(tr("&Solid"),     QStringLiteral("Ctrl+1"), DisplayMode::Solid);
-    m_trianglesAction = addMode(tr("&Triangles"), QStringLiteral("Ctrl+2"), DisplayMode::Triangles);
+    // Icons that match what the viewport's own mode selector draws: a shaded
+    // ball, and a meshed one.
+    m_solidAction = addMode(tr("&Solid"), QStringLiteral("Ctrl+1"), DisplayMode::Solid, Icon::Sphere,
+                            tr("Draw the geometry shaded."));
+    m_trianglesAction =
+        addMode(tr("&Triangles"), QStringLiteral("Ctrl+2"), DisplayMode::Triangles, Icon::Triangles,
+                tr("Draw the geometry's triangles, to see how it was tessellated."));
     m_solidAction->setChecked(true); // matches ViewportWidget's default
 
     m_fitAction = new QAction(tr("&Fit to view"), this);
     m_fitAction->setShortcut(QKeySequence(QStringLiteral("F")));
+    m_fitAction->setIcon(Icons::get(Icon::FocusCentered));
+    m_fitAction->setIconText(tr("Fit\nto View"));
+    m_fitAction->setStatusTip(tr("Frame everything the project holds in the viewport."));
     connect(m_fitAction, &QAction::triggered, this, [this] { m_viewport->fitToView(); });
 
     m_importHardpointsAction = new QAction(tr("&Import Hardpoints..."), this);
     m_importHardpointsAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+I")));
+    m_importHardpointsAction->setIcon(Icons::get(Icon::FileSpreadsheet));
+    m_importHardpointsAction->setIconText(tr("Import\nHardpoints"));
+    m_importHardpointsAction->setStatusTip(
+        tr("Bring in a hardpoint workbook (.xlsx). It is copied into the project."));
     connect(m_importHardpointsAction, &QAction::triggered, this,
             &MainWindow::importHardpointsDialog);
 
+    // The icon has the mirror line upright, which is how the car's centre
+    // plane -- the one mirroring flips across -- looks from above.
     m_mirrorAction = new QAction(tr("&Mirror Hardpoints..."), this);
     m_mirrorAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+M")));
     m_mirrorAction->setEnabled(false);
+    m_mirrorAction->setIcon(Icons::get(Icon::FlipHorizontal));
+    m_mirrorAction->setIconText(tr("Mirror"));
+    m_mirrorAction->setStatusTip(
+        tr("Copy points to the other side of the car, named by the project's own rule."));
     connect(m_mirrorAction, &QAction::triggered, this, &MainWindow::mirrorHardpointsDialog);
 
     m_overwriteWorkbookAction = new QAction(tr("&Overwrite Workbook"), this);
     m_overwriteWorkbookAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")));
     m_overwriteWorkbookAction->setEnabled(false);
+    m_overwriteWorkbookAction->setIcon(Icons::get(Icon::TableExport));
+    m_overwriteWorkbookAction->setIconText(tr("Overwrite"));
+    m_overwriteWorkbookAction->setStatusTip(
+        tr("Write the table into the project's own copy of the workbook."));
     connect(m_overwriteWorkbookAction, &QAction::triggered, this, &MainWindow::overwriteWorkbook);
 
     m_exportWorkbookAction = new QAction(tr("&Export Workbook As..."), this);
     m_exportWorkbookAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+E")));
     m_exportWorkbookAction->setEnabled(false);
+    m_exportWorkbookAction->setIcon(Icons::get(Icon::FileExport));
+    m_exportWorkbookAction->setIconText(tr("Export As"));
+    m_exportWorkbookAction->setStatusTip(
+        tr("Write the table into a workbook somewhere else. The project's own copy is left as "
+           "it is, and the edits stay pending."));
     connect(m_exportWorkbookAction, &QAction::triggered, this, &MainWindow::exportWorkbookAs);
 
     m_closeHardpointsAction = new QAction(tr("&Remove Hardpoints"), this);
     m_closeHardpointsAction->setEnabled(false);
+    m_closeHardpointsAction->setIcon(Icons::get(Icon::TableMinus));
+    m_closeHardpointsAction->setStatusTip(
+        tr("Take the hardpoints out of the project. The workbook they came from is not touched."));
     connect(m_closeHardpointsAction, &QAction::triggered, this, &MainWindow::closeHardpoints);
 
     m_newTableAction = new QAction(tr("&New Hardpoint Table..."), this);
+    m_newTableAction->setIcon(Icons::get(Icon::TablePlus));
+    m_newTableAction->setIconText(tr("New Table"));
     m_newTableAction->setStatusTip(
         tr("Start a table of points here rather than importing one. The project gets a workbook "
            "of its own to hold them."));
@@ -404,26 +479,29 @@ void MainWindow::buildActions()
 
     m_addPointAction = new QAction(tr("&Add Point..."), this);
     m_addPointAction->setShortcut(QKeySequence(Qt::Key_Insert));
+    m_addPointAction->setIcon(Icons::get(Icon::RowInsertBottom));
     m_addPointAction->setStatusTip(tr("Add a point next to the selected one."));
     connect(m_addPointAction, &QAction::triggered, this, &MainWindow::addPointDialog);
-    addAction(m_addPointAction);
 
     m_deletePointAction = new QAction(tr("&Delete Point"), this);
     m_deletePointAction->setShortcut(QKeySequence::Delete);
     m_deletePointAction->setEnabled(false);
+    m_deletePointAction->setIcon(Icons::get(Icon::RowRemove));
     m_deletePointAction->setStatusTip(
         tr("Delete the selected points. A point the workbook holds stays in it until the "
            "workbook is overwritten."));
     connect(m_deletePointAction, &QAction::triggered, this, &MainWindow::deleteSelectedPoints);
-    addAction(m_deletePointAction);
 
     m_renamePointAction = new QAction(tr("Re&name Point..."), this);
     m_renamePointAction->setEnabled(false);
+    m_renamePointAction->setIcon(Icons::get(Icon::Forms));
     m_renamePointAction->setStatusTip(tr("Give the selected point a different name."));
     connect(m_renamePointAction, &QAction::triggered, this, &MainWindow::renamePointDialog);
 
     m_generateAction = new QAction(tr("&Generate from Design..."), this);
     m_generateAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+G")));
+    m_generateAction->setIcon(Icons::get(Icon::Wand));
+    m_generateAction->setIconText(tr("Generate\nfrom Design"));
     m_generateAction->setStatusTip(
         tr("Work out the wishbones, the upright and the steering from vehicle targets: track, "
            "caster, roll centre, anti-dive and the rest."));
@@ -431,11 +509,14 @@ void MainWindow::buildActions()
 
     m_newPartAction = new QAction(tr("&New Part from Selection..."), this);
     m_newPartAction->setEnabled(false);
+    m_newPartAction->setIcon(Icons::get(Icon::Line));
+    m_newPartAction->setIconText(tr("New Part"));
     m_newPartAction->setStatusTip(
         tr("Draw a part through the selected points, in the order they were picked."));
     connect(m_newPartAction, &QAction::triggered, this, &MainWindow::newPartFromSelection);
 
     m_editPartsAction = new QAction(tr("&Edit Parts..."), this);
+    m_editPartsAction->setIcon(Icons::get(Icon::Edit));
     m_editPartsAction->setStatusTip(tr("Rename or delete the parts the template draws."));
     connect(m_editPartsAction, &QAction::triggered, this, &MainWindow::editPartsDialog);
 
@@ -443,36 +524,60 @@ void MainWindow::buildActions()
     m_labelsAction->setCheckable(true);
     m_labelsAction->setChecked(true);
     m_labelsAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+L")));
+    m_labelsAction->setIcon(Icons::get(Icon::Tag));
+    m_labelsAction->setIconVisibleInMenu(false);
+    m_labelsAction->setIconText(tr("Labels"));
+    m_labelsAction->setStatusTip(tr("Write each hardpoint's name beside its marker."));
     connect(m_labelsAction, &QAction::toggled, this,
             [this](bool on) { m_viewport->setHardpointLabelsVisible(on); });
-    addAction(m_labelsAction);
 
     m_linksAction = new QAction(tr("Show &Parts"), this);
     m_linksAction->setCheckable(true);
     m_linksAction->setChecked(true);
     m_linksAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+P")));
+    m_linksAction->setIcon(Icons::get(Icon::Vector));
+    m_linksAction->setIconVisibleInMenu(false);
+    m_linksAction->setIconText(tr("Parts"));
     m_linksAction->setStatusTip(
         tr("Draw the wishbones, rods and bodies the linkage template describes."));
     connect(m_linksAction, &QAction::toggled, this,
             [this](bool on) { m_viewport->setLinkageVisible(on); });
-    addAction(m_linksAction);
 
     m_importLinkageAction = new QAction(tr("&Import Template..."), this);
+    m_importLinkageAction->setIcon(Icons::get(Icon::Template));
     m_importLinkageAction->setStatusTip(
         tr("Replace the rule that says which hardpoints are joined by which part."));
     connect(m_importLinkageAction, &QAction::triggered, this,
             &MainWindow::importLinkageTemplateDialog);
 
     m_resetLinkageAction = new QAction(tr("&Reset to Built-in Template"), this);
+    m_resetLinkageAction->setIcon(Icons::get(Icon::Restore));
+    m_resetLinkageAction->setIconText(tr("Reset Template"));
+    m_resetLinkageAction->setStatusTip(
+        tr("Replace the project's template with the one the application ships."));
     connect(m_resetLinkageAction, &QAction::triggered, this, &MainWindow::resetLinkageTemplate);
 
+    m_revealTemplateAction = new QAction(tr("Show &Template File"), this);
+    m_revealTemplateAction->setIcon(Icons::get(Icon::Braces));
+    m_revealTemplateAction->setStatusTip(
+        tr("Open the project's template in whatever edits JSON on this machine."));
+    connect(m_revealTemplateAction, &QAction::triggered, this, [this] {
+        const QString path = m_project.absolutePath(m_project.linkageTemplate().relativePath);
+        if (!path.isEmpty() && QFileInfo::exists(path))
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    });
+
     m_steeringAction = new QAction(tr("Steering &Rack..."), this);
+    m_steeringAction->setIcon(Icons::get(Icon::SteeringWheel));
+    m_steeringAction->setIconText(tr("Steering\nRack"));
     m_steeringAction->setStatusTip(
         tr("Say where the steering rack is attached: which axle has one, and which points it "
            "moves. An axle without a rack is not offered a steer sweep."));
     connect(m_steeringAction, &QAction::triggered, this, &MainWindow::steeringDialog);
 
     m_staticAnglesAction = new QAction(tr("Static &Camber and Toe..."), this);
+    m_staticAnglesAction->setIcon(Icons::get(Icon::Angle));
+    m_staticAnglesAction->setIconText(tr("Camber\nand Toe"));
     m_staticAnglesAction->setStatusTip(
         tr("Set each axle's static camber and toe as numbers, the way Lotus's Set Static Angles "
            "does. The wheel axis and the contact patch are computed from them."));
@@ -482,159 +587,144 @@ void MainWindow::buildActions()
     // says "wheels" and the dialog asks for a tyre model and a rim model.
     m_addWheelsAction = new QAction(tr("Add &Wheels..."), this);
     m_addWheelsAction->setEnabled(false);
+    m_addWheelsAction->setIcon(Icons::get(Icon::Wheel));
+    m_addWheelsAction->setIconText(tr("Add\nWheels"));
     m_addWheelsAction->setStatusTip(
         tr("Draw a tyre and a rim model at the four wheel centres."));
     connect(m_addWheelsAction, &QAction::triggered, this, &MainWindow::addWheelsDialog);
 
     m_removeWheelsAction = new QAction(tr("Remove Wh&eels"), this);
     m_removeWheelsAction->setEnabled(false);
+    m_removeWheelsAction->setIcon(Icons::get(Icon::Trash));
+    m_removeWheelsAction->setStatusTip(
+        tr("Take the wheel models out of the project. The files they came from are not touched."));
     connect(m_removeWheelsAction, &QAction::triggered, this, &MainWindow::removeWheels);
 
     m_wheelsAction = new QAction(tr("Show &Wheels"), this);
     m_wheelsAction->setCheckable(true);
     m_wheelsAction->setChecked(true);
     m_wheelsAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+W")));
+    m_wheelsAction->setIcon(Icons::get(Icon::Wheel));
+    m_wheelsAction->setIconVisibleInMenu(false);
+    m_wheelsAction->setIconText(tr("Wheels"));
+    m_wheelsAction->setStatusTip(tr("Draw the tyre and rim models at the wheel centres."));
     connect(m_wheelsAction, &QAction::toggled, this,
             [this](bool on) { m_viewport->setWheelsVisible(on); });
-    addAction(m_wheelsAction);
-}
 
-void MainWindow::buildMenus()
-{
-    QMenu* fileMenu = menuBar()->addMenu(tr("&File"));
-    fileMenu->addAction(m_newProjectAction);
-    fileMenu->addAction(m_openProjectAction);
-    m_recentProjectsMenu = fileMenu->addMenu(tr("Open &Recent"));
-    fileMenu->addSeparator();
-    fileMenu->addAction(m_saveProjectAction);
-    fileMenu->addAction(m_projectListAction);
-    auto* revealAction = fileMenu->addAction(tr("Show Project &Folder"));
-    connect(revealAction, &QAction::triggered, this, [this] {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(m_project.rootPath()));
-    });
-    fileMenu->addSeparator();
-    fileMenu->addAction(m_quitAction);
-    connect(fileMenu, &QMenu::aboutToShow, this, &MainWindow::refreshRecentProjectsMenu);
-    refreshRecentProjectsMenu();
-
-    QMenu* geometryMenu = menuBar()->addMenu(tr("&Geometry"));
-    geometryMenu->addAction(m_importAction);
-    geometryMenu->addAction(m_closeAction);
-    geometryMenu->addSeparator();
-    geometryMenu->addAction(m_addWheelsAction);
-    geometryMenu->addAction(m_removeWheelsAction);
-    geometryMenu->addSeparator();
-    geometryMenu->addAction(m_solidAction);
-    geometryMenu->addAction(m_trianglesAction);
-
-    // The table's own toggle, first in the menu it belongs to. With it only
-    // under View -- and called just "Hardpoints" there -- a table closed by its
-    // dock's X looked gone for good.
-    QAction* hardpointTableAction = m_hardpointDock->toggleViewAction();
-    hardpointTableAction->setText(tr("Show Hardpoint &Table"));
-    hardpointTableAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+H")));
-    hardpointTableAction->setStatusTip(tr("Open or close the table of hardpoints."));
-
-    QMenu* hardpointMenu = menuBar()->addMenu(tr("&Hardpoints"));
-    hardpointMenu->addAction(hardpointTableAction);
-    hardpointMenu->addSeparator();
-    hardpointMenu->addAction(m_importHardpointsAction);
-    hardpointMenu->addAction(m_newTableAction);
-    hardpointMenu->addAction(m_generateAction);
-    hardpointMenu->addSeparator();
-    hardpointMenu->addAction(m_addPointAction);
-    hardpointMenu->addAction(m_renamePointAction);
-    hardpointMenu->addAction(m_deletePointAction);
-    hardpointMenu->addAction(m_mirrorAction);
-    hardpointMenu->addSeparator();
-    hardpointMenu->addAction(m_overwriteWorkbookAction);
-    hardpointMenu->addAction(m_exportWorkbookAction);
-    hardpointMenu->addSeparator();
-    hardpointMenu->addAction(m_closeHardpointsAction);
-
-    // "Linkage", not "Parts": this is what joins the hardpoints -- the parts the
-    // template draws, the template itself, and where the steering rack is. The
-    // car's own parts, chassis and wheels, are under Geometry.
-    QMenu* linkageMenu = menuBar()->addMenu(tr("&Linkage"));
-    linkageMenu->addAction(m_linksAction);
-    linkageMenu->addSeparator();
-    linkageMenu->addAction(m_newPartAction);
-    linkageMenu->addAction(m_editPartsAction);
-    linkageMenu->addSeparator();
-    linkageMenu->addAction(m_steeringAction);
-    linkageMenu->addAction(m_staticAnglesAction);
-    linkageMenu->addSeparator();
-    linkageMenu->addAction(m_importLinkageAction);
-    linkageMenu->addAction(m_resetLinkageAction);
-    auto* revealTemplateAction = linkageMenu->addAction(tr("Show &Template File"));
-    revealTemplateAction->setStatusTip(
-        tr("Open the project's template in whatever edits JSON on this machine."));
-    connect(revealTemplateAction, &QAction::triggered, this, [this] {
-        const QString path = m_project.absolutePath(m_project.linkageTemplate().relativePath);
-        if (!path.isEmpty() && QFileInfo::exists(path))
-            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
-    });
-
-    QMenu* analysisMenu = menuBar()->addMenu(tr("&Analysis"));
-    analysisMenu->addAction(m_analysisDock->toggleViewAction());
-    m_analysisDock->toggleViewAction()->setText(tr("Show &Analysis"));
-    m_analysisDock->toggleViewAction()->setShortcut(QKeySequence(QStringLiteral("Ctrl+K")));
-    auto* parametersAction = analysisMenu->addAction(tr("Sweep &Parameters..."));
-    parametersAction->setStatusTip(
-        tr("How far each sweep travels and how finely it is solved."));
-    parametersAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+P")));
-    connect(parametersAction, &QAction::triggered, m_analysisPanel,
-            &AnalysisPanel::showParameters);
-    analysisMenu->addSeparator();
-    auto* exportSweepAction = analysisMenu->addAction(tr("Export Sweep as &CSV..."));
-    exportSweepAction->setStatusTip(
+    m_exportSweepAction = new QAction(tr("Export Sweep as &CSV..."), this);
+    m_exportSweepAction->setIcon(Icons::get(Icon::FileTypeCsv));
+    m_exportSweepAction->setIconText(tr("Export CSV"));
+    m_exportSweepAction->setStatusTip(
         tr("Write the sweep on screen out as a spreadsheet, one row per position."));
-    connect(exportSweepAction, &QAction::triggered, this, &MainWindow::exportSweepCsv);
+    connect(m_exportSweepAction, &QAction::triggered, this, &MainWindow::exportSweepCsv);
 
-    QMenu* viewMenu = menuBar()->addMenu(tr("&View"));
-    viewMenu->addAction(m_fitAction);
-    viewMenu->addSeparator();
-    viewMenu->addAction(m_labelsAction);
-    viewMenu->addAction(m_linksAction);
-    viewMenu->addAction(m_wheelsAction);
-    viewMenu->addAction(m_hardpointDock->toggleViewAction());
-    viewMenu->addAction(m_analysisDock->toggleViewAction());
-    viewMenu->addSeparator();
-
+    // The view presets live in the View menu and behind the ribbon's Views
+    // button, whose own half runs the isometric one.
+    m_viewsMenu = new QMenu(tr("&Views"), this);
     for (const PresetSpec& spec : kPresets) {
         auto* action = new QAction(tr(spec.label), this);
         action->setShortcut(QKeySequence(QLatin1String(spec.shortcut)));
         const ViewPreset preset = spec.preset;
         connect(action, &QAction::triggered, this, [this, preset] { m_viewport->applyPreset(preset); });
-        viewMenu->addAction(action);
-        addAction(action); // keep the shortcut live even when the menu is closed
+        if (preset == ViewPreset::Isometric) {
+            action->setIcon(Icons::get(Icon::Cube));
+            action->setStatusTip(tr("Look at the car from the front, above and to one side. The "
+                                    "arrow under it lists every other view."));
+        }
+        m_viewsMenu->addAction(action);
+        m_presetActions << action;
     }
 
-    QMenu* helpMenu = menuBar()->addMenu(tr("&Help"));
+    // --- panels ----------------------------------------------------------
+    // Not the docks' own toggleViewAction(): that one closes a panel that is
+    // tabbed behind another when the user was reaching for it. And the
+    // shortcuts are on these alone -- a key on two actions fires neither.
+
+    m_hardpointsPanelAction = new PanelAction(tr("Show Hardpoint &Table"), m_hardpointDock, this);
+    m_hardpointsPanelAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+H")));
+    m_hardpointsPanelAction->setIcon(Icons::get(Icon::Table));
+    m_hardpointsPanelAction->setIconVisibleInMenu(false);
+    m_hardpointsPanelAction->setIconText(tr("Table"));
+    m_hardpointsPanelAction->setStatusTip(
+        tr("Open the table of hardpoints, bring it to the front, or close it."));
+
+    m_analysisPanelAction = new PanelAction(tr("Show &Analysis"), m_analysisDock, this);
+    m_analysisPanelAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+K")));
+    m_analysisPanelAction->setIcon(Icons::get(Icon::ChartLine));
+    m_analysisPanelAction->setIconVisibleInMenu(false);
+    m_analysisPanelAction->setIconText(tr("Analysis"));
+    m_analysisPanelAction->setStatusTip(
+        tr("Open the analysis panel -- the bump, roll and steer sweeps and their curves -- bring "
+           "it to the front, or close it."));
+
+    // A window of its own rather than a dock, kept above this one, so when it
+    // is open it is in front.
+    PanelAction::Target parameters;
+    parameters.isOpen = [this] { return m_analysisPanel->parametersVisible(); };
+    parameters.isOnScreen = [this] { return m_analysisPanel->parametersVisible(); };
+    parameters.open = [this] { m_analysisPanel->showParameters(); };
+    parameters.close = [this] { m_analysisPanel->hideParameters(); };
+    m_parametersPanelAction = new PanelAction(tr("Show Sweep &Parameters"), parameters, this);
+    m_parametersPanelAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+P")));
+    m_parametersPanelAction->setIcon(Icons::get(Icon::AdjustmentsHorizontal));
+    m_parametersPanelAction->setIconVisibleInMenu(false);
+    m_parametersPanelAction->setIconText(tr("Sweep\nParameters"));
+    m_parametersPanelAction->setStatusTip(
+        tr("How far each sweep travels and how finely it is solved, in a window that can stay "
+           "open beside the viewport."));
+    connect(m_analysisPanel, &AnalysisPanel::parametersVisibilityChanged, m_parametersPanelAction,
+            &PanelAction::sync);
+    // Whichever way it opened or closed -- the button, its own Close, Escape
+    // -- it is the user's arrangement, and the project keeps it.
+    connect(m_analysisPanel, &AnalysisPanel::parametersVisibilityChanged, this,
+            [this] { markDirty(); });
+
+    // Its text and icon say what it will do, and follow the ribbon: see
+    // updateCollapseAction().
+    m_collapseRibbonAction = new QAction(tr("Collapse the &Ribbon"), this);
+    m_collapseRibbonAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+F1")));
+    connect(m_collapseRibbonAction, &QAction::triggered, this,
+            [this] { m_ribbon->setCollapsed(!m_ribbon->collapsed()); });
+
+    m_resetLayoutAction = new QAction(tr("Reset Panel &Layout"), this);
+    m_resetLayoutAction->setIcon(Icons::get(Icon::LayoutDashboard));
+    m_resetLayoutAction->setIconText(tr("Reset Layout"));
+    m_resetLayoutAction->setStatusTip(
+        tr("Dock every panel where a new project has it, keeping open the ones that are open. "
+           "Brings back a panel left on a monitor that is not connected."));
+    connect(m_resetLayoutAction, &QAction::triggered, this, &MainWindow::resetPanelLayout);
+
+    // --- help ------------------------------------------------------------
 
     m_checkUpdatesAction = new QAction(tr("Check for &Updates..."), this);
+    m_checkUpdatesAction->setIcon(Icons::get(Icon::CloudDownload));
+    m_checkUpdatesAction->setIconText(tr("Check for\nUpdates"));
     // Disabled rather than hidden for a portable or developer build, so the
-    // absence is visible and the tooltip can say why.
+    // absence is visible and the tip can say why.
     m_checkUpdatesAction->setEnabled(UpdateChecker::updatesSupported());
-    if (!UpdateChecker::updatesSupported()) {
-        m_checkUpdatesAction->setToolTip(
-            tr("Only a copy put here by the installer can update itself."));
-    }
+    m_checkUpdatesAction->setStatusTip(
+        UpdateChecker::updatesSupported()
+            ? tr("Ask GitHub whether there is a newer build, and offer to install it.")
+            : tr("Only a copy put here by the installer can update itself."));
     connect(m_checkUpdatesAction, &QAction::triggered, this, [this] {
         if (m_updates) m_updates->check(/*userAsked=*/true);
     });
-    helpMenu->addAction(m_checkUpdatesAction);
 
     m_autoUpdateAction = new QAction(tr("Check for Updates on Start&up"), this);
     m_autoUpdateAction->setCheckable(true);
+    m_autoUpdateAction->setIcon(Icons::get(Icon::Refresh));
+    m_autoUpdateAction->setIconText(tr("On Startup"));
+    m_autoUpdateAction->setStatusTip(
+        tr("Ask once, shortly after the window opens, whether there is a newer build."));
     m_autoUpdateAction->setChecked(UpdateChecker::checkOnStartup());
     m_autoUpdateAction->setEnabled(UpdateChecker::updatesSupported());
     connect(m_autoUpdateAction, &QAction::toggled, this,
             [](bool on) { UpdateChecker::setCheckOnStartup(on); });
-    helpMenu->addAction(m_autoUpdateAction);
 
-    helpMenu->addSeparator();
-    helpMenu->addAction(tr("&About SuspensionKinematics"), this, [this] {
+    m_aboutAction = new QAction(tr("&About SuspensionKinematics"), this);
+    m_aboutAction->setIcon(Icons::get(Icon::InfoCircle));
+    m_aboutAction->setIconText(tr("About"));
+    connect(m_aboutAction, &QAction::triggered, this, [this] {
         const int build = UpdateChecker::currentBuild();
         const QString version =
             build > 0 ? tr("Version %1 (build %2)")
@@ -646,9 +736,232 @@ void MainWindow::buildMenus()
             this, tr("About SuspensionKinematics"),
             tr("<h3>SuspensionKinematics</h3><p>%1</p>"
                "<p>Suspension kinematics for Bremergy: CAD geometry and a hardpoint "
-               "workbook in one 3D viewport.</p>")
+               "workbook in one 3D viewport.</p>"
+               "<p>Copyright &copy; 2026 Bremergy. Free software under the "
+               "<b>GNU General Public License, version 3 or later</b>: anyone may use it, "
+               "change it and pass it on, under the same licence and with its source. "
+               "It comes with <b>absolutely no warranty</b>.</p>"
+               "<p>It is built on Qt 6, used under the GNU Lesser General Public License "
+               "v3, and on Open CASCADE Technology, used under the GNU LGPL v2.1 with the "
+               "Open CASCADE exception; both remain the copyright of their own authors. "
+               "<b>Help &gt; Licenses</b> has every licence text in full and says where "
+               "the source of each can be had.</p>")
                 .arg(version));
     });
+
+    // Not a courtesy: Qt and Open CASCADE are LGPL and the icons are MIT, and
+    // all three ask that their licence travel with every copy of the program.
+    // This is how it travels -- the texts are compiled into the binary, so a
+    // portable unzip carries them whether or not anyone kept the folder.
+    m_licensesAction = new QAction(tr("&Licenses..."), this);
+    m_licensesAction->setIcon(Icons::get(Icon::License));
+    m_licensesAction->setStatusTip(
+        tr("The licence of this program and of everything it is built on."));
+    connect(m_licensesAction, &QAction::triggered, this, [this] {
+        LicensesDialog dialog(this);
+        dialog.exec();
+    });
+
+    // Qt's own box, which states the Qt version and its licence in Qt's words.
+    m_aboutQtAction = new QAction(tr("About &Qt"), this);
+    m_aboutQtAction->setIcon(Icons::get(Icon::InfoSquareRounded));
+    m_aboutQtAction->setStatusTip(tr("The version of Qt this copy was built against."));
+    connect(m_aboutQtAction, &QAction::triggered, this,
+            [this] { QMessageBox::aboutQt(this); });
+}
+
+void MainWindow::finishActions()
+{
+    QList<QAction*> commands = {
+        m_newProjectAction,       m_openProjectAction,    m_saveProjectAction,
+        m_projectListAction,      m_revealProjectAction,  m_quitAction,
+        m_importAction,           m_closeAction,          m_addWheelsAction,
+        m_removeWheelsAction,     m_solidAction,          m_trianglesAction,
+        m_hardpointsPanelAction,  m_importHardpointsAction, m_newTableAction,
+        m_generateAction,         m_addPointAction,       m_renamePointAction,
+        m_deletePointAction,      m_mirrorAction,         m_overwriteWorkbookAction,
+        m_exportWorkbookAction,   m_closeHardpointsAction, m_linksAction,
+        m_newPartAction,          m_editPartsAction,      m_steeringAction,
+        m_staticAnglesAction,     m_importLinkageAction,  m_resetLinkageAction,
+        m_revealTemplateAction,   m_analysisPanelAction,  m_parametersPanelAction,
+        m_exportSweepAction,      m_fitAction,            m_labelsAction,
+        m_wheelsAction,           m_collapseRibbonAction, m_resetLayoutAction,
+        m_checkUpdatesAction,     m_autoUpdateAction,     m_licensesAction,
+        m_aboutQtAction,          m_aboutAction,
+    };
+    commands << m_presetActions;
+
+    // A ribbon button shows its action's tooltip, and Qt adds neither the
+    // shortcut nor the status tip to one by itself.
+    for (QAction* action : std::as_const(commands)) action->setToolTip(commandToolTip(action));
+
+    // On the window itself as well as wherever it is shown: a shortcut is live
+    // only while some widget the action is on is visible, and with the menu
+    // bar hidden and its button on a tab that is not showing, Ctrl+I would
+    // otherwise do nothing at all.
+    addActions(commands);
+}
+
+void MainWindow::buildFileMenu()
+{
+    // There is no menu bar, and this is the only menu: the ribbon's File
+    // button opens it, because what is in it -- the project itself, and the
+    // way out -- is not a tab's worth of commands. Everything else, Help
+    // included, is a tab. The mnemonic still works: Alt+F opens this.
+    m_fileMenu = new QMenu(tr("&File"), this);
+    m_fileMenu->addAction(m_newProjectAction);
+    m_fileMenu->addAction(m_openProjectAction);
+    m_recentProjectsMenu = m_fileMenu->addMenu(tr("Open &Recent"));
+    m_recentProjectsMenu->setIcon(Icons::get(Icon::History));
+    m_fileMenu->addSeparator();
+    m_fileMenu->addAction(m_saveProjectAction);
+    m_fileMenu->addAction(m_projectListAction);
+    m_fileMenu->addAction(m_revealProjectAction);
+    m_fileMenu->addSeparator();
+    m_fileMenu->addAction(m_quitAction);
+    connect(m_fileMenu, &QMenu::aboutToShow, this, &MainWindow::refreshRecentProjectsMenu);
+    refreshRecentProjectsMenu();
+}
+
+void MainWindow::buildRibbon()
+{
+    m_ribbon = new Ribbon;
+    m_ribbon->setApplicationMenu(m_fileMenu, tr("&File"));
+
+    // The tabs are the menus, in the menus' order. Keys, not titles, are what
+    // a project stores, so a tab can be renamed without moving anyone.
+    RibbonPage* geometry = m_ribbon->addPage(QStringLiteral("geometry"), tr("&Geometry"));
+    RibbonGroup* chassis = geometry->addGroup(tr("Chassis"));
+    chassis->addLarge(m_importAction);
+    chassis->addSmall(m_closeAction);
+    RibbonGroup* wheels = geometry->addGroup(tr("Wheels"));
+    wheels->addLarge(m_addWheelsAction);
+    wheels->addSmall(m_removeWheelsAction);
+
+    RibbonPage* hardpoints = m_ribbon->addPage(QStringLiteral("hardpoints"), tr("&Hardpoints"));
+    RibbonGroup* workbook = hardpoints->addGroup(tr("Workbook"));
+    workbook->addLarge(m_importHardpointsAction);
+    workbook->addSmall(m_overwriteWorkbookAction);
+    workbook->addSmall(m_exportWorkbookAction);
+    workbook->addSmall(m_closeHardpointsAction);
+    RibbonGroup* create = hardpoints->addGroup(tr("Create"));
+    create->addLarge(m_generateAction);
+    create->addSmall(m_newTableAction);
+    RibbonGroup* points = hardpoints->addGroup(tr("Points"));
+    points->addLarge(m_mirrorAction);
+    points->addSmall(m_addPointAction);
+    points->addSmall(m_renamePointAction);
+    points->addSmall(m_deletePointAction);
+    RibbonGroup* hardpointsShow = hardpoints->addGroup(tr("Show"));
+    hardpointsShow->addSmall(m_hardpointsPanelAction);
+    hardpointsShow->addSmall(m_labelsAction);
+
+    RibbonPage* linkage = m_ribbon->addPage(QStringLiteral("linkage"), tr("&Linkage"));
+    RibbonGroup* linkageShow = linkage->addGroup(tr("Show"));
+    linkageShow->addLarge(m_linksAction);
+    RibbonGroup* parts = linkage->addGroup(tr("Parts"));
+    parts->addSmall(m_newPartAction);
+    parts->addSmall(m_editPartsAction);
+    RibbonGroup* steering = linkage->addGroup(tr("Steering"));
+    steering->addLarge(m_steeringAction);
+    RibbonGroup* alignment = linkage->addGroup(tr("Alignment"));
+    alignment->addLarge(m_staticAnglesAction);
+    RibbonGroup* templ = linkage->addGroup(tr("Template"));
+    templ->addSmall(m_importLinkageAction);
+    templ->addSmall(m_resetLinkageAction);
+    templ->addSmall(m_revealTemplateAction);
+
+    RibbonPage* analysis = m_ribbon->addPage(QStringLiteral("analysis"), tr("&Analysis"));
+    RibbonGroup* panel = analysis->addGroup(tr("Panel"));
+    panel->addLarge(m_analysisPanelAction);
+    RibbonGroup* sweep = analysis->addGroup(tr("Sweep"));
+    sweep->addLarge(m_parametersPanelAction);
+    sweep->addSmall(m_exportSweepAction);
+
+    RibbonPage* view = m_ribbon->addPage(QStringLiteral("view"), tr("&View"));
+    RibbonGroup* navigate = view->addGroup(tr("Navigate"));
+    navigate->addLarge(m_fitAction);
+    navigate->addSplit(m_presetActions.last(), m_viewsMenu);
+    RibbonGroup* display = view->addGroup(tr("Display"));
+    display->addSmall(m_solidAction);
+    display->addSmall(m_trianglesAction);
+    RibbonGroup* viewShow = view->addGroup(tr("Show"));
+    viewShow->addSmall(m_labelsAction);
+    viewShow->addSmall(m_linksAction);
+    viewShow->addSmall(m_wheelsAction);
+    // The panel toggles are on the tab row as well, but only as icons; here
+    // they have their names on them, next to the command that docks them all
+    // again.
+    RibbonGroup* panels = view->addGroup(tr("Panels"));
+    panels->addSmall(m_hardpointsPanelAction);
+    panels->addSmall(m_analysisPanelAction);
+    panels->addSmall(m_parametersPanelAction);
+    panels->addSmall(m_resetLayoutAction);
+
+    // Alt+P, not Alt+H: the Hardpoints tab has that, and two tabs sharing a
+    // mnemonic means neither of them answers to it.
+    RibbonPage* help = m_ribbon->addPage(QStringLiteral("help"), tr("Hel&p"));
+    RibbonGroup* updates = help->addGroup(tr("Updates"));
+    updates->addLarge(m_checkUpdatesAction);
+    updates->addSmall(m_autoUpdateAction);
+    RibbonGroup* about = help->addGroup(tr("Program"));
+    about->addLarge(m_aboutAction);
+    about->addSmall(m_licensesAction);
+    about->addSmall(m_aboutQtAction);
+
+    // On every tab: the panels, which are what people reach for most, and the
+    // chevron that folds the ribbon away.
+    m_ribbon->addTrailingAction(m_hardpointsPanelAction);
+    m_ribbon->addTrailingAction(m_analysisPanelAction);
+    m_ribbon->addTrailingAction(m_parametersPanelAction);
+    m_ribbon->addTrailingSeparator();
+    m_ribbon->addTrailingAction(m_collapseRibbonAction);
+    updateCollapseAction();
+
+    // The ribbon is the whole of the window's chrome: there is no menu bar
+    // above it, because the tabs said the same words the menus did.
+    //
+    // From here on QMainWindow::menuBar() must never be called. On a window
+    // whose menu widget is not a QMenuBar it makes one and installs it through
+    // setMenuWidget(), which deleteLater()s what was there -- the ribbon.
+    setMenuWidget(m_ribbon);
+
+    // After the pages are in, so building them -- the first tab becoming
+    // current -- is not taken for the user choosing it.
+    connect(m_ribbon, &Ribbon::currentPageChanged, this, [this] { markDirty(); });
+    connect(m_ribbon, &Ribbon::collapsedChanged, this, [this] {
+        updateCollapseAction();
+        markDirty();
+    });
+}
+
+void MainWindow::updateCollapseAction()
+{
+    const bool collapsed = m_ribbon && m_ribbon->collapsed();
+    m_collapseRibbonAction->setText(collapsed ? tr("Expand the &Ribbon")
+                                              : tr("Collapse the &Ribbon"));
+    m_collapseRibbonAction->setIcon(Icons::get(collapsed ? Icon::ChevronDown : Icon::ChevronUp));
+    m_collapseRibbonAction->setStatusTip(
+        collapsed ? tr("Show the ribbon's buttons under its tabs again.")
+                  : tr("Keep only the ribbon's tabs. Clicking one brings its buttons back."));
+    m_collapseRibbonAction->setToolTip(commandToolTip(m_collapseRibbonAction));
+}
+
+void MainWindow::resetPanelLayout()
+{
+    const bool hardpointsOpen = !m_hardpointDock->isHidden();
+    const bool analysisOpen = !m_analysisDock->isHidden();
+
+    restoreState(m_defaultDockState);
+
+    // The default has every dock closed, because a new project has nothing to
+    // put in them. What was open stays open, docked again; and the table is
+    // open whenever there are points -- the rule a project follows the first
+    // time it is opened.
+    if (hardpointsOpen || m_hardpointModel->rowCount() > 0) m_hardpointDock->show();
+    if (analysisOpen) m_analysisDock->show();
+    markDirty();
+    statusBar()->showMessage(tr("Panels docked where a new project has them."), 4000);
 }
 
 void MainWindow::setUpdateCheckerUp()
@@ -770,6 +1083,11 @@ void MainWindow::openProjectContents()
 
     if (!m_project.window().geometry.isEmpty()) restoreGeometry(m_project.window().geometry);
     if (!m_project.window().dockState.isEmpty()) restoreState(m_project.window().dockState);
+    // The ribbon is window layout too. A page the project names that this
+    // build does not have -- a tab renamed since -- is the first page, and an
+    // older project that names none opens there, expanded, with its menu bar.
+    m_ribbon->setCurrentPage(m_project.window().ribbonPage);
+    m_ribbon->setCollapsed(m_project.window().ribbonCollapsed);
 
     const bool hasGeometry = loadGeometryFromProject();
     const bool hasHardpoints = loadHardpointsFromProject();
@@ -1358,6 +1676,8 @@ void MainWindow::collectViewState()
     WindowState window;
     window.geometry = saveGeometry();
     window.dockState = saveState();
+    window.ribbonPage = m_ribbon->currentPage();
+    window.ribbonCollapsed = m_ribbon->collapsed();
     m_project.setWindow(window);
 }
 
@@ -2634,6 +2954,19 @@ void MainWindow::setDisplayMode(DisplayMode mode)
 QImage MainWindow::captureViewport()
 {
     return m_viewport->grabFramebuffer();
+}
+
+QImage MainWindow::captureWindow()
+{
+    // The viewport is rendered on its own and laid into its place: grab() on
+    // the window can come back with a viewport that has not drawn a frame yet.
+    const QImage frame = m_viewport->grabFramebuffer();
+    QImage image = grab().toImage();
+    if (!frame.isNull() && m_viewport->isVisible()) {
+        QPainter painter(&image);
+        painter.drawImage(QRect(m_viewport->mapTo(this, QPoint(0, 0)), m_viewport->size()), frame);
+    }
+    return image;
 }
 
 void MainWindow::updateWindowTitle()
