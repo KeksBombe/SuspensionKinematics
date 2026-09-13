@@ -557,6 +557,10 @@ set in `main()` because there is a moment between two projects with no window.
   straight in front of the user.
 - The camera is a turntable with a fixed world up, not an arcball — "up" is what
   camber and caster are read against.
+- **A path handed to Open CASCADE is UTF-8**, not the local 8-bit encoding:
+  `path.toUtf8()`, never `QFile::encodeName()`, whose Windows encoding is still
+  the ANSI codepage. One umlaut in the user's own home directory was enough to
+  make every STEP import there report an unreadable header.
 - Warnings are on but `-Werror` is not, on purpose.
 - `CMakeLists.txt` uses the range form `3.24...3.28`: this machine has both CMake
   3.28.1 (from STM32CubeCLT, first on `PATH`) and 4.4.1.

@@ -2,6 +2,9 @@
 #include "io/MeshImport.h"
 #include "io/StepReader.h"
 
+#include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
 #include <QTest>
 
 using namespace suspkin;
@@ -20,6 +23,7 @@ private slots:
     void readsAPlateWithAHole();
     void tessellationScalesWithTheModel();
     void carriesExactSurfaceNormals();
+    void readsAPathWithNonAsciiCharacters();
     void reportsAnUnreadableFile();
     void dispatchesByExtension();
 };
@@ -92,6 +96,31 @@ void TestStepReader::carriesExactSurfaceNormals()
     QVERIFY2(varyingTriangles > 10,
              qPrintable(QStringLiteral("only %1 triangles have varying normals")
                             .arg(varyingTriangles)));
+}
+
+void TestStepReader::readsAPathWithNonAsciiCharacters()
+{
+    // A user's own name in the path is enough to break this: Open CASCADE reads
+    // a narrow path as UTF-8, and the local 8-bit encoding Windows still uses
+    // handed it bytes it could not decode, so the file was never opened and the
+    // failure read as a malformed STEP.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    // Spelled with escapes so the test does not depend on how the compiler
+    // decodes this source file.
+    const QString sharpS(QChar(0x00DF));   // ss
+    const QString uUmlaut(QChar(0x00FC));  // u"
+    const QString folder =
+        dir.filePath(QStringLiteral("Loh") + sharpS + QStringLiteral(" M") + uUmlaut
+                     + QStringLiteral("ller"));
+    QVERIFY(QDir().mkpath(folder));
+    const QString copy = folder + QStringLiteral("/pl") + QString(QChar(0x00E4))
+                       + QStringLiteral("ttchen.step");
+    QVERIFY(QFile::copy(fixture("plate_with_hole.step"), copy));
+
+    const MeshLoadResult result = readStep(copy);
+    QVERIFY2(result.ok(), qPrintable(result.error));
+    QVERIFY(result.mesh->triangleCount() > 50);
 }
 
 void TestStepReader::reportsAnUnreadableFile()

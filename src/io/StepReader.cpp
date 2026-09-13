@@ -55,11 +55,30 @@ MeshLoadResult readStep(const QString& path)
         result.error = QCoreApplication::translate("StepReader", "File does not exist.");
         return result;
     }
+    {
+        // Opened through Qt, which handles the path however the platform spells
+        // it, so a file we cannot even read says so rather than being reported
+        // as a malformed STEP by the reader below.
+        QFile probe(path);
+        if (!probe.open(QIODevice::ReadOnly)) {
+            result.error =
+                QCoreApplication::translate("StepReader", "The file could not be opened: %1")
+                    .arg(probe.errorString());
+            return result;
+        }
+    }
 
     try {
         STEPControl_Reader reader;
-        const QByteArray localPath = QFile::encodeName(path);
-        if (reader.ReadFile(localPath.constData()) != IFSelect_RetDone) {
+        // Open CASCADE takes a narrow path as *UTF-8* and widens it itself
+        // (OSD_OpenStream) -- so the bytes have to be UTF-8, not the local
+        // 8-bit encoding QFile::encodeName() would give. On Windows that
+        // encoding is still the ANSI codepage, so one non-ASCII character
+        // anywhere in the path -- an umlaut in the user's own home directory is
+        // enough -- reached OCCT as an invalid UTF-8 sequence, the file was
+        // never opened, and the failure read as a malformed STEP.
+        const QByteArray utf8Path = path.toUtf8();
+        if (reader.ReadFile(utf8Path.constData()) != IFSelect_RetDone) {
             result.error = QCoreApplication::translate(
                 "StepReader", "Not a readable STEP file (the header could not be parsed).");
             return result;
