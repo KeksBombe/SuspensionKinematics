@@ -6,6 +6,7 @@ namespace suspkin {
 
 class AppContext;
 class CommandRegistry;
+struct ViewState;
 
 /// One area of the application: its commands, and the work behind them.
 ///
@@ -27,6 +28,15 @@ public:
     /// The window is up and its project is loaded. Where a feature does the
     /// work it would otherwise have to do in a constructor that is too early.
     virtual void windowReady() {}
+
+    /// Write this feature's share of the view into @p view, which the project
+    /// saves. A feature with any state of its own keeps it this way: persisting
+    /// it is part of the feature, not somebody else's follow-up.
+    virtual void collectViewState(ViewState& /*view*/) const {}
+    /// Put this feature's share of @p view back, while the project is opening.
+    /// Every feature is asked, in no particular order, so no feature's share
+    /// may depend on another's having been restored first.
+    virtual void applyViewState(const ViewState& /*view*/) {}
 };
 
 } // namespace suspkin

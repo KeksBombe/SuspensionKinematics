@@ -31,6 +31,27 @@ public:
         registerShowCommands(commands);
     }
 
+    void collectViewState(ViewState& view) const override
+    {
+        const ViewportWidget* viewport = m_context.viewport();
+        view.labelsVisible = viewport->hardpointLabelsVisible();
+        view.selectedHardpoint = viewport->selectedHardpoint();
+        view.selection = viewport->selectedHardpoints();
+    }
+
+    void applyViewState(const ViewState& view) override
+    {
+        m_showLabels->setChecked(view.labelsVisible);
+        m_context.viewport()->setHardpointLabelsVisible(view.labelsVisible);
+
+        // The whole selection, in the order it was picked -- a chain half-picked
+        // for a new part comes back half-picked.
+        QList<int> selection;
+        for (const int row : view.selection)
+            if (row >= 0 && row < m_context.hardpoints()->rowCount()) selection.append(row);
+        if (!selection.isEmpty()) m_context.selectPoints(selection, view.selectedHardpoint);
+    }
+
 private:
     /// The project's own copy of the workbook: where the points come from, and
     /// where they go back to when the user asks.
@@ -184,7 +205,7 @@ private:
 
     void registerShowCommands(CommandRegistry& commands)
     {
-        commands.add({
+        m_showLabels = commands.add({
             .id = QStringLiteral("hardpoints.showLabels"),
             .text = tr("Show Hardpoint &Labels"),
             .icon = Icon::Tag,
@@ -203,6 +224,7 @@ private:
     bool hasPoints() const { return m_context.hardpoints()->rowCount() > 0; }
 
     AppContext& m_context;
+    QAction* m_showLabels = nullptr;
 };
 
 } // namespace

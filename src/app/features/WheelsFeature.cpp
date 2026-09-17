@@ -56,7 +56,7 @@ public:
 
         // Drawing them is a view matter, so it sits on the View tab -- which a
         // feature may do without the View tab knowing anything about wheels.
-        commands.add({
+        m_show = commands.add({
             .id = QStringLiteral("wheels.show"),
             .text = tr("Show &Wheels"),
             .icon = Icon::Wheel,
@@ -71,8 +71,20 @@ public:
         });
     }
 
+    void collectViewState(ViewState& view) const override
+    {
+        view.wheelsVisible = m_context.viewport()->wheelsVisible();
+    }
+
+    void applyViewState(const ViewState& view) override
+    {
+        m_show->setChecked(view.wheelsVisible);
+        m_context.viewport()->setWheelsVisible(view.wheelsVisible);
+    }
+
 private:
     AppContext& m_context;
+    QAction* m_show = nullptr;
 };
 
 } // namespace

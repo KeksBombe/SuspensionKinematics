@@ -77,6 +77,7 @@ public:
     ViewportWidget* viewport() override { return m_viewport; }
     HardpointModel* hardpoints() override { return &m_session->hardpoints().model(); }
     void showStatus(const QString& text, int milliseconds) override;
+    void selectPoints(const QList<int>& rows, int current) override;
     QDockWidget* hardpointDock() override { return m_hardpointDock; }
     QDockWidget* analysisDock() override { return m_analysisDock; }
     AnalysisPanel* analysisPanel() override { return m_analysisPanel; }
@@ -186,8 +187,6 @@ private:
     void applyViewState();
 
     void setHardpointTable(HardpointTable table, bool refit);
-    /// Select @p rows in the viewport and the table together.
-    void selectRows(const QList<int>& rows, int current);
     /// Give a project with no workbook one of its own, filled with @p table,
     /// and read it back as the baseline -- so from here on it is an ordinary
     /// project with an ordinary workbook, not a special case.

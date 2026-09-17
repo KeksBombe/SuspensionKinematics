@@ -7,6 +7,7 @@
 #include "io/LinkageTemplate.h"
 #include "model/Linkage.h"
 #include "model/Simulation.h"
+#include "project/Project.h"
 #include "render/ViewportWidget.h"
 
 #include <QCoreApplication>
@@ -32,13 +33,24 @@ public:
         registerTemplateCommands(commands);
     }
 
+    void collectViewState(ViewState& view) const override
+    {
+        view.linksVisible = m_context.viewport()->linkageVisible();
+    }
+
+    void applyViewState(const ViewState& view) override
+    {
+        m_showParts->setChecked(view.linksVisible);
+        m_context.viewport()->setLinkageVisible(view.linksVisible);
+    }
+
 private:
     void registerPartCommands(CommandRegistry& commands)
     {
         auto& actions = *m_context.windowActions();
         const QString page = QStringLiteral("linkage");
 
-        commands.add({
+        m_showParts = commands.add({
             .id = QStringLiteral("linkage.showParts"),
             .text = tr("Show &Parts"),
             .icon = Icon::Vector,
@@ -160,6 +172,7 @@ private:
     }
 
     AppContext& m_context;
+    QAction* m_showParts = nullptr;
 };
 
 } // namespace

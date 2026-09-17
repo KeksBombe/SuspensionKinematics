@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QString>
 
 class QDockWidget;
@@ -50,6 +51,9 @@ public:
     virtual ViewportWidget* viewport() = 0;
     virtual HardpointModel* hardpoints() = 0;
     virtual void showStatus(const QString& text, int milliseconds) = 0;
+    /// Select @p rows in the viewport and the table together, @p current the
+    /// one editing acts on.
+    virtual void selectPoints(const QList<int>& rows, int current) = 0;
 
     // --- the window's own furniture -----------------------------------------
     // Docks and the ribbon are the window rather than any one feature, so they

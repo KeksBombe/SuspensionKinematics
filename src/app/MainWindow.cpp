@@ -147,7 +147,7 @@ void MainWindow::buildHardpointDock()
 
                 const QList<int> selection = m_viewport->selectedHardpoints();
                 syncTableToViewport(false);
-                selectRows(selection.isEmpty() ? QList<int>{ row } : selection, row);
+                selectPoints(selection.isEmpty() ? QList<int>{ row } : selection, row);
                 markDirty();
                 m_session->recordEdit(tr("Rename %1 to %2").arg(from, to));
                 statusBar()->showMessage(tr("Renamed %1 to %2").arg(from, to), 5000);
@@ -231,7 +231,7 @@ void MainWindow::selectPointsNamed(const QStringList& names)
         const int row = table.indexOf(name);
         if (row >= 0) rows << row;
     }
-    selectRows(rows, rows.isEmpty() ? -1 : rows.front());
+    selectPoints(rows, rows.isEmpty() ? -1 : rows.front());
 }
 
 void MainWindow::buildAnalysisDock()
@@ -523,49 +523,10 @@ void MainWindow::warn(const SessionMessage& problem)
 
 void MainWindow::applyViewState()
 {
-    const ViewState& view = project().view();
-    if (view.cameraValid) m_viewport->setCameraState(view.camera);
-
-    setDisplayMode(view.displayMode);
-    m_commands.action(QStringLiteral("hardpoints.showLabels"))->setChecked(view.labelsVisible);
-    m_viewport->setHardpointLabelsVisible(view.labelsVisible);
-    m_commands.action(QStringLiteral("linkage.showParts"))->setChecked(view.linksVisible);
-    m_viewport->setLinkageVisible(view.linksVisible);
-    m_commands.action(QStringLiteral("wheels.show"))->setChecked(view.wheelsVisible);
-    m_viewport->setWheelsVisible(view.wheelsVisible);
-
-    // The whole selection, in the order it was picked -- a chain half-picked
-    // for a new part comes back half-picked.
-    QList<int> selection;
-    for (const int row : view.selection)
-        if (row >= 0 && row < hardpoints()->rowCount()) selection.append(row);
-    if (!selection.isEmpty()) selectRows(selection, view.selectedHardpoint);
-
-    // The travel and the kind have to be set before the position, because
-    // between them they decide the range the position is allowed to take.
-    const SimulationState& simulation = view.simulation;
-    m_analysisPanel->setSettings(simulation.sweep);
-    m_analysisPanel->setKind(simulation.kind);
-    if (!simulation.axle.isEmpty()) m_analysisPanel->setAxle(simulation.axle);
-    QList<SweepMeasure> measures;
-    for (const QString& key : simulation.measures) {
-        // A curve this build does not know -- one a later release added -- is
-        // left out rather than read as the fallback, which would put a plot on
-        // screen that nobody asked for.
-        const SweepMeasure measure = sweepMeasureFromKey(key);
-        if (sweepMeasureKey(measure) == key) measures << measure;
-    }
-    if (!measures.isEmpty()) m_analysisPanel->setMeasures(measures);
-    m_analysisPanel->setSides(simulation.sides);
-    m_analysisPanel->setPosition(simulation.position);
-    m_analysisPanel->setMovesAllAxles(simulation.allAxles);
-    m_analysisPanel->setAnimationSeconds(simulation.animationSeconds);
-    m_analysisPanel->setParametersVisible(simulation.parametersOpen);
-    m_analysisPanel->setSimulating(simulation.active);
-    m_session->resolveSimulation();
-    // Last, because starting it turns the simulation on and moves the model,
-    // and both of those have to be settled first.
-    m_analysisPanel->setAnimating(simulation.animating && simulation.active);
+    // A copy: restoring can resolve the project again, and nothing it sets off
+    // may leave this dangling.
+    const ViewState view = project().view();
+    for (const std::unique_ptr<Feature>& feature : m_features) feature->applyViewState(view);
 }
 
 // ---------------------------------------------------------------------------
@@ -575,29 +536,7 @@ void MainWindow::applyViewState()
 void MainWindow::collectViewState()
 {
     ViewState view;
-    view.camera = m_viewport->cameraState();
-    view.cameraValid = true;
-    view.displayMode = m_viewport->displayMode();
-    view.labelsVisible = m_viewport->hardpointLabelsVisible();
-    view.linksVisible = m_viewport->linkageVisible();
-    view.wheelsVisible = m_viewport->wheelsVisible();
-    view.selectedHardpoint = m_viewport->selectedHardpoint();
-    view.selection = m_viewport->selectedHardpoints();
-
-    SimulationState& simulation = view.simulation;
-    simulation.active = m_analysisPanel->simulating();
-    simulation.axle = m_analysisPanel->axle();
-    simulation.kind = m_analysisPanel->kind();
-    simulation.sweep = m_analysisPanel->settings();
-    simulation.position = m_analysisPanel->position();
-    for (const SweepMeasure measure : m_analysisPanel->measures())
-        simulation.measures << sweepMeasureKey(measure);
-    simulation.sides = m_analysisPanel->sides();
-    simulation.animating = m_analysisPanel->animating();
-    simulation.animationSeconds = m_analysisPanel->animationSeconds();
-    simulation.allAxles = m_analysisPanel->movesAllAxles();
-    simulation.parametersOpen = m_analysisPanel->parametersVisible();
-
+    for (const std::unique_ptr<Feature>& feature : m_features) feature->collectViewState(view);
     project().setView(view);
 
     WindowState window;
@@ -950,7 +889,7 @@ void MainWindow::removeHardpoints()
     markDirty();
 }
 
-void MainWindow::selectRows(const QList<int>& rows, int current)
+void MainWindow::selectPoints(const QList<int>& rows, int current)
 {
     m_viewport->setSelectedHardpoints(rows, current);
     m_hardpointPanel->setSelectedRows(m_viewport->selectedHardpoints(),
@@ -1004,7 +943,7 @@ void MainWindow::addPointDialog()
         HardpointTable first;
         first.points.push_back(point);
         if (!adoptNewWorkbook(first)) return;
-        selectRows({ 0 }, 0);
+        selectPoints({ 0 }, 0);
         statusBar()->showMessage(tr("Started a hardpoint table with %1").arg(point.name), 6000);
         return;
     }
@@ -1014,7 +953,7 @@ void MainWindow::addPointDialog()
     const int row = current >= 0 ? current + 1 : hardpoints()->rowCount();
     if (!hardpoints()->insertPoint(row, point)) return;
     syncTableToViewport(false);
-    selectRows({ row }, row);
+    selectPoints({ row }, row);
     markDirty();
     m_session->recordEdit(tr("Add %1").arg(point.name));
     statusBar()->showMessage(tr("Added %1").arg(point.name), 5000);
@@ -1042,7 +981,7 @@ void MainWindow::deleteSelectedPoints()
     syncTableToViewport(false);
 
     const int next = std::min(first, hardpoints()->rowCount() - 1);
-    if (next >= 0) selectRows({ next }, next);
+    if (next >= 0) selectPoints({ next }, next);
     markDirty();
     m_session->recordEdit(label);
     statusBar()->showMessage(tr("Deleted %n point(s). Ctrl+Z brings them back.", "", rows.size()),

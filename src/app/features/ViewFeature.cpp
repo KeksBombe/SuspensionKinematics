@@ -2,6 +2,7 @@
 #include "app/framework/CommandRegistry.h"
 #include "app/framework/Feature.h"
 #include "app/framework/FeatureRegistry.h"
+#include "project/Project.h"
 #include "render/ViewportWidget.h"
 
 #include <QActionGroup>
@@ -40,6 +41,22 @@ public:
                              (mode == DisplayMode::Solid ? m_solid : m_triangles)
                                  ->setChecked(true);
                          });
+    }
+
+    void collectViewState(ViewState& view) const override
+    {
+        const ViewportWidget* viewport = m_context.viewport();
+        view.camera = viewport->cameraState();
+        view.cameraValid = true;
+        view.displayMode = viewport->displayMode();
+    }
+
+    void applyViewState(const ViewState& view) override
+    {
+        ViewportWidget* viewport = m_context.viewport();
+        if (view.cameraValid) viewport->setCameraState(view.camera);
+        // The command showing the mode follows the viewport: see windowReady().
+        viewport->setDisplayMode(view.displayMode);
     }
 
 private:
