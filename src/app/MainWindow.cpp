@@ -18,7 +18,6 @@
 #include "app/framework/RibbonPages.h"
 #include "app/StaticAnglesDialog.h"
 #include "app/SteeringDialog.h"
-#include "app/UpdateChecker.h"
 #include "app/WheelDialog.h"
 #include "geom/MeshQuery.h"
 #include "geom/MeshTopology.h"
@@ -81,28 +80,6 @@ const char kRimStem[] = "rim";
 /// orbit drag is one save rather than two hundred, short enough that closing the
 /// lid on a laptop a second later loses nothing.
 constexpr int kAutoSaveDelayMs = 1200;
-// Long enough that the window is up and the project loaded before the
-// network is touched, short enough that the answer arrives while the user
-// is still at the start of a session.
-constexpr int kUpdateCheckDelayMs = 2500;
-
-struct PresetSpec {
-    ViewPreset preset;
-    const char* label;
-    const char* shortcut;
-};
-
-// Numbers 1-7 for the view presets; Ctrl+1..3 for display modes, so the two sets
-// never collide.
-constexpr PresetSpec kPresets[] = {
-    { ViewPreset::Front,     "&Front",      "1" },
-    { ViewPreset::Rear,      "&Rear",       "2" },
-    { ViewPreset::Left,      "&Left",       "3" },
-    { ViewPreset::Right,     "Rig&ht",      "4" },
-    { ViewPreset::Top,       "&Top",        "5" },
-    { ViewPreset::Bottom,    "&Bottom",     "6" },
-    { ViewPreset::Isometric, "&Isometric",  "7" },
-};
 
 } // namespace
 

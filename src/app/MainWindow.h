@@ -12,7 +12,6 @@
 #include "project/Project.h"
 #include "render/Camera.h"
 #include "render/ViewportWidget.h"
-#include "update/UpdateManifest.h"
 
 #include <QMainWindow>
 #include <QString>
@@ -36,7 +35,6 @@ class HardpointPanel;
 class MeshQuery;
 class PanelAction;
 class Ribbon;
-class UpdateChecker;
 
 /// The application window, which always has exactly one project open.
 ///
@@ -325,8 +323,6 @@ private:
     /// The only menu there is: File, from the ribbon's accent button.
     /// Everything else is a ribbon tab.
     QMenu* m_fileMenu = nullptr;
-    /// The view presets, for the ribbon's Views button.
-    QMenu* m_viewsMenu = nullptr;
     Ribbon* m_ribbon = nullptr;
     /// Where the docks sit in a project that has never been laid out: taken
     /// before the project's own layout is restored, and what Reset Panel
