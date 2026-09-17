@@ -100,6 +100,10 @@ add_library(suspkin_core STATIC
     src/io/Zip.cpp
     src/model/Hardpoint.h
     src/model/Hardpoint.cpp
+    # Arithmetic in a coordinate field, so a point can be nudged by typing
+    # "-0.5" after what is already in it.
+    src/model/Expression.h
+    src/model/Expression.cpp
     src/model/HardpointMirror.h
     src/model/HardpointMirror.cpp
     # Where the wheel models are placed: pure geometry over the hardpoint table,
@@ -129,6 +133,8 @@ add_library(suspkin_core STATIC
     src/model/SuspensionSolver.cpp
     src/model/Sweep.h
     src/model/Sweep.cpp
+    src/model/Simulation.h
+    src/model/Simulation.cpp
     # The other direction: from vehicle targets to hardpoints. Trigonometry over
     # a few dozen numbers, ported from the team's Python geometry editor, and
     # checked by feeding what it makes back through the solver above.
@@ -152,6 +158,11 @@ add_library(suspkin_core STATIC
     # tests can reach it.
     src/render/Camera.h
     src/render/Camera.cpp
+    # So are the arrows a selected hardpoint is dragged by: they are screen
+    # geometry over the camera, so what a drag comes to in millimetres is
+    # checked without a graphics context.
+    src/render/MoveGizmo.h
+    src/render/MoveGizmo.cpp
     # Header-only, but the project stores a display mode, so core owns it too.
     src/render/DisplayMode.h
 )
@@ -218,6 +229,27 @@ qt_add_executable(suspkin
     src/main.cpp
     src/app/MainWindow.h
     src/app/MainWindow.cpp
+    src/app/framework/AppContext.h
+    src/app/framework/AppContext.cpp
+    src/app/framework/Command.h
+    src/app/framework/CommandRegistry.h
+    src/app/framework/CommandRegistry.cpp
+    src/app/framework/Feature.h
+    src/app/framework/FeatureRegistry.h
+    src/app/framework/FeatureRegistry.cpp
+    src/app/framework/RibbonPages.h
+    src/app/framework/RibbonPages.cpp
+    src/app/framework/WindowActions.h
+    src/app/framework/WindowActions.cpp
+    src/app/features/ProjectFeature.cpp
+    src/app/features/GeometryFeature.cpp
+    src/app/features/WheelsFeature.cpp
+    src/app/features/HardpointsFeature.cpp
+    src/app/features/LinkageFeature.cpp
+    src/app/features/AnalysisFeature.cpp
+    src/app/features/ViewFeature.cpp
+    src/app/features/PanelsFeature.cpp
+    src/app/features/HelpFeature.cpp
     src/app/HardpointModel.h
     src/app/HardpointModel.cpp
     # How the configuration table draws itself: the constraint chips, the body
@@ -235,6 +267,13 @@ qt_add_executable(suspkin
     # generator's targets and preview, and a part through the selection.
     src/app/PointDialog.h
     src/app/PointDialog.cpp
+    # Moving a point without the table: the field X, Y and Z open over the
+    # viewport, and the coordinate editor that does arithmetic -- the same one
+    # the table and the new-point dialog use.
+    src/app/CoordinateEntry.h
+    src/app/CoordinateEntry.cpp
+    src/app/ExpressionSpinBox.h
+    src/app/ExpressionSpinBox.cpp
     src/app/GenerateDialog.h
     src/app/GenerateDialog.cpp
     src/app/PartDialogs.h

@@ -72,6 +72,9 @@ so its normals come from the real surface and a bore shades as the cylinder it i
 | `Ctrl+S` | Save the project now (it also saves itself) |
 | `Ctrl+O` / `Ctrl+W` / `Ctrl+Q` | Import chassis / Remove chassis / Quit |
 | Click a marker | Select that hardpoint, in the viewport and in the table |
+| Drag an arrow on a selected marker | Move that point along X, Y or Z |
+| `X`, `Y`, `Z` | Type that coordinate of the selected point, arithmetic allowed |
+| `Esc` while dragging | Put the point back where the drag started |
 | `Ctrl+H` | Show or hide the hardpoint table |
 | `Ctrl+I` | Import hardpoints |
 | `Ctrl+M` | Mirror hardpoints to the other side |
@@ -155,6 +158,30 @@ selecting in the viewport are the same selection, and it can be more than one
 point: **Ctrl+click** in the viewport adds a point to it or takes one away, and
 Ctrl or Shift does the same in the table. The viewport keeps the order they were
 picked in, which is the order a new part is drawn through.
+
+### Moving points in the viewport
+
+Select a marker and it grows three arrows -- red X, green Y, blue Z, the colours
+the navigation gizmo uses. **Drag one** and the point slides along that axis
+only; the parts redraw with it, the status bar reads out where it has got to and
+how far it has come, and letting go writes the new coordinate into the table
+exactly as typing it there would. **Escape** during a drag puts the point back.
+The arrows are a fixed size on screen, so they are the same handle on a wheel
+bearing as on a whole chassis, and an arrow pointing nearly at the eye is drawn
+faded and cannot be dragged -- there is no aiming along it.
+
+**Press `X`, `Y` or `Z`** instead and a small field opens beside the marker
+holding that coordinate, with the cursor at the end of it. That is the point of
+it: type `-0.5` on the end and the field reads `-2068.622-0.5`, and what it comes
+to is shown underneath before you press Enter. `+ - * / ( )` all work, in the
+usual order, and a number may be written the way your own locale writes one. The
+same arithmetic works in the table's coordinate cells and in the Add Point
+dialog. Escape, or clicking away, closes the field and changes nothing.
+
+While the analysis panel is simulating, the markers are standing where the
+solver put them rather than where the table has them, so the arrows come off and
+the keys do nothing: a drag there would be writing a design coordinate read off
+a simulated position.
 
 ### Making points here
 

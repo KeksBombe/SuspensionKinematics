@@ -1,5 +1,6 @@
 #include "app/HardpointDelegates.h"
 
+#include "app/ExpressionSpinBox.h"
 #include "app/HardpointModel.h"
 
 #include <QApplication>
@@ -135,14 +136,17 @@ QColor issueColor(ConfigIssueLevel level, const QPalette& palette)
 QWidget* CoordinateDelegate::createEditor(QWidget* parent, const QStyleOptionViewItem& option,
                                           const QModelIndex& index) const
 {
-    QWidget* editor = QStyledItemDelegate::createEditor(parent, option, index);
-    if (auto* spin = qobject_cast<QDoubleSpinBox*>(editor)) {
-        spin->setRange(-kCoordinateLimit, kCoordinateLimit);
-        spin->setDecimals(kEditDecimals);
-        spin->setKeyboardTracking(false);
-        spin->setAccelerated(true);
-    }
-    return editor;
+    Q_UNUSED(option);
+    Q_UNUSED(index);
+
+    // Built here rather than asked for, because what a coordinate cell needs is
+    // not the default spin box: the range has to reach a chassis datum, and
+    // what is typed may be a sum -- "-2068.622-0.5" -- so a point can be nudged
+    // from the table the same way it can from the viewport.
+    auto* spin = new ExpressionSpinBox(parent);
+    spin->setRange(-kCoordinateLimit, kCoordinateLimit);
+    spin->setDecimals(kEditDecimals);
+    return spin;
 }
 
 // ---------------------------------------------------------------------------

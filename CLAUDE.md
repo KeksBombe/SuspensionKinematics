@@ -9,6 +9,50 @@ Windows. It imports CAD geometry and a hardpoint workbook, shows both in a 3D
 viewport, and lets the hardpoints be edited and written back. Bump/roll sweeps and
 camber/toe plots are the intended next layer on top.
 
+## Rule: One method, one job
+
+Every method does exactly one thing at one level of abstraction.
+
+### How to check
+- Describe the method in one sentence without "and", "then", or "also".
+  If you can't, it does more than one thing. Split it.
+- All statements in the method sit at the same abstraction level.
+  A method that orchestrates steps (traverse, decide, dispatch) must not
+  also contain the low-level details of those steps (loops over raw data,
+  index arithmetic, math). Extract the details into named helpers.
+- The method name states exactly what it does. If the honest name needs
+  "And" or is vaguer than the body (process, handle, doWork), the method
+  is doing too much or is badly named.
+
+### Typical splits
+- Setup/validation vs. the actual work
+- Traversal/control flow vs. per-element evaluation
+- Deciding what to do vs. doing it
+- Computing a value vs. converting/formatting it
+  (e.g. distanceSquaredTo() and distanceTo() = sqrt(distanceSquaredTo()))
+
+### Make implicit conventions explicit
+- Magic checks become named predicates: `node.count > 0` -> `node.isLeaf()`
+- Magic indices become named constants: `m_nodes[0]` -> `m_nodes[kRoot]`
+- Anonymous tuples/pairs become small named structs
+- Names carry units and semantics: `bestSq`, not `best`, for squared values
+
+### Do NOT over-split
+- One thing is not one line. A cohesive loop that is the method's single job
+  stays together.
+- Don't extract a helper if its name would just restate its one-line body.
+- Don't split a tight algorithm (traversal, state machine, ISR) across
+  many helpers so the reader has to jump around to follow the control flow.
+  Split out the parts, keep the skeleton readable in one place.
+- In hot paths: prefer `inline`/header-local helpers; don't introduce
+  virtual calls, allocations, or copies just to split a method.
+
+### When refactoring existing code
+- Preserve behaviour exactly. Refactor and behaviour changes go in
+  separate commits.
+- Keep the public API stable unless told otherwise; new helpers are
+  private or in an anonymous namespace.
+
 ## Build, test, run
 
 ```bash
@@ -215,6 +259,43 @@ hardpoint dock is the one place all of that is edited.
   `FrozenColumnView::edit()` forwards there, because an editor opened on the main
   view's name cell sits underneath the frozen overlay, out of sight.
 
+## Moving a point in the viewport
+
+A selected marker gets three arrows, and X, Y and Z open a field on one
+coordinate. Both are only ways of reaching `HardpointModel::setData()` on a
+coordinate column -- `MainWindow::moveHardpointCoordinate()` is the one seam --
+so a dragged point and a typed point produce the same `coordinateChanged()` and
+the same edits file. Nothing new is persisted: the selection was already project
+state and a drag is not.
+
+- `src/render/MoveGizmo.*` is the gizmo, and it is in the **core**: laying the
+  arrows out, hit-testing them and working out what a drag comes to are screen
+  geometry over `Camera`, so `test_move_gizmo` checks them without a graphics
+  context. Only the painting needs a `QPainter`, and the viewport hands it one.
+- **A drag is solved where the pointer's ray pierces the arm's plane**, not as
+  millimetres per pixel. The flat rate is a secant: under perspective an axis
+  leaning away from the eye covers fewer pixels the further along it you get,
+  and the point slides out from under the pointer. The plane holds the axis and
+  faces the eye, and it is fixed in the layout **captured when the arrow is
+  taken hold of** -- recomputed per pointer position it wobbles, and a sideways
+  sweep of the mouse then walks the point along its own axis.
+- **The viewport reports how far, not where to.** A marker is a `QVector3D` of
+  floats and a hardpoint is three doubles; the window adds the distance to the
+  table's own value. Sending a position back would round two coordinates the
+  drag never touched, and that turns up in the user's workbook as an edit they
+  did not make.
+- The hub belongs to the marker under it (`kHubClearancePx`), or a selected
+  point could never be clicked again: all three arms start there.
+- **Editing is off while the mechanism is posed** (`setPointEditingEnabled()`,
+  from `applySimulation()`): the markers are then where the solver put them, so
+  a drag would write a design coordinate read off a simulated position.
+- `evaluateExpression()` (`src/model/Expression.*`, core, tested) is what makes
+  "type -0.5 on the end of what is there" work. It is in the field the keys
+  open, in the table's coordinate cells and in the Add Point dialog, through
+  `ExpressionSpinBox` -- one grammar, so arithmetic means the same everywhere.
+  Half-typed input is Intermediate, never Invalid, or the field refuses the
+  keystroke before the second operand.
+
 ## Generating a corner from design targets
 
 `src/model/HardpointGenerator.*` is section 3 of
@@ -362,8 +443,8 @@ placement is pure and testable: `src/model/Wheels.*`.
   wheel centre that gets edited in the table takes its wheel with it
   (`rebuildWheels()` is called from the coordinate-edit path for that reason).
 - **A wheel is bolted to its upright, so it turns with it.** `WheelPlacement`
-  carries a rotation as well as a centre: `MainWindow::wheelRotations()` reads
-  `CornerPose::uprightMotion` out of the current poses, keyed by
+  carries a rotation as well as a centre: `SimulationPose::wheelRotations()`
+  reads `CornerPose::uprightMotion` out of the current poses, keyed by
   `CornerPose::wheelCenterName`, and `orientWheels()` puts it on the placements.
   Identity when nothing is being simulated, which is the model as its CAD file
   drew it. Without this the models slide about the car on steering lock without
@@ -377,9 +458,10 @@ placement is pure and testable: `src/model/Wheels.*`.
   picture: a level road, and the monocoque turned about the roll axis through
   the axles' design roll centres (`rollAxisThrough()`, `bodyRollMotion()`),
   because turning about the roll centres is what leaves the contact patches
-  where they were. `MainWindow::m_bodyMotion` moves every point in
-  `posedTable()`, the geometry through `ViewportWidget::setMeshTransform()`, and
-  each wheel after its upright's own turn. Only when every axle is posed: a body
+  where they were. `SimulationPose::bodyMotion` moves every point in
+  `SimulationPose::layOver()`, the geometry through
+  `ViewportWidget::setMeshTransform()`, and each wheel after its upright's own
+  turn. Only when every axle is posed: a body
   cannot roll with one left behind, so with "Move all axles" off the chassis
   stays put.
 - **The corner decides which side a copy is on, not the sign of y.** The user
@@ -511,11 +593,38 @@ pacman, which owns those files.
 
 ## Commands, the ribbon and icons
 
-Every command is **one `QAction`**, made in `MainWindow::buildActions()`, and
-every place it appears is a view of that one object: a ribbon button
-(`setDefaultAction()`), a menu entry, a shortcut. Enabled state
-(`updateActionState()`), checked state and tooltip therefore cannot disagree
-between them. No ribbon button has a slot of its own.
+Every command is **one `QAction`**, and every place it appears is a view of that
+one object: a ribbon button (`setDefaultAction()`), a menu entry, a shortcut.
+Enabled state, checked state and tooltip therefore cannot disagree between them.
+No ribbon button has a slot of its own.
+
+**The window does not know what the commands are.** `src/app/framework/` is the
+layer they register into and `src/app/features/` is where they come from:
+
+- A **feature** (`Feature`) is one area of the application. It is handed an
+  `AppContext` and registers its commands; `FeatureRegistry` collects them
+  through the `SUSPKIN_FEATURE(Type)` macro at the bottom of each feature's
+  `.cpp`, so **adding a feature touches no file that already exists**. That
+  works because features are compiled into the executable -- a static
+  initialiser in an archive member nothing refers to is dropped by the linker,
+  so they must never move into `suspkin_core` without `--whole-archive`.
+- A `CommandSpec` carries what a command says, **where it appears** and **when
+  it can be used**, all four in one place. `enabledWhen` is a predicate beside
+  the command it governs, which is what replaced one function that had to know
+  every command there was. `ribbon` is a *list* of slots: Show Parts is on the
+  Linkage tab and the View tab, one command in two views.
+- `buildRibbonFrom()` builds the tabs out of what the commands asked for.
+  Groups appear in the order of their earliest command, so `RibbonSlot::order`
+  (spaced in tens) is what places things -- never the order features happened
+  to register in, which is link order and unspecified. `ribbonPages()` is the
+  one list adding a *tab* touches; adding a *command* touches only its feature.
+- `CommandRegistry::all()` is what arms the shortcuts, filled in as commands are
+  built. It used to be written out by hand, which is a list that quietly loses a
+  command the day somebody adds one and forgets.
+- **`WindowActions` is the migration seam, and it only ever shrinks.** Command
+  bodies that have not moved into their feature yet are reached through it.
+  Moving one into its feature deletes a line from that header; when it is empty,
+  delete the file.
 
 - **There is no menu bar.** `setMenuWidget(m_ribbon)` makes the ribbon the whole
   of the window's chrome; the tabs say what the menus said, Help among them.
@@ -525,7 +634,7 @@ between them. No ribbon button has a slot of its own.
   `QMainWindow::menuBar()`**: on a
   window whose menu widget is not a `QMenuBar` it makes one and installs it
   through `setMenuWidget()`, which `deleteLater()`s the ribbon.
-- **Every command action is added to the window** (`finishActions()` ends in
+- **Every command action is added to the window** (`finishCommands()` ends in
   `addActions()`). A shortcut is live only while a widget the action is on is
   visible, and a button on a tab that is not showing is not visible -- without
   this, `Ctrl+I` would die whenever another tab was selected.
@@ -572,8 +681,9 @@ src/geom/     Aabb, TriMesh, vertex welding and edge extraction, and MeshQuery:
 src/model/    Hardpoint, HardpointTable, hardpoint mirroring, what each point
               is for and the rules that check it, the linkage a template
               resolves to, where the wheel models are placed, the solver and
-              its sweeps, and the generator that runs it the other way:
-              design targets to hardpoints
+              its sweeps, the Simulation that binds every axle and poses the
+              car, and the generator that runs it the other way: design
+              targets to hardpoints
 src/io/       STL and STEP readers behind importMeshFile(), a minimal ZIP
               reader/rewriter, the hardpoint workbook reader/writer, and the
               linkage template reader/writer
@@ -581,11 +691,19 @@ src/project/  the project format: manifest, assets, view state, hardpoint edits
 src/update/   what a release says about itself: parsing and comparing the
               version.json a release publishes. Pure, so it is tested without
               the network
-src/render/   Camera, GPU buffers, the OpenGL viewport, gizmo, mode selector
+src/render/   Camera, the move gizmo's geometry, GPU buffers, the OpenGL
+              viewport, navigation gizmo, mode selector
 src/app/      MainWindow, AppController, the project launcher, the mirror dialog,
               the hardpoint configuration table -- its model, its delegates and
               its dock -- and the dialogs for a new point, a generated corner
               and the template's parts
+src/app/framework/  what a feature registers into: the command registry, the
+              ribbon's tabs, the context a feature is given, and the shrinking
+              list of command bodies still on the window
+src/app/features/   one file per area of the application -- the project,
+              geometry, wheels, hardpoints, the linkage, analysis, the view,
+              the panels, help. Each registers its own commands and nothing
+              else names it
 ```
 
 `suspkin_core` is a static library with **no OpenGL and no widgets** — geometry,

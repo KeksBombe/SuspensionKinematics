@@ -3,6 +3,8 @@
 #include "geom/Aabb.h"
 
 #include <QMatrix4x4>
+#include <QPointF>
+#include <QSize>
 #include <QVector3D>
 
 namespace suspkin {
@@ -51,6 +53,19 @@ public:
 
     QMatrix4x4 viewMatrix() const;
     QMatrix4x4 projectionMatrix(float aspect) const;
+    QMatrix4x4 viewProjectionMatrix(float aspect) const;
+
+    /// Where @p world lands in a widget of @p viewport pixels, and how deep it
+    /// is in clip space. False when it falls behind the eye or outside the
+    /// depth range, where there is nothing to draw and nothing to click.
+    ///
+    /// Static, and taking the matrix rather than deriving one, because the
+    /// callers that matter project a whole table of points against one camera:
+    /// the markers, their labels, and the arrows on the selected one. They all
+    /// have to land in the same place, so there is one of these rather than a
+    /// copy of the arithmetic per caller.
+    static bool projectTo(const QMatrix4x4& viewProjection, const QVector3D& world,
+                          const QSize& viewport, QPointF* screen, float* depth);
 
     CameraState state() const;
     /// Restore a saved view. Values that would make the camera unusable -- a

@@ -2,6 +2,9 @@
 
 #include "geom/Vec3.h"
 
+#include <QMatrix4x4>
+#include <QQuaternion>
+
 namespace suspkin {
 
 /// A rotation and a translation, in that order: p -> r*p + t.
@@ -21,6 +24,14 @@ struct Rigid {
     /// A direction is not translated, which is the whole difference between
     /// where the wheel is and which way it points.
     Vec3 rotate(const Vec3& d) const { return Vec3(dot(r[0], d), dot(r[1], d), dot(r[2], d)); }
+
+    /// The turn alone, for the renderer -- what a wheel model bolted to this
+    /// upright is spun by. The conversion lives here, beside the type, for the
+    /// same reason Vec3::toVector() does: millimetre and unit-vector magnitudes
+    /// are far inside float precision, so nothing visible is lost crossing over.
+    QQuaternion toQuaternion() const;
+    /// The whole of it, turn and translation, as a model matrix.
+    QMatrix4x4 toMatrix() const;
 };
 
 /// The line a hinge turns about: a point on it and a unit direction.

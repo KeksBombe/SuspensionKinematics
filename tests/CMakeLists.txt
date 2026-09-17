@@ -51,6 +51,13 @@ qt_add_executable(test_wheels test_wheels.cpp)
 target_link_libraries(test_wheels PRIVATE suspkin_core Qt6::Test)
 add_test(NAME wheels COMMAND test_wheels)
 
+# The window used to hold the solve inside itself, where it could only be
+# reached through a QMainWindow. It is core now, so posing a car is checked the
+# same way every measure under it is.
+qt_add_executable(test_simulation test_simulation.cpp)
+target_link_libraries(test_simulation PRIVATE suspkin_core Qt6::Test)
+add_test(NAME simulation COMMAND test_simulation)
+
 qt_add_executable(test_hardpoint_config test_hardpoint_config.cpp)
 target_link_libraries(test_hardpoint_config PRIVATE suspkin_core Qt6::Test)
 add_test(NAME hardpoint_config COMMAND test_hardpoint_config)
@@ -125,6 +132,29 @@ target_include_directories(test_panel_action PRIVATE ../src)
 add_test(NAME panel_action COMMAND test_panel_action)
 set_tests_properties(panel_action PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
 
+# The commands are application code, but a QAction needs a palette and an
+# icon, not a window -- so what each command says about itself and the one place
+# that decides which of them can be used are both checkable offscreen. The docks
+# are real, because the panel toggles are built against them.
+# The layer features register their commands into. No window and no features
+# here -- what is checked is the registry itself and the ribbon it describes,
+# which is what every feature depends on behaving the same way.
+qt_add_executable(test_commands
+    test_commands.cpp
+    ../src/app/framework/CommandRegistry.cpp
+    ../src/app/framework/RibbonPages.cpp
+    ../src/app/Icons.cpp
+    ../src/app/Ribbon.cpp)
+target_link_libraries(test_commands PRIVATE
+    suspkin_core Qt6::Widgets Qt6::Svg Qt6::Test)
+target_include_directories(test_commands PRIVATE ../src)
+qt_add_resources(test_commands "commands_icons"
+    PREFIX "/icons"
+    BASE "${SUSPKIN_ICONS_DIR}"
+    FILES ${SUSPKIN_ICONS})
+add_test(NAME commands COMMAND test_commands)
+set_tests_properties(commands PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+
 qt_add_executable(test_linkage test_linkage.cpp)
 target_link_libraries(test_linkage PRIVATE suspkin_core Qt6::Test)
 add_test(NAME linkage COMMAND test_linkage)
@@ -148,6 +178,38 @@ add_test(NAME project COMMAND test_project)
 qt_add_executable(test_camera test_camera.cpp)
 target_link_libraries(test_camera PRIVATE suspkin_core Qt6::Test)
 add_test(NAME camera COMMAND test_camera)
+
+# The arrows a selected hardpoint is dragged by. Screen geometry over the
+# camera, so what a drag comes to in millimetres is checked here rather than by
+# somebody dragging a point across a window.
+qt_add_executable(test_move_gizmo test_move_gizmo.cpp)
+target_link_libraries(test_move_gizmo PRIVATE suspkin_core Qt6::Test)
+add_test(NAME move_gizmo COMMAND test_move_gizmo)
+
+# The viewport's half of moving a point: that an arrow takes the press instead
+# of orbiting, that a drag reports how far it went rather than where to, and
+# that a posed mechanism offers neither. The widget is never shown -- the events
+# go in by hand and nothing paints -- so it needs no graphics context, only the
+# offscreen platform a QWidget always wants.
+qt_add_executable(test_viewport_editing
+    test_viewport_editing.cpp
+    ../src/render/ViewportWidget.cpp
+    ../src/render/GpuMesh.cpp
+    ../src/render/GpuPoints.cpp
+    ../src/render/GpuLines.cpp
+    ../src/render/NavGizmo.cpp
+    ../src/render/ModeSelector.cpp)
+target_link_libraries(test_viewport_editing PRIVATE
+    suspkin_core Qt6::Widgets Qt6::OpenGLWidgets Qt6::Test)
+target_include_directories(test_viewport_editing PRIVATE ../src)
+add_test(NAME viewport_editing COMMAND test_viewport_editing)
+set_tests_properties(viewport_editing PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+
+# Arithmetic in a coordinate field, including what a field half-typed must not
+# be read as.
+qt_add_executable(test_expression test_expression.cpp)
+target_link_libraries(test_expression PRIVATE suspkin_core Qt6::Test)
+add_test(NAME expression COMMAND test_expression)
 
 qt_add_executable(test_update test_update.cpp)
 target_link_libraries(test_update PRIVATE suspkin_core Qt6::Test)

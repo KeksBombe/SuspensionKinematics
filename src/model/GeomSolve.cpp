@@ -1,5 +1,7 @@
 #include "model/GeomSolve.h"
 
+#include <QMatrix3x3>
+
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -238,6 +240,31 @@ Vec3 planesCrossing(const Vec3& normalA, const Vec3& pointA, const Vec3& normalB
     hit[i1] = (a1 * c2 - a2 * c1) / determinant;
     if (ok) *ok = true;
     return hit;
+}
+
+QQuaternion Rigid::toQuaternion() const
+{
+    // Rigid keeps its rotation as rows -- r[i] dotted with a point gives
+    // component i of the answer -- which is a row-major matrix, and that is
+    // what QMatrix3x3 reads.
+    const float values[9] = {
+        static_cast<float>(r[0].x), static_cast<float>(r[0].y), static_cast<float>(r[0].z),
+        static_cast<float>(r[1].x), static_cast<float>(r[1].y), static_cast<float>(r[1].z),
+        static_cast<float>(r[2].x), static_cast<float>(r[2].y), static_cast<float>(r[2].z),
+    };
+    return QQuaternion::fromRotationMatrix(QMatrix3x3(values));
+}
+
+QMatrix4x4 Rigid::toMatrix() const
+{
+    // QMatrix4x4 takes its values a row at a time as well.
+    return QMatrix4x4(static_cast<float>(r[0].x), static_cast<float>(r[0].y),
+                      static_cast<float>(r[0].z), static_cast<float>(t.x),
+                      static_cast<float>(r[1].x), static_cast<float>(r[1].y),
+                      static_cast<float>(r[1].z), static_cast<float>(t.y),
+                      static_cast<float>(r[2].x), static_cast<float>(r[2].y),
+                      static_cast<float>(r[2].z), static_cast<float>(t.z),
+                      0.0f, 0.0f, 0.0f, 1.0f);
 }
 
 } // namespace suspkin

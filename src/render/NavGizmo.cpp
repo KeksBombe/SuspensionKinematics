@@ -1,5 +1,7 @@
 #include "render/NavGizmo.h"
 
+#include "render/MoveGizmo.h"
+
 #include <QColor>
 #include <QFont>
 #include <QPainter>
@@ -17,13 +19,11 @@ const QVector3D kAxisDirections[NavGizmo::kAxisCount] = {
 constexpr bool kIsPositive[NavGizmo::kAxisCount] = { true, false, true, false, true, false };
 constexpr const char* kAxisLabels[3] = { "X", "Y", "Z" };
 
+/// The balls come in pairs -- +X then -X, and so on -- and a pair shares the
+/// colour of its axis with the arrows the selected hardpoint gets.
 QColor axisColor(int axis)
 {
-    switch (axis / 2) {
-    case 0:  return QColor(226, 88, 96);    // X, red
-    case 1:  return QColor(154, 205, 60);   // Y, green
-    default: return QColor(70, 150, 225);   // Z, blue
-    }
+    return MoveGizmo::axisColor(axis / 2);
 }
 
 } // namespace

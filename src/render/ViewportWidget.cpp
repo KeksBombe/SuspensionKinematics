@@ -2,6 +2,7 @@
 
 #include <QCursor>
 #include <QFontMetricsF>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QOpenGLShaderProgram>
 #include <QImage>
@@ -130,6 +131,10 @@ ViewportWidget::ViewportWidget(QWidget* parent) : QOpenGLWidget(parent)
 {
     setMinimumSize(320, 240);
     setMouseTracking(true); // needed to highlight gizmo balls on hover
+    // X, Y and Z type a coordinate for the selected marker, so the viewport has
+    // to be able to hold the keyboard -- and clicking in it is what hands it
+    // over, which is the same gesture that selects the marker.
+    setFocusPolicy(Qt::StrongFocus);
 
     layoutChrome();
 }
@@ -187,7 +192,10 @@ void ViewportWidget::setHardpoints(const HardpointTable& table)
         m_hardpointBounds.expand(position);
     }
 
-    // Every index refers to the previous set, so none survives a reload.
+    // Every index refers to the previous set, so none survives a reload -- a
+    // drag in progress least of all.
+    if (m_drag == Drag::Move) forgetMove();
+    m_hoveredMoveAxis = -1;
     m_selectedPoint = -1;
     m_selection.clear();
     m_hoveredPoint = -1;
@@ -374,6 +382,25 @@ void ViewportWidget::setSelectedHardpoints(const QList<int>& selection, int curr
     m_selectedPoint = centred;
     update();
     emit viewChanged();
+}
+
+void ViewportWidget::setPointEditingEnabled(bool enabled)
+{
+    if (enabled == m_pointEditingEnabled) return;
+    m_pointEditingEnabled = enabled;
+    // Whatever was being dragged was being dragged against the old rules.
+    if (m_drag == Drag::Move) cancelMove();
+    m_hoveredMoveAxis = -1;
+    update();
+}
+
+bool ViewportWidget::markerPosition(int index, QPointF* screen) const
+{
+    if (index < 0 || index >= static_cast<int>(m_hardpoints.size())) return false;
+
+    float depth = 0.0f;
+    return project(m_camera.viewProjectionMatrix(aspect()),
+                   m_hardpoints[static_cast<std::size_t>(index)], screen, &depth);
 }
 
 void ViewportWidget::setDisplayMode(DisplayMode mode)
@@ -740,16 +767,10 @@ void ViewportWidget::renderHardpoints(const QMatrix4x4& mvp)
 bool ViewportWidget::project(const QMatrix4x4& viewProjection, const QVector3D& world,
                              QPointF* screen, float* depth) const
 {
-    const QVector4D clip = viewProjection * QVector4D(world, 1.0f);
-    if (clip.w() <= 0.0f) return false; // behind the eye
-
-    const QVector3D ndc = clip.toVector3D() / clip.w();
-    if (ndc.z() < -1.0f || ndc.z() > 1.0f) return false; // outside the depth range
-
-    *screen = QPointF((static_cast<double>(ndc.x()) * 0.5 + 0.5) * width(),
-                      (0.5 - static_cast<double>(ndc.y()) * 0.5) * height());
-    *depth = ndc.z();
-    return true;
+    // The matrix is passed in rather than derived here because the callers
+    // project a whole table against one camera; the arithmetic itself is the
+    // camera's, so the markers, the labels and the arrows cannot disagree.
+    return Camera::projectTo(viewProjection, world, size(), screen, depth);
 }
 
 int ViewportWidget::hardpointAt(const QPoint& pos) const
@@ -776,6 +797,79 @@ int ViewportWidget::hardpointAt(const QPoint& pos) const
         }
     }
     return best;
+}
+
+MoveGizmo::Layout ViewportWidget::gizmoLayout() const
+{
+    // One marker gets the arrows: the one the selection is centred on. A
+    // selection is a list in picking order -- it is how a part is built up --
+    // and three arrows on each of six points would be a thicket, not a handle.
+    if (!m_pointEditingEnabled || m_selectedPoint < 0) return {};
+    if (m_selectedPoint >= static_cast<int>(m_hardpoints.size())) return {};
+
+    return MoveGizmo::layoutAt(m_camera, size(),
+                               m_hardpoints[static_cast<std::size_t>(m_selectedPoint)]);
+}
+
+bool ViewportWidget::beginMove(const MoveGizmo::Layout& layout, int axis, const QPoint& pos)
+{
+    if (axis < 0 || !layout.visible) return false;
+
+    m_drag = Drag::Move;
+    m_moveAxis = axis;
+    m_movePoint = m_selectedPoint;
+    m_moveLayout = layout;
+    m_moveOrigin = m_hardpoints[static_cast<std::size_t>(m_movePoint)];
+    m_moveDistance = 0.0;
+    m_pressPos = pos;
+    setCursor(Qt::ClosedHandCursor);
+    return true;
+}
+
+void ViewportWidget::dragMoveTo(const QPoint& pos)
+{
+    if (m_movePoint < 0) return;
+
+    // Measured from where the drag began, against the gizmo as it stood there:
+    // step by step against a gizmo that is itself moving, the point would walk
+    // away from the pointer.
+    m_moveDistance = MoveGizmo::dragDistance(m_moveLayout, m_moveAxis, m_pressPos, pos);
+    const QVector3D position =
+        m_moveOrigin + m_moveLayout.arms[static_cast<std::size_t>(m_moveAxis)].direction
+                           * static_cast<float>(m_moveDistance);
+
+    moveHardpoint(m_movePoint, position);
+    emit hardpointDragging(m_movePoint, m_moveAxis, m_moveDistance);
+}
+
+void ViewportWidget::finishMove()
+{
+    const int index = m_movePoint;
+    const int axis = m_moveAxis;
+    const double distance = m_moveDistance;
+    forgetMove();
+
+    // Only a drag that came to something is an edit. Taking hold of an arrow
+    // and letting go again must not mark the project dirty.
+    if (index >= 0 && distance != 0.0) emit hardpointMoved(index, axis, distance);
+}
+
+void ViewportWidget::cancelMove()
+{
+    if (m_movePoint >= 0) {
+        moveHardpoint(m_movePoint, m_moveOrigin);
+        emit hardpointDragging(m_movePoint, m_moveAxis, 0.0);
+    }
+    forgetMove();
+}
+
+void ViewportWidget::forgetMove()
+{
+    m_drag = Drag::None;
+    m_moveAxis = -1;
+    m_movePoint = -1;
+    m_moveDistance = 0.0;
+    unsetCursor();
 }
 
 std::vector<ViewportWidget::Label> ViewportWidget::layoutLabels() const
@@ -846,9 +940,11 @@ std::vector<ViewportWidget::Label> ViewportWidget::layoutLabels() const
     return labels;
 }
 
-QRectF ViewportWidget::chromeArea(const std::vector<Label>& labels) const
+QRectF ViewportWidget::chromeArea(const std::vector<Label>& labels,
+                                  const MoveGizmo::Layout& gizmo) const
 {
     QRectF area = m_modeSelector.bounds().united(m_gizmo.bounds());
+    if (gizmo.visible) area = area.united(gizmo.bounds());
     for (const Label& label : labels) {
         area = area.united(label.rect);
         area = area.united(QRectF(label.anchor, QSizeF(1.0, 1.0)));
@@ -856,7 +952,8 @@ QRectF ViewportWidget::chromeArea(const std::vector<Label>& labels) const
     return area.adjusted(-2, -2, 2, 2).intersected(QRectF(rect()));
 }
 
-QImage ViewportWidget::renderChrome(const QRectF& area, const std::vector<Label>& labels) const
+QImage ViewportWidget::renderChrome(const QRectF& area, const std::vector<Label>& labels,
+                                   const MoveGizmo::Layout& gizmo) const
 {
     if (area.isEmpty()) return {};
 
@@ -890,6 +987,10 @@ QImage ViewportWidget::renderChrome(const QRectF& area, const std::vector<Label>
         painter.drawText(label.rect, Qt::AlignCenter, label.text);
     }
 
+    // Over the labels, under the corner furniture: the arrows belong to a point
+    // in the scene, and the two fixed panels are the window's own.
+    MoveGizmo::paint(painter, gizmo, m_hoveredMoveAxis, m_drag == Drag::Move ? m_moveAxis : -1);
+
     m_gizmo.paint(painter, m_camera, m_hoveredAxis);
     m_modeSelector.paint(painter, m_mode, m_hoveredButton);
     return image;
@@ -909,8 +1010,9 @@ void ViewportWidget::paintGL()
     // identical calls to a QImage, where they all appear -- so everything goes
     // through drawImage, which is just a textured quad and always works.
     const std::vector<Label> labels = layoutLabels();
-    const QRectF area = chromeArea(labels);
-    painter.drawImage(area.topLeft(), renderChrome(area, labels));
+    const MoveGizmo::Layout gizmo = gizmoLayout();
+    const QRectF area = chromeArea(labels, gizmo);
+    painter.drawImage(area.topLeft(), renderChrome(area, labels, gizmo));
 }
 
 void ViewportWidget::mousePressEvent(QMouseEvent* event)
@@ -932,6 +1034,13 @@ void ViewportWidget::mousePressEvent(QMouseEvent* event)
         m_pressedAxis = m_gizmo.axisAt(m_lastPos, m_camera);
         m_drag = Drag::Gizmo;
         return;
+    }
+
+    // The arrows sit over the scene, so they are offered the press before the
+    // markers are -- otherwise the marker under the hub would swallow it.
+    if (event->button() == Qt::LeftButton && !(event->modifiers() & Qt::ShiftModifier)) {
+        const MoveGizmo::Layout layout = gizmoLayout();
+        if (beginMove(layout, MoveGizmo::axisAt(layout, m_lastPos), m_lastPos)) return;
     }
 
     if (event->button() == Qt::MiddleButton
@@ -957,13 +1066,21 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* event)
         const int button = m_modeSelector.buttonAt(pos);
         // The corner furniture sits on top, so it swallows the hover there.
         const bool overChrome = m_gizmo.contains(pos) || m_modeSelector.contains(pos);
-        const int point = overChrome ? -1 : hardpointAt(pos);
+        const int moveAxis = overChrome ? -1 : MoveGizmo::axisAt(gizmoLayout(), pos);
+        // An arm covers the marker it belongs to, the same way it takes the
+        // press: pointing at it is asking to move the point, not to pick one.
+        const int point = (overChrome || moveAxis >= 0) ? -1 : hardpointAt(pos);
 
-        if (axis != m_hoveredAxis || button != m_hoveredButton || point != m_hoveredPoint) {
+        if (axis != m_hoveredAxis || button != m_hoveredButton || point != m_hoveredPoint
+            || moveAxis != m_hoveredMoveAxis) {
             m_hoveredAxis = axis;
             m_hoveredButton = button;
             m_hoveredPoint = point;
-            setCursor(point >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
+            m_hoveredMoveAxis = moveAxis;
+            if (moveAxis >= 0)
+                setCursor(Qt::OpenHandCursor);
+            else
+                setCursor(point >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
             update();
         }
         return;
@@ -971,6 +1088,11 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* event)
 
     const QPoint delta = pos - m_lastPos;
     m_lastPos = pos;
+
+    if (m_drag == Drag::Move) {
+        dragMoveTo(pos);
+        return; // the camera stays where it is: the point is what is moving
+    }
 
     if (m_drag == Drag::Gizmo) {
         // Only once the pointer has really moved, so a slightly shaky click still
@@ -991,6 +1113,11 @@ void ViewportWidget::mouseMoveEvent(QMouseEvent* event)
 
 void ViewportWidget::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (m_drag == Drag::Move) {
+        finishMove();
+        return; // a drag that moved a point picks nothing and orbits nothing
+    }
+
     if (m_pressedButton >= 0
         && m_modeSelector.buttonAt(event->position().toPoint()) == m_pressedButton) {
         const DisplayMode mode = ModeSelector::modeForButton(m_pressedButton);
@@ -1037,6 +1164,37 @@ void ViewportWidget::mouseReleaseEvent(QMouseEvent* event)
     m_pressedPoint = -1;
 }
 
+void ViewportWidget::keyPressEvent(QKeyEvent* event)
+{
+    // Escape puts a drag back where it started. Only a drag: there is nothing
+    // else here a press of it could undo.
+    if (event->key() == Qt::Key_Escape && m_drag == Drag::Move) {
+        cancelMove();
+        event->accept();
+        return;
+    }
+
+    const int axis = [key = event->key()] {
+        switch (key) {
+        case Qt::Key_X: return 0;
+        case Qt::Key_Y: return 1;
+        case Qt::Key_Z: return 2;
+        default: return -1;
+        }
+    }();
+
+    // Unmodified, so Ctrl+Z stays whatever Ctrl+Z is, and with a marker to ask
+    // about. Anything else goes on to the window, which has its own shortcuts.
+    if (axis < 0 || event->modifiers() != Qt::NoModifier || !m_pointEditingEnabled
+        || m_selectedPoint < 0 || m_drag != Drag::None) {
+        QOpenGLWidget::keyPressEvent(event);
+        return;
+    }
+
+    emit coordinateEntryRequested(m_selectedPoint, axis);
+    event->accept();
+}
+
 void ViewportWidget::wheelEvent(QWheelEvent* event)
 {
     const int delta = event->angleDelta().y();
@@ -1048,10 +1206,12 @@ void ViewportWidget::wheelEvent(QWheelEvent* event)
 
 void ViewportWidget::leaveEvent(QEvent* event)
 {
-    if (m_hoveredAxis != -1 || m_hoveredButton != -1 || m_hoveredPoint != -1) {
+    if (m_hoveredAxis != -1 || m_hoveredButton != -1 || m_hoveredPoint != -1
+        || m_hoveredMoveAxis != -1) {
         m_hoveredAxis = -1;
         m_hoveredButton = -1;
         m_hoveredPoint = -1;
+        m_hoveredMoveAxis = -1;
         unsetCursor();
         update();
     }

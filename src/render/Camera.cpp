@@ -1,5 +1,7 @@
 #include "render/Camera.h"
 
+#include <QVector4D>
+
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -88,6 +90,26 @@ void Camera::applyPreset(ViewPreset preset)
     case ViewPreset::Bottom: m_azimuthDeg =    0.0f; m_elevationDeg = -kMaxElevationDeg; break;
     case ViewPreset::Isometric: m_azimuthDeg = -45.0f; m_elevationDeg = 30.0f; break;
     }
+}
+
+QMatrix4x4 Camera::viewProjectionMatrix(float aspect) const
+{
+    return projectionMatrix(aspect) * viewMatrix();
+}
+
+bool Camera::projectTo(const QMatrix4x4& viewProjection, const QVector3D& world,
+                       const QSize& viewport, QPointF* screen, float* depth)
+{
+    const QVector4D clip = viewProjection * QVector4D(world, 1.0f);
+    if (clip.w() <= 0.0f) return false; // behind the eye
+
+    const QVector3D ndc = clip.toVector3D() / clip.w();
+    if (ndc.z() < -1.0f || ndc.z() > 1.0f) return false; // outside the depth range
+
+    *screen = QPointF((static_cast<double>(ndc.x()) * 0.5 + 0.5) * viewport.width(),
+                      (0.5 - static_cast<double>(ndc.y()) * 0.5) * viewport.height());
+    *depth = ndc.z();
+    return true;
 }
 
 CameraState Camera::state() const

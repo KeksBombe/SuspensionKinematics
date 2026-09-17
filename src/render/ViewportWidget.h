@@ -11,6 +11,7 @@
 #include "render/GpuMesh.h"
 #include "render/GpuPoints.h"
 #include "render/ModeSelector.h"
+#include "render/MoveGizmo.h"
 #include "render/NavGizmo.h"
 
 #include <QOpenGLFunctions_3_3_Core>
@@ -111,6 +112,19 @@ public:
     /// Every selected marker, in the order it was picked.
     const QList<int>& selectedHardpoints() const { return m_selection; }
 
+    /// Whether the selected marker gets its arrows, and whether X, Y and Z type
+    /// a coordinate.
+    ///
+    /// Off while the mechanism is posed: the markers are then standing where
+    /// the solver put them, not where the table has them, so a drag would write
+    /// a design coordinate read off a simulated position.
+    void setPointEditingEnabled(bool enabled);
+    bool pointEditingEnabled() const { return m_pointEditingEnabled; }
+
+    /// Where marker @p index is on screen, in widget coordinates. False when it
+    /// is behind the eye, where there is nothing to point at.
+    bool markerPosition(int index, QPointF* screen) const;
+
     void setDisplayMode(DisplayMode mode);
     DisplayMode displayMode() const { return m_mode; }
 
@@ -130,6 +144,21 @@ signals:
     /// and a marker to add or take one away, or empty space to clear it.
     /// @p current is the marker the click was on, or -1.
     void hardpointSelectionEdited(const QList<int>& selection, int current);
+    /// A marker was dragged by one of its arrows and let go: @p distance is how
+    /// far it went along @p axis, in world units.
+    ///
+    /// How far, rather than where to, because a marker is a float and a
+    /// hardpoint is a double. Only the table can say what the coordinate has
+    /// become without rounding the value it already held -- and a coordinate
+    /// the user never touched must not turn up in their workbook as an edit.
+    void hardpointMoved(int index, int axis, double distance);
+    /// How far a marker being dragged has got, every step of the way, so the
+    /// coordinate can be read while it moves. Not an edit.
+    void hardpointDragging(int index, int axis, double distance);
+    /// X, Y or Z was pressed over the viewport with a marker selected: @p axis
+    /// is the coordinate to type, 0 for X. The value itself lives in the table,
+    /// so asking for it is all that happens here.
+    void coordinateEntryRequested(int index, int axis);
     /// Anything a project remembers about the view changed: the camera moved,
     /// the mode or the labels were toggled, a marker was selected. Emitted on
     /// every orbit step, so anything listening has to be cheap or debounced.
@@ -140,6 +169,7 @@ protected:
     void resizeGL(int w, int h) override;
     void paintGL() override;
 
+    void keyPressEvent(QKeyEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
@@ -165,10 +195,15 @@ private:
     /// Turn the linkage's point indices into segment endpoints, grouped so that
     /// one draw call covers each kind of part.
     void rebuildLinkageVertices();
-    /// Paint the corner furniture and the labels with the raster engine.
-    QImage renderChrome(const QRectF& area, const std::vector<Label>& labels) const;
+    /// Paint the corner furniture, the labels and the selected point's arrows
+    /// with the raster engine.
+    QImage renderChrome(const QRectF& area, const std::vector<Label>& labels,
+                        const MoveGizmo::Layout& gizmo) const;
     std::vector<Label> layoutLabels() const;
-    QRectF chromeArea(const std::vector<Label>& labels) const;
+    /// The area the chrome covers, which is what gets blitted over the scene.
+    /// The gizmo is laid out once a frame and handed to both this and the
+    /// painting, so an arrow can never reach outside what was blitted.
+    QRectF chromeArea(const std::vector<Label>& labels, const MoveGizmo::Layout& gizmo) const;
     bool buildPrograms();
     void layoutChrome();
     bool hasWheelModels() const { return !m_wheelMesh.isEmpty() || !m_rimMesh.isEmpty(); }
@@ -183,6 +218,24 @@ private:
                  float* depth) const;
     /// Index of the marker under @p pos, or -1.
     int hardpointAt(const QPoint& pos) const;
+
+    /// The arrows as they stand this frame, or an invisible gizmo when there is
+    /// nothing to move: no current selection, or a posed mechanism.
+    MoveGizmo::Layout gizmoLayout() const;
+    /// Take hold of @p layout's @p axis at @p pos. False when there is nothing
+    /// to take. The layout is passed in rather than asked for again: it is what
+    /// the press was hit-tested against, and it is what the whole drag is then
+    /// measured against.
+    bool beginMove(const MoveGizmo::Layout& layout, int axis, const QPoint& pos);
+    /// Put the dragged marker where @p pos has pulled it to.
+    void dragMoveTo(const QPoint& pos);
+    /// Let go, and tell the table how far the marker went.
+    void finishMove();
+    /// Put the marker back where the drag started and let go of it.
+    void cancelMove();
+    /// Forget the drag: no marker held, no arm held, the cursor back. Says
+    /// nothing to anybody -- what a drag came to is the caller's to report.
+    void forgetMove();
 
     TriMesh m_mesh;
     EdgeSet m_edges;
@@ -225,6 +278,7 @@ private:
     bool m_linesUploadPending = false;
     bool m_linkageVisible = true;
     bool m_labelsVisible = true;
+    bool m_pointEditingEnabled = true;
     int m_selectedPoint = -1;
     QList<int> m_selection; ///< in the order picked; holds m_selectedPoint when it is set
     int m_hoveredPoint = -1;
@@ -246,11 +300,22 @@ private:
     int m_hoveredButton = -1;
     int m_pressedButton = -1;
 
-    enum class Drag { None, Orbit, Pan, Gizmo };
+    enum class Drag { None, Orbit, Pan, Gizmo, Move };
     Drag m_drag = Drag::None;
     QPoint m_lastPos;
     QPoint m_pressPos;
     int m_pressedAxis = -1;
+
+    /// The arrow being dragged, and everything the drag is measured against:
+    /// the gizmo as it stood when it was taken hold of, and where the marker
+    /// was then. Both are frozen for the length of the drag, so the point
+    /// follows the pointer instead of drifting away from it as it moves.
+    int m_moveAxis = -1;
+    int m_movePoint = -1;
+    MoveGizmo::Layout m_moveLayout;
+    QVector3D m_moveOrigin;
+    double m_moveDistance = 0.0; ///< along the arm, in world units, so far
+    int m_hoveredMoveAxis = -1;
 };
 
 } // namespace suspkin

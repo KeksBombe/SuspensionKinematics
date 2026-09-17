@@ -1,5 +1,6 @@
 #include "app/PointDialog.h"
 
+#include "app/ExpressionSpinBox.h"
 #include "app/HardpointDelegates.h"
 
 #include <QDialogButtonBox>
@@ -50,12 +51,12 @@ PointDialog::PointDialog(const HardpointTable& table, const Hardpoint& seed, con
 
     const char* axes[3] = { "X", "Y", "Z" };
     for (int axis = 0; axis < 3; ++axis) {
-        auto* spin = new QDoubleSpinBox(this);
+        // The same field the table edits a coordinate in, arithmetic included.
+        auto* spin = new ExpressionSpinBox(this);
         spin->setRange(-kCoordinateLimit, kCoordinateLimit);
         spin->setDecimals(kDecimals);
         spin->setSuffix(tr(" mm"));
         spin->setValue(seed.coord[axis]);
-        spin->setAccelerated(true);
         m_coord[axis] = spin;
         form->addRow(QLatin1String(axes[axis]), spin);
     }
@@ -82,7 +83,12 @@ Hardpoint PointDialog::point() const
 {
     Hardpoint point;
     point.name = m_name->text().trimmed();
-    for (int axis = 0; axis < 3; ++axis) point.coord[axis] = m_coord[axis]->value();
+    for (int axis = 0; axis < 3; ++axis) {
+        // A sum typed into a field and then OK'd straight away has not been
+        // read yet: the field only interprets what is in it when it is left.
+        m_coord[axis]->interpretText();
+        point.coord[axis] = m_coord[axis]->value();
+    }
     return point;
 }
 

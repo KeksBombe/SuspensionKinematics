@@ -1,7 +1,12 @@
 #pragma once
 
+#include "app/framework/AppContext.h"
+#include "app/framework/CommandRegistry.h"
+#include "app/framework/Feature.h"
+#include "app/framework/WindowActions.h"
 #include "io/LinkageTemplate.h"
 #include "io/XlsxHardpoints.h"
+#include "model/Simulation.h"
 #include "model/Sweep.h"
 #include "project/Project.h"
 #include "render/Camera.h"
@@ -24,6 +29,7 @@ class QTimer;
 namespace suspkin {
 
 class AnalysisPanel;
+class CoordinateEntry;
 class HardpointModel;
 class HardpointPanel;
 class MeshQuery;
@@ -38,7 +44,7 @@ class UpdateChecker;
 /// a debounced timer calls after anything at all changes, and which closing the
 /// window calls one last time. There is no "unsaved document" state to lose,
 /// and so no dialog asking about one.
-class MainWindow : public QMainWindow {
+class MainWindow : public QMainWindow, public AppContext, public WindowActions {
     Q_OBJECT
 
 public:
@@ -66,7 +72,32 @@ public:
     const Project& project() const { return m_project; }
 
     /// Write the project out now: the manifest, and the pending hardpoint edits.
-    bool saveProject();
+    bool saveProject() override;
+
+    // --- AppContext: the services a feature may use -------------------------
+    // Nearly all of it is already here; what the interface adds is that a
+    // feature can reach it without knowing this class exists.
+    QWidget* window() override { return this; }
+    WindowActions* windowActions() override { return this; }
+    Project& project() override { return m_project; }
+    void markDirty() override;
+    ViewportWidget* viewport() override { return m_viewport; }
+    HardpointModel* hardpoints() override { return m_hardpointModel; }
+    void showStatus(const QString& text, int milliseconds) override;
+    QDockWidget* hardpointDock() override { return m_hardpointDock; }
+    QDockWidget* analysisDock() override { return m_analysisDock; }
+    AnalysisPanel* analysisPanel() override { return m_analysisPanel; }
+    Ribbon* ribbon() override { return m_ribbon; }
+    const LinkageTemplate& linkageTemplate() const override { return m_linkageTemplate; }
+    const Linkage& linkage() const override { return m_linkage; }
+    const Simulation& simulation() const override { return m_simulation; }
+    const std::vector<WheelPlacement>& wheelPlacements() const override
+    {
+        return m_wheelPlacements;
+    }
+    bool workbookWritable() const override { return m_hardpointSource.isValid(); }
+    void syncTableToViewport(bool refit) override;
+    void refreshCommands() override { updateChrome(); }
 
 signals:
     /// The user asked for a different project. The window is finished with by
@@ -82,64 +113,81 @@ signals:
 protected:
     void closeEvent(QCloseEvent* event) override;
 
+    // --- WindowActions: command bodies that have not moved into a feature yet
+    // Each of these belongs in the feature that registers the command for it;
+    // see WindowActions, which is the list of what is left to move.
 private slots:
-    void importFileDialog();
-    void closeModel();
-    void importHardpointsDialog();
-    void mirrorHardpointsDialog();
-    bool overwriteWorkbook();
-    bool exportWorkbookAs();
-    void closeHardpoints();
+    void importChassisDialog() override;
+    void removeChassis() override;
+    void importHardpointsDialog() override;
+    void mirrorHardpointsDialog() override;
+    bool overwriteWorkbook() override;
+    bool exportWorkbookAs() override;
+    void removeHardpoints() override;
     /// A point of the user's own, next to the selected one. In a project with
     /// no workbook yet this is also what makes one: New Hardpoint Table.
-    void addPointDialog();
-    void deleteSelectedPoints();
-    void renamePointDialog();
+    void addPointDialog() override;
+    void deleteSelectedPoints() override;
+    void renamePointDialog() override;
     /// The targets, the preview, and -- if the user says so -- the points.
-    void generateFromDesignDialog();
-    void importLinkageTemplateDialog();
-    void resetLinkageTemplate();
+    void generateFromDesignDialog() override;
+    void importLinkageTemplateDialog() override;
+    void resetLinkageTemplate() override;
     /// A part drawn through the selected points, written into the template.
-    void newPartFromSelection();
-    void editPartsDialog();
-    void addWheelsDialog();
-    void removeWheels();
-    void exportSweepCsv();
-    void newProject();
-    void openProject();
+    void newPartFromSelection() override;
+    void editPartsDialog() override;
+    void addWheelsDialog() override;
+    void removeWheels() override;
+    void exportSweepCsv() override;
+    void newProject() override;
+    void openProject() override;
+    void showProjectList() override;
+    void revealProjectFolder() override;
+    /// Open the project's template in whatever edits JSON on this machine.
+    void revealTemplateFile() override;
+    /// Let the user say which axle the rack drives, and write it into the
+    /// project's own template.
+    void steeringDialog() override;
+    /// Let the user state each axle's static camber and toe -- or hand an axle
+    /// back to its hardpoints -- and solve again with them.
+    void staticAnglesDialog() override;
+    /// Put every panel back where a new project has it, docked, and keep open
+    /// the ones that were open. What rescues a panel floated onto a monitor
+    /// that is not plugged in today.
+    void resetPanelLayout() override;
 
 private:
-    /// Every command, each one a QAction that the menus and the ribbon both
-    /// show. Built after the docks, because the panel toggles are actions on
-    /// them.
-    void buildActions();
-    /// The tooltip each command's ribbon button shows, and every command put
-    /// on the window itself, so its shortcut works whichever tab is showing.
-    void finishActions();
+    /// Make every command. Built after the docks, because the panel toggles are
+    /// actions on them. What each one is, is its own feature's business.
+    void buildCommands();
+    /// Give every command its tooltip and put it on the window, so its shortcut
+    /// works whichever ribbon tab is showing.
+    void finishCommands();
     /// The File menu, which the ribbon's accent button opens. It is the only
     /// menu the window has: everything else is a tab.
     void buildFileMenu();
     /// The ribbon, as the window's menu widget. There is no menu bar -- see
     /// the definition.
     void buildRibbon();
+    /// The two ways a point is moved in the viewport itself: the arrows on the
+    /// selected marker, and the field that X, Y or Z opens over it. Both end up
+    /// in moveHardpointCoordinate(), so a point dragged and a point typed are
+    /// the same edit.
+    void buildPointEditing();
+    /// Open the coordinate field on @p axis of the point at @p row, holding
+    /// what the table has for it.
+    void openCoordinateEntry(int row, int axis);
+    /// Write one coordinate of one point through the table. That is what makes
+    /// it an edit: the parts, the solve, the wheels and the project all follow
+    /// from the model's own signal.
+    void moveHardpointCoordinate(int row, int axis, double value);
+    /// Say in the status bar where a marker being dragged has got to. A
+    /// readout, not an edit -- the table is untouched until the drag ends.
+    void showDragPosition(int row, int axis, double distance);
+
     void buildHardpointDock();
     void buildAnalysisDock();
     void refreshRecentProjectsMenu();
-    /// The collapse chevron says what clicking it will do, so its text, its
-    /// icon and its tooltip follow the ribbon.
-    void updateCollapseAction();
-    /// Put every panel back where a new project has it, docked, and keep open
-    /// the ones that were open. What rescues a panel floated onto a monitor
-    /// that is not plugged in today.
-    void resetPanelLayout();
-
-    /// Wire up the update checker and, unless the user has turned it off, ask
-    /// GitHub once shortly after the window is up. Does nothing for a portable
-    /// or developer build -- see UpdateChecker.
-    void setUpdateCheckerUp();
-    /// Offer the release to the user and, if they accept, download and install
-    /// it. `userAsked` distinguishes the startup check from the menu item.
-    void offerUpdate(const UpdateRelease& release, bool userAsked);
 
     /// Load what the project already holds: its geometry copy, its workbook copy
     /// and edits file, its view and its window layout.
@@ -157,12 +205,6 @@ private:
     /// Sets @ref m_steeringNote either way; writes nothing to a template that is
     /// somebody's own work.
     void adoptTemplateSteering();
-    /// Let the user say which axle the rack drives, and write it into the
-    /// project's own template.
-    void steeringDialog();
-    /// Let the user state each axle's static camber and toe -- or hand an axle
-    /// back to its hardpoints -- and solve again with them.
-    void staticAnglesDialog();
     /// Resolve the template against the current table and hand the result to
     /// the viewport. Cheap enough to redo whenever either one changes.
     void rebuildLinkage();
@@ -176,25 +218,16 @@ private:
     /// Called from the edit path, so a configuration is never only in a widget.
     void captureHardpointConfig();
 
-    /// Bind the template's mechanism against the current table, once per axle.
-    /// Cheap -- it resolves names and measures link lengths -- so anything that
-    /// changes a coordinate can call it.
+    /// Bind the template's mechanism against the current table and tell the
+    /// panel which axles came out. The solve itself is Simulation's, in the
+    /// core; what is left here is handing it the project's own state and
+    /// putting the answer in front of the user.
     void rebuildSolvers();
     /// Run the sweep the panel is asking for and hand the curve over.
     void refreshSweep();
     /// Put the mechanism where the panel says, or back at the coordinates the
     /// table holds. Nothing here touches the table itself.
     void applySimulation();
-    /// The table as the viewport should draw it: the design coordinates, or
-    /// those coordinates with the solved pose laid over them by name -- and,
-    /// while the body is rolled, every point of it moved with the body.
-    HardpointTable posedTable() const;
-    /// How far each posed upright has turned, by the name of its wheel centre.
-    /// Empty when nothing is being simulated, which leaves every wheel model at
-    /// the attitude its CAD file drew it in.
-    WheelRotations wheelRotations() const;
-    /// The axle the panel has selected, or nothing when none can be solved.
-    const AxleSolver* currentAxle() const;
 
     /// Read the wheel and rim models the project holds and hand them to the
     /// viewport, then place them. The expensive half of the two.
@@ -208,17 +241,10 @@ private:
     void applyWheels(const WheelSpec& spec, const QString& tyrePath, const QString& rimPath);
 
     /// Note that something worth persisting changed, and schedule a save.
-    void markDirty();
     void collectViewState();
     void applyViewState();
 
     void setHardpointTable(HardpointTable table, bool refit);
-    /// Everything that is resolved against the table, resolved again: the
-    /// markers, the parts, the solve, the wheels. The other half of
-    /// setHardpointTable(), for when the model has already been changed a row
-    /// at a time. The parts are indices into the table, so any add, delete or
-    /// rename that skipped this would draw them between the wrong points.
-    void syncTableToViewport(bool refit);
     /// Select @p rows in the viewport and the table together.
     void selectRows(const QList<int>& rows, int current);
     /// Give a project with no workbook one of its own, filled with @p table,
@@ -243,7 +269,9 @@ private:
     void captureMirrorProvenance();
     void updateWindowTitle();
     void updateHardpointStatus();
-    void updateActionState();
+    /// Put everything the window says about its own state back in step: which
+    /// commands can be used, and what the status line reads.
+    void updateChrome();
 
     /// Write the current table to @p path, using the imported workbook as the
     /// template. Nothing else is touched.
@@ -261,58 +289,14 @@ private:
     QLabel* m_hardpointLabel = nullptr;
     QLabel* m_glLabel = nullptr;
 
-    QAction* m_newProjectAction = nullptr;
-    QAction* m_openProjectAction = nullptr;
-    QAction* m_saveProjectAction = nullptr;
-    QAction* m_projectListAction = nullptr;
-    QAction* m_revealProjectAction = nullptr;
-    QAction* m_importAction = nullptr;
-    QAction* m_closeAction = nullptr;
-    QAction* m_quitAction = nullptr;
-    QAction* m_solidAction = nullptr;
-    QAction* m_trianglesAction = nullptr;
-    QAction* m_fitAction = nullptr;
-    QAction* m_importHardpointsAction = nullptr;
-    QAction* m_mirrorAction = nullptr;
-    QAction* m_overwriteWorkbookAction = nullptr;
-    QAction* m_exportWorkbookAction = nullptr;
-    QAction* m_closeHardpointsAction = nullptr;
-    QAction* m_newTableAction = nullptr;
-    QAction* m_addPointAction = nullptr;
-    QAction* m_deletePointAction = nullptr;
-    QAction* m_renamePointAction = nullptr;
-    QAction* m_generateAction = nullptr;
-    QAction* m_newPartAction = nullptr;
-    QAction* m_editPartsAction = nullptr;
-    QAction* m_labelsAction = nullptr;
-    QAction* m_linksAction = nullptr;
-    QAction* m_importLinkageAction = nullptr;
-    QAction* m_resetLinkageAction = nullptr;
-    QAction* m_revealTemplateAction = nullptr;
-    QAction* m_steeringAction = nullptr;
-    QAction* m_staticAnglesAction = nullptr;
-    QAction* m_addWheelsAction = nullptr;
-    QAction* m_removeWheelsAction = nullptr;
-    QAction* m_wheelsAction = nullptr;
-    QAction* m_exportSweepAction = nullptr;
-    /// Front, Rear, Left, Right, Top, Bottom, Isometric, in that order.
-    QList<QAction*> m_presetActions;
-    QActionGroup* m_modeGroup = nullptr;
+    /// Every command the window has, whichever feature contributed it. One
+    /// QAction each, so the ribbon button, the File menu entry and the shortcut
+    /// cannot disagree about whether it is on.
+    CommandRegistry m_commands{ this };
+    /// The features themselves, created from the registry. The window holds
+    /// them and names none of them.
+    std::vector<std::unique_ptr<Feature>> m_features;
     QMenu* m_recentProjectsMenu = nullptr;
-    QAction* m_checkUpdatesAction = nullptr;
-    QAction* m_autoUpdateAction = nullptr;
-    QAction* m_aboutAction = nullptr;
-    QAction* m_licensesAction = nullptr;
-    QAction* m_aboutQtAction = nullptr;
-    UpdateChecker* m_updates = nullptr;
-
-    /// Open a panel, bring it forward when it is behind another, or close it
-    /// when it is in front. In the menus and on every ribbon tab.
-    PanelAction* m_hardpointsPanelAction = nullptr;
-    PanelAction* m_analysisPanelAction = nullptr;
-    PanelAction* m_parametersPanelAction = nullptr;
-    QAction* m_collapseRibbonAction = nullptr;
-    QAction* m_resetLayoutAction = nullptr;
 
     /// The only menu there is: File, from the ribbon's accent button.
     /// Everything else is a ribbon tab.
@@ -329,29 +313,25 @@ private:
     HardpointPanel* m_hardpointPanel = nullptr;
     QDockWidget* m_hardpointDock = nullptr;
 
+    /// The field X, Y and Z open over the viewport. A child of the viewport, so
+    /// it sits over the marker it is about.
+    CoordinateEntry* m_coordinateEntry = nullptr;
+    /// The row that field is open on, because the selection is not allowed to
+    /// answer for it: what was typed belongs to the point it was opened on.
+    int m_entryRow = -1;
+
     AnalysisPanel* m_analysisPanel = nullptr;
     QDockWidget* m_analysisDock = nullptr;
 
-    /// One per corner the template names, whether or not the table holds it.
-    /// Rebuilt whenever the table or the template changes, because both of them
-    /// are what a solver is bound to.
-    std::vector<AxleSolver> m_axles;
+    /// Every axle the template names, bound to the table as it stands. Rebuilt
+    /// whenever either changes, because both are what a solver is bound to.
+    Simulation m_simulation;
     /// The curve on the plot.
     SweepResult m_sweep;
-    /// Why there is no curve, when there is none: a template that does not name
-    /// the mechanism, a table with no complete axle in it.
-    QString m_solverNote;
-    /// Where the mechanism is standing, one entry per axle being posed -- the
-    /// selected one first, then the others when they are along for the ride.
-    /// Empty unless the panel says it is simulating; the table is never changed
-    /// to match any of it.
-    std::vector<AxleSample> m_poses;
-    /// Where the body is, seen from the road, while it rolls: turned about the
-    /// roll axis, taking the geometry, the points and the wheels with it.
-    /// Nothing the rest of the time, which is the body where the table has it.
-    /// Like the poses it is derived, from them and the panel, so there is
-    /// nothing of it to save.
-    std::optional<Rigid> m_bodyMotion;
+    /// Where the car is standing while the panel is simulating, and nothing the
+    /// rest of the time. Derived from the simulation and the panel, so there is
+    /// nothing of it to save, and the table is never changed to match any of it.
+    SimulationPose m_pose;
 
     /// The workbook the points came from, kept whole so saving can rewrite the
     /// value cells and copy every other byte through unchanged.
