@@ -145,8 +145,11 @@ private:
     void collectViewState();
     void applyViewState();
 
-    void updateWindowTitle();
-    void updateHardpointStatus();
+    /// The title: the project, its chassis and its workbook, starred while
+    /// @p pending holds edits the workbook does not have yet.
+    void updateWindowTitle(const HardpointEdits& pending);
+    /// The status line's count of points, parts, wheels and @p pending edits.
+    void updateHardpointStatus(const HardpointEdits& pending);
     /// Put everything the window says about its own state back in step: which
     /// commands can be used, what the status line reads, and the title.
     void updateChrome();

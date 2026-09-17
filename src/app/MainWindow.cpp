@@ -607,14 +607,13 @@ QImage MainWindow::captureWindow()
     return image;
 }
 
-void MainWindow::updateWindowTitle()
+void MainWindow::updateWindowTitle(const HardpointEdits& pending)
 {
     QStringList parts;
     parts << project().name();
     if (!project().geometry().isEmpty())
         parts << QFileInfo(project().geometry().relativePath).fileName();
     if (!project().hardpoints().isEmpty()) {
-        const HardpointEdits pending = m_session->hardpoints().pendingEdits();
         parts << QFileInfo(project().hardpoints().workbook.relativePath).fileName()
                      + (pending.isEmpty() ? QString() : QStringLiteral("*"));
     }
@@ -622,7 +621,7 @@ void MainWindow::updateWindowTitle()
     setWindowTitle(parts.join(QStringLiteral(" - ")));
 }
 
-void MainWindow::updateHardpointStatus()
+void MainWindow::updateHardpointStatus(const HardpointEdits& pending)
 {
     const int count = hardpoints()->rowCount();
     if (count == 0) {
@@ -630,7 +629,6 @@ void MainWindow::updateHardpointStatus()
         return;
     }
 
-    const HardpointEdits pending = m_session->hardpoints().pendingEdits();
     const Linkage& linkage = m_session->linkage().parts();
     const std::vector<WheelPlacement>& wheels = m_session->wheels().placements();
     QString text = project().hardpoints().sheetName.isEmpty()
@@ -655,8 +653,11 @@ void MainWindow::updateChrome()
     m_commands.refreshText();
     const QString& chassis = m_session->chassis().summary();
     m_meshLabel->setText(chassis.isEmpty() ? tr("No chassis imported") : chassis);
-    updateHardpointStatus();
-    updateWindowTitle();
+    // Worked out once for both: this runs on every frame of an animation, and
+    // the diff is the most expensive thing in it.
+    const HardpointEdits pending = m_session->hardpoints().pendingEdits();
+    updateHardpointStatus(pending);
+    updateWindowTitle(pending);
 }
 
 } // namespace suspkin
