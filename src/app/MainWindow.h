@@ -23,9 +23,9 @@ class QMenu;
 namespace suspkin {
 
 class AnalysisPanel;
-class CoordinateEntry;
 class HardpointModel;
 class HardpointPanel;
+class PointEditController;
 class Ribbon;
 
 /// The application window, which always has exactly one project open.
@@ -146,30 +146,8 @@ private:
     /// Make every command. Built after the docks, because the panel toggles are
     /// actions on them. What each one is, is its own feature's business.
     void buildCommands();
-    /// Give every command its tooltip and put it on the window, so its shortcut
-    /// works whichever ribbon tab is showing.
-    void finishCommands();
-    /// The File menu, which the ribbon's accent button opens. It is the only
-    /// menu the window has: everything else is a tab.
-    void buildFileMenu();
-    /// The ribbon, as the window's menu widget. There is no menu bar -- see
-    /// the definition.
+    /// The File menu and the ribbon, as the window's menu widget.
     void buildRibbon();
-    /// The two ways a point is moved in the viewport itself: the arrows on the
-    /// selected marker, and the field that X, Y or Z opens over it. Both end up
-    /// in moveHardpointCoordinate(), so a point dragged and a point typed are
-    /// the same edit.
-    void buildPointEditing();
-    /// Open the coordinate field on @p axis of the point at @p row, holding
-    /// what the table has for it.
-    void openCoordinateEntry(int row, int axis);
-    /// Write one coordinate of one point through the table. That is what makes
-    /// it an edit: the parts, the solve, the wheels and the project all follow
-    /// from the model's own signal.
-    void moveHardpointCoordinate(int row, int axis, double value);
-    /// Say in the status bar where a marker being dragged has got to. A
-    /// readout, not an edit -- the table is untouched until the drag ends.
-    void showDragPosition(int row, int axis, double distance);
 
     /// Push what the session resolves at the viewport and the panel, as it
     /// resolves it.
@@ -191,7 +169,6 @@ private:
 
     void buildHardpointDock();
     void buildAnalysisDock();
-    void refreshRecentProjectsMenu();
 
     /// Load what the project already holds: its geometry copy, its workbook copy
     /// and edits file, its view and its window layout.
@@ -245,11 +222,6 @@ private:
     /// The features themselves, created from the registry. The window holds
     /// them and names none of them.
     std::vector<std::unique_ptr<Feature>> m_features;
-    QMenu* m_recentProjectsMenu = nullptr;
-
-    /// The only menu there is: File, from the ribbon's accent button.
-    /// Everything else is a ribbon tab.
-    QMenu* m_fileMenu = nullptr;
     Ribbon* m_ribbon = nullptr;
     /// Where the docks sit in a project that has never been laid out: taken
     /// before the project's own layout is restored, and what Reset Panel
@@ -259,12 +231,8 @@ private:
     HardpointPanel* m_hardpointPanel = nullptr;
     QDockWidget* m_hardpointDock = nullptr;
 
-    /// The field X, Y and Z open over the viewport. A child of the viewport, so
-    /// it sits over the marker it is about.
-    CoordinateEntry* m_coordinateEntry = nullptr;
-    /// The row that field is open on, because the selection is not allowed to
-    /// answer for it: what was typed belongs to the point it was opened on.
-    int m_entryRow = -1;
+    /// The arrows on a selected marker, and the field X, Y and Z open.
+    PointEditController* m_pointEditing = nullptr;
 
     AnalysisPanel* m_analysisPanel = nullptr;
     QDockWidget* m_analysisDock = nullptr;

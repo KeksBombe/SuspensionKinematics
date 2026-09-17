@@ -244,6 +244,8 @@ qt_add_executable(suspkin
     src/app/framework/FeatureRegistry.cpp
     src/app/framework/RibbonPages.h
     src/app/framework/RibbonPages.cpp
+    src/app/framework/WindowChrome.h
+    src/app/framework/WindowChrome.cpp
     src/app/framework/WindowActions.h
     src/app/framework/WindowActions.cpp
     # The live state a project is unfolded into, with no widget in it: the
@@ -289,9 +291,12 @@ qt_add_executable(suspkin
     # generator's targets and preview, and a part through the selection.
     src/app/PointDialog.h
     src/app/PointDialog.cpp
-    # Moving a point without the table: the field X, Y and Z open over the
-    # viewport, and the coordinate editor that does arithmetic -- the same one
+    # Moving a point without the table: the arrows on a selected marker and the
+    # field X, Y and Z open over the viewport, both written through the table's
+    # own model, and the coordinate editor that does arithmetic -- the same one
     # the table and the new-point dialog use.
+    src/app/PointEditController.h
+    src/app/PointEditController.cpp
     src/app/CoordinateEntry.h
     src/app/CoordinateEntry.cpp
     src/app/ExpressionSpinBox.h

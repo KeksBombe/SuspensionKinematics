@@ -1,27 +1,26 @@
 #include "app/MainWindow.h"
 
 #include "app/AnalysisPanel.h"
-#include "app/CoordinateEntry.h"
 #include "app/GenerateDialog.h"
 #include "app/HardpointModel.h"
 #include "app/HardpointPanel.h"
 #include "app/Icons.h"
 #include "app/MirrorDialog.h"
 #include "app/PanelAction.h"
+#include "app/PointEditController.h"
 #include "app/PartDialogs.h"
 #include "app/PointDialog.h"
 #include "app/ProjectLauncher.h"
 #include "app/RecentProjects.h"
 #include "app/Ribbon.h"
 #include "app/framework/FeatureRegistry.h"
-#include "app/framework/RibbonPages.h"
+#include "app/framework/WindowChrome.h"
 #include "app/StaticAnglesDialog.h"
 #include "app/SteeringDialog.h"
 #include "app/WheelDialog.h"
 #include "io/LinkageTemplate.h"
 #include "io/MeshImport.h"
 #include "model/HardpointGenerator.h"
-#include "render/MoveGizmo.h"
 
 #include <QAction>
 #include <QApplication>
@@ -72,11 +71,12 @@ MainWindow::MainWindow(Project project, QWidget* parent)
     connectSession();
     // After the dock, because moving a point in the viewport goes through the
     // same model the table edits.
-    buildPointEditing();
+    m_pointEditing = new PointEditController(
+        m_viewport, hardpoints(),
+        [this](const QString& text, int milliseconds) { showStatus(text, milliseconds); }, this);
     buildCommands();
-    buildFileMenu();
     buildRibbon();
-    finishCommands();
+    finishCommands(this, m_commands);
 
     connect(m_viewport, &ViewportWidget::viewChanged, this, [this] { markDirty(); });
 
@@ -179,90 +179,6 @@ void MainWindow::buildHardpointDock()
     });
 }
 
-void MainWindow::buildPointEditing()
-{
-    // A child of the viewport: it opens over the marker it is about, and it is
-    // gone as soon as the viewport is.
-    m_coordinateEntry = new CoordinateEntry(m_viewport);
-
-    connect(m_viewport, &ViewportWidget::coordinateEntryRequested, this,
-            &MainWindow::openCoordinateEntry);
-    connect(m_coordinateEntry, &CoordinateEntry::committed, this,
-            [this](int axis, double value) { moveHardpointCoordinate(m_entryRow, axis, value); });
-    connect(m_coordinateEntry, &CoordinateEntry::closed, this, [this] {
-        m_entryRow = -1;
-        // The viewport takes the keyboard back, so the next X, Y or Z lands
-        // where the first one did rather than nowhere.
-        m_viewport->setFocus(Qt::OtherFocusReason);
-    });
-
-    // Nothing on the ribbon says that a selected point can be dragged or typed
-    // at, so picking one in the viewport says it. The table's own selection
-    // does not: there the coordinate columns are already in front of the user.
-    connect(m_viewport, &ViewportWidget::hardpointSelectionEdited, this,
-            [this](const QList<int>&, int current) {
-                if (current < 0 || !m_viewport->pointEditingEnabled()) return;
-                const HardpointTable& table = hardpoints()->table();
-                if (current >= static_cast<int>(table.points.size())) return;
-                statusBar()->showMessage(
-                    tr("%1 — drag an arrow to move it, or press X, Y or Z to type a coordinate")
-                        .arg(table.points[static_cast<std::size_t>(current)].name),
-                    6000);
-            });
-
-    // A drag says where it has got to the whole way along and what it came to
-    // at the end. Only the end is an edit; the rest is a readout.
-    connect(m_viewport, &ViewportWidget::hardpointDragging, this, &MainWindow::showDragPosition);
-    connect(m_viewport, &ViewportWidget::hardpointMoved, this,
-            [this](int row, int axis, double distance) {
-                const HardpointTable& table = hardpoints()->table();
-                if (row < 0 || row >= static_cast<int>(table.points.size())) return;
-                // Added to the table's own double, not read back off the
-                // marker: the marker is a float, and the two coordinates the
-                // drag did not touch have to come through it unchanged.
-                moveHardpointCoordinate(
-                    row, axis, table.points[static_cast<std::size_t>(row)].coord[axis] + distance);
-            });
-}
-
-void MainWindow::openCoordinateEntry(int row, int axis)
-{
-    const HardpointTable& table = hardpoints()->table();
-    if (row < 0 || row >= static_cast<int>(table.points.size())) return;
-
-    QPointF anchor;
-    if (!m_viewport->markerPosition(row, &anchor)) return; // off screen: nothing to open beside
-
-    const Hardpoint& point = table.points[static_cast<std::size_t>(row)];
-    m_entryRow = row;
-    m_coordinateEntry->openAt(anchor, point.name, axis, point.coord[axis]);
-}
-
-void MainWindow::moveHardpointCoordinate(int row, int axis, double value)
-{
-    if (row < 0 || row >= hardpoints()->rowCount()) return;
-    if (axis < 0 || axis >= 3) return;
-
-    // Through the model, exactly as the table's own cell does it: what follows
-    // -- the parts, the solve, the wheels, the edits file -- hangs off the
-    // coordinateChanged() that this produces.
-    const QModelIndex index = hardpoints()->index(row, HardpointModel::XColumn + axis);
-    hardpoints()->setData(index, value, Qt::EditRole);
-}
-
-void MainWindow::showDragPosition(int row, int axis, double distance)
-{
-    const HardpointTable& table = hardpoints()->table();
-    if (row < 0 || row >= static_cast<int>(table.points.size())) return;
-
-    const Hardpoint& point = table.points[static_cast<std::size_t>(row)];
-    const QLocale locale;
-    statusBar()->showMessage(tr("%1  %2 %3 mm  (%4 mm)")
-                                 .arg(point.name, MoveGizmo::axisLabel(axis),
-                                      locale.toString(point.coord[axis] + distance, 'f', 3),
-                                      locale.toString(distance, 'f', 3)));
-}
-
 // ---------------------------------------------------------------------------
 // Undo and redo
 // ---------------------------------------------------------------------------
@@ -273,7 +189,7 @@ void MainWindow::restoreEditState(const EditState& from, const EditState& to)
     const QStringList selected = selectedPointNames();
 
     // The field was typing into a point that may be about to move or go.
-    m_coordinateEntry->dismiss();
+    m_pointEditing->dismiss();
     HardpointModel* model = hardpoints();
     // Read off the table as it is on screen, which is what the wheels name.
     const QHash<QString, QString> renamed = renamedPoints(model->table(), to.table);
@@ -439,7 +355,7 @@ void MainWindow::showPose()
     // Posed markers are not where the table has them, so the arrows come off:
     // a drag would be writing a design coordinate read off a simulated one.
     m_viewport->setPointEditingEnabled(pose.isEmpty());
-    if (!pose.isEmpty()) m_coordinateEntry->dismiss();
+    if (!pose.isEmpty()) m_pointEditing->dismiss();
 
     m_viewport->setMeshTransform(pose.bodyMotion ? pose.bodyMotion->toMatrix() : QMatrix4x4());
 
@@ -471,56 +387,14 @@ void MainWindow::revealTemplateFile()
     QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
-void MainWindow::finishCommands()
-{
-    // A ribbon button shows its action's tooltip, and Qt adds neither the
-    // shortcut nor the status tip to one by itself.
-    for (QAction* action : m_commands.all()) action->setToolTip(commandToolTip(action));
-
-    // On the window itself as well as wherever it is shown: a shortcut is live
-    // only while some widget the action is on is visible, and with the menu
-    // bar hidden and its button on a tab that is not showing, Ctrl+I would
-    // otherwise do nothing at all.
-    addActions(m_commands.all());
-}
-
-void MainWindow::buildFileMenu()
-{
-    // There is no menu bar, and this is the only menu: the ribbon's File
-    // button opens it, because what is in it -- the project itself, and the
-    // way out -- is not a tab's worth of commands. Everything else, Help
-    // included, is a tab. The mnemonic still works: Alt+F opens this.
-    //
-    // By id rather than by name: these commands belong to a feature the window
-    // knows nothing else about.
-    m_fileMenu = new QMenu(tr("&File"), this);
-    m_fileMenu->addAction(m_commands.action(QStringLiteral("project.new")));
-    m_fileMenu->addAction(m_commands.action(QStringLiteral("project.open")));
-    m_recentProjectsMenu = m_fileMenu->addMenu(tr("Open &Recent"));
-    m_recentProjectsMenu->setIcon(Icons::get(Icon::History));
-    m_fileMenu->addSeparator();
-    m_fileMenu->addAction(m_commands.action(QStringLiteral("project.save")));
-    m_fileMenu->addAction(m_commands.action(QStringLiteral("project.list")));
-    m_fileMenu->addAction(m_commands.action(QStringLiteral("project.reveal")));
-    m_fileMenu->addSeparator();
-    m_fileMenu->addAction(m_commands.action(QStringLiteral("project.quit")));
-    connect(m_fileMenu, &QMenu::aboutToShow, this, &MainWindow::refreshRecentProjectsMenu);
-    refreshRecentProjectsMenu();
-}
-
 void MainWindow::buildRibbon()
 {
-    m_ribbon = new Ribbon;
-    m_ribbon->setApplicationMenu(m_fileMenu, tr("&File"));
-    buildRibbonFrom(m_ribbon, m_commands);
-
-    // The ribbon is the whole of the window's chrome: there is no menu bar
-    // above it, because the tabs said the same words the menus did.
-    //
-    // From here on QMainWindow::menuBar() must never be called. On a window
-    // whose menu widget is not a QMenuBar it makes one and installs it through
-    // setMenuWidget(), which deleteLater()s what was there -- the ribbon.
-    setMenuWidget(m_ribbon);
+    QMenu* fileMenu = buildFileMenu(this, m_commands, project().manifestPath(),
+                                    [this](const QString& manifestPath) {
+                                        saveProject();
+                                        emit openProjectRequested(manifestPath);
+                                    });
+    m_ribbon = suspkin::buildRibbon(this, fileMenu, m_commands);
 
     // After the pages are in, so building them -- the first tab becoming
     // current -- is not taken for the user choosing it. What the chevron says
@@ -544,28 +418,6 @@ void MainWindow::resetPanelLayout()
     if (analysisOpen) m_analysisDock->show();
     markDirty();
     statusBar()->showMessage(tr("Panels docked where a new project has them."), 4000);
-}
-
-void MainWindow::refreshRecentProjectsMenu()
-{
-    if (!m_recentProjectsMenu) return;
-    m_recentProjectsMenu->clear();
-
-    const QString current = QFileInfo(project().manifestPath()).absoluteFilePath();
-    int shown = 0;
-    for (const RecentProject& entry : RecentProjects::load()) {
-        if (QFileInfo(entry.manifestPath).absoluteFilePath() == current) continue;
-        if (!entry.exists()) continue;
-        auto* action = m_recentProjectsMenu->addAction(
-            QStringLiteral("%1  -  %2").arg(entry.name, QDir::toNativeSeparators(entry.directory())));
-        const QString path = entry.manifestPath;
-        connect(action, &QAction::triggered, this, [this, path] {
-            saveProject();
-            emit openProjectRequested(path);
-        });
-        ++shown;
-    }
-    m_recentProjectsMenu->setEnabled(shown > 0);
 }
 
 // ---------------------------------------------------------------------------
