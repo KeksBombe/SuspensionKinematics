@@ -83,6 +83,13 @@ struct CommandSpec {
     /// it governs, rather than in one function that has to know every command
     /// in the application.
     std::function<bool()> enabledWhen;
+
+    /// What it is called right now, for a command whose name follows the state:
+    /// Undo says which step it would take back. Asked whenever @ref enabledWhen
+    /// is, and the tooltip follows. Nothing means @ref text, always. The ribbon
+    /// labels a button with @ref iconText, which stays put, so a button does not
+    /// change width under the pointer.
+    std::function<QString()> textWhen;
 };
 
 } // namespace suspkin

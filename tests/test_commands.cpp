@@ -42,6 +42,7 @@ private slots:
     void aCommandDecidesForItselfWhetherItCanBeUsed();
     void aRuleIsAskedOnceWhenItIsGivenRatherThanAnEventLoopLater();
     void aCommandWithNoRuleIsNeverDisabled();
+    void aCommandsNameCanFollowTheStateAndItsTooltipFollowsIt();
     void aCheckableCommandHidesItsIconInMenusAndKeepsItsDefault();
     void aCommandMayAppearInMoreThanOnePlace();
     void aCommandThatSaidNothingAboutTheRibbonIsNotOnIt();
@@ -123,6 +124,37 @@ void TestCommands::aCommandWithNoRuleIsNeverDisabled()
     QVERIFY(action->isEnabled());
     commands.refreshEnabled();
     QVERIFY(action->isEnabled());
+}
+
+void TestCommands::aCommandsNameCanFollowTheStateAndItsTooltipFollowsIt()
+{
+    QObject owner;
+    CommandRegistry commands(&owner);
+
+    QString step;
+    CommandSpec spec = named(QStringLiteral("edit.undo"), QStringLiteral("&Undo"));
+    spec.iconText = QStringLiteral("Undo");
+    spec.textWhen = [&step] {
+        return step.isEmpty() ? QStringLiteral("&Undo") : QStringLiteral("&Undo %1").arg(step);
+    };
+    QAction* action = commands.add(std::move(spec));
+
+    step = QStringLiteral("Move F_UCA_IF");
+    commands.refreshText();
+    QCOMPARE(action->text(), QStringLiteral("&Undo Move F_UCA_IF"));
+    QVERIFY(action->toolTip().contains(QStringLiteral("Undo Move F_UCA_IF")));
+    // The ribbon's label stays what it was, so the button keeps its width.
+    QCOMPARE(action->iconText(), QStringLiteral("Undo"));
+
+    step.clear();
+    commands.refreshText();
+    QCOMPARE(action->text(), QStringLiteral("&Undo"));
+    QVERIFY(!action->toolTip().contains(QStringLiteral("F_UCA_IF")));
+
+    // A command that never asked keeps the name it was given.
+    QAction* plain = commands.add(named(QStringLiteral("a.plain"), QStringLiteral("Plain")));
+    commands.refreshText();
+    QCOMPARE(plain->text(), QStringLiteral("Plain"));
 }
 
 void TestCommands::aCheckableCommandHidesItsIconInMenusAndKeepsItsDefault()

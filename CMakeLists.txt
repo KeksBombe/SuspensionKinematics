@@ -104,6 +104,11 @@ add_library(suspkin_core STATIC
     # "-0.5" after what is already in it.
     src/model/Expression.h
     src/model/Expression.cpp
+    # Undo and redo: the states the user's editing of the points has passed
+    # through. Whole states over the core types, so stepping through them is
+    # tested without a window.
+    src/model/EditHistory.h
+    src/model/EditHistory.cpp
     src/model/HardpointMirror.h
     src/model/HardpointMirror.cpp
     # Where the wheel models are placed: pure geometry over the hardpoint table,
@@ -244,6 +249,7 @@ qt_add_executable(suspkin
     src/app/features/ProjectFeature.cpp
     src/app/features/GeometryFeature.cpp
     src/app/features/WheelsFeature.cpp
+    src/app/features/EditFeature.cpp
     src/app/features/HardpointsFeature.cpp
     src/app/features/LinkageFeature.cpp
     src/app/features/AnalysisFeature.cpp
@@ -362,8 +368,8 @@ qt_add_resources(suspkin "shaders"
 # list and the table in src/app/Icons.cpp are the only two places an icon is
 # named, and test_icons -- which embeds this same list -- checks they agree.
 set(SUSPKIN_ICON_NAMES
-    adjustments-horizontal angle braces chart-line chevron-down chevron-up
-    cloud-download cube device-floppy edit file-export file-import
+    adjustments-horizontal angle arrow-back-up arrow-forward-up braces chart-line
+    chevron-down chevron-up cloud-download cube device-floppy edit file-export file-import
     file-spreadsheet file-type-csv file-x flip-horizontal focus-centered
     folder-open folder-plus folder-search forms history info-circle info-square-rounded
     layout-dashboard license line list-details logout refresh restore row-insert-bottom

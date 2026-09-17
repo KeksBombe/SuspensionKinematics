@@ -10,12 +10,14 @@ class QWidget;
 namespace suspkin {
 
 class AnalysisPanel;
+class EditHistory;
 class HardpointModel;
 class Ribbon;
 class Simulation;
 class ViewportWidget;
 class Project;
 class WindowActions;
+struct EditState;
 struct Linkage;
 struct LinkageTemplate;
 struct WheelPlacement;
@@ -75,6 +77,16 @@ public:
     /// Ask every command whether it can still be used, and say what the status
     /// line should now read.
     virtual void refreshCommands() = 0;
+
+    // --- undo and redo ------------------------------------------------------
+    /// Every state the user's editing of the points has passed through. The
+    /// window records into it -- the edits are its own -- and a feature steps
+    /// through it.
+    virtual EditHistory& editHistory() = 0;
+    /// Put the project back in @p to, coming from @p from: the points, what
+    /// they are for, and everything resolved against them. What the step
+    /// between the two touched is selected, so the user sees what came back.
+    virtual void restoreEditState(const EditState& from, const EditState& to) = 0;
 };
 
 } // namespace suspkin

@@ -52,6 +52,9 @@ public:
     /// predicate each -- so anything that changes the window's state can call
     /// it rather than working out which commands it touched.
     void refreshEnabled() const;
+    /// Ask every command whose name follows the state what it is called now,
+    /// and rename it -- tooltip and all. Only the few that asked to be.
+    void refreshText() const;
 
 private:
     QObject* m_parent = nullptr;
@@ -61,6 +64,7 @@ private:
     /// Kept beside the actions rather than on them: a QAction has nowhere to
     /// put a predicate.
     std::vector<std::pair<QAction*, std::function<bool()>>> m_rules;
+    std::vector<std::pair<QAction*, std::function<QString()>>> m_texts;
 };
 
 } // namespace suspkin

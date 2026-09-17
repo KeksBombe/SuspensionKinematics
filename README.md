@@ -75,6 +75,8 @@ so its normals come from the real surface and a bore shades as the cylinder it i
 | Drag an arrow on a selected marker | Move that point along X, Y or Z |
 | `X`, `Y`, `Z` | Type that coordinate of the selected point, arithmetic allowed |
 | `Esc` while dragging | Put the point back where the drag started |
+| `Ctrl+Z` | Undo the last change to the points |
+| `Ctrl+Shift+Z` (or `Ctrl+Y`) | Redo it |
 | `Ctrl+H` | Show or hide the hardpoint table |
 | `Ctrl+I` | Import hardpoints |
 | `Ctrl+M` | Mirror hardpoints to the other side |
@@ -189,9 +191,9 @@ A point does not have to come out of a workbook.
 
 - **Hardpoints ▸ Add Point** (`Ins`) adds one next to the selected point, starting
   at its coordinates with a name that is free.
-- **Delete Point** (`Del`) deletes every selected point, after asking. A point the
-  workbook holds stays in it until the workbook is overwritten; until then the
-  project remembers it as deleted.
+- **Delete Point** (`Del`) deletes every selected point. It does not ask:
+  `Ctrl+Z` brings them back. A point the workbook holds stays in it until the
+  workbook is overwritten; until then the project remembers it as deleted.
 - **Rename Point**, or a double-click on the name in the table, renames one. The
   name is the key the parts, the solver and the configuration find a point by, so
   its configuration and anything mirrored from it go with it. A name has to be
@@ -204,6 +206,37 @@ A point does not have to come out of a workbook.
 
 A new point comes back where you put it when the project reopens, rather than at
 the bottom of the table.
+
+### Undo and redo
+
+**Undo** (`Ctrl+Z`) takes back the last change to the points, and **Redo**
+(`Ctrl+Shift+Z`, or `Ctrl+Y`) makes it again. Both are also at the start of the
+Hardpoints tab, where hovering says what they would do -- *Undo Move F_UCA_IF*,
+*Redo Delete 2 points* -- and the status bar says what was done. After a step,
+the points it touched are selected, so you can see what came back.
+
+What counts as a change to the points:
+
+- a coordinate, however it was changed -- a table cell, an arrow, the X, Y or Z
+  field;
+- what a point is for: its type, its two parts, its bushing;
+- adding, deleting and renaming a point (a wheel centred on a renamed point
+  follows it back and forth);
+- Mirror Hardpoints and Generate from Design, each as one step;
+- the static camber and toe, which Generate from Design sets along with the
+  points.
+
+The rest is not undone this way. Importing a workbook, starting a new table and
+removing the hardpoints copy or delete files, so they start the history again
+rather than become a step in it. The linkage template, the wheel and chassis
+models, the design targets and the mirroring rule stay as they are when you step
+back through the points, and so does the view. Anything you type into a field
+that is still open -- a cell being edited, the X, Y or Z field -- is undone by
+`Ctrl+Z` inside that field first.
+
+The history lasts as long as the window. Where you ended up is saved with the
+project as always; the steps that led there are not, so a project reopens with
+nothing to undo.
 
 ### Generating a corner from design targets
 

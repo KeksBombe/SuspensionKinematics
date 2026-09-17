@@ -1,5 +1,7 @@
 #include "app/framework/CommandRegistry.h"
 
+#include "app/Ribbon.h"
+
 #include <QAction>
 #include <QObject>
 
@@ -29,6 +31,7 @@ QAction* CommandRegistry::add(CommandSpec spec)
     // run for the act of pressing it -- which is what an exclusive group wants,
     // where pressing the one already down is still a choice.
     if (spec.run) QObject::connect(action, &QAction::triggered, m_parent, spec.run);
+    if (spec.textWhen) m_texts.emplace_back(action, std::move(spec.textWhen));
 
     return adopt(action, spec.id, std::move(spec.ribbon), std::move(spec.enabledWhen));
 }
@@ -57,6 +60,17 @@ QAction* CommandRegistry::action(const QString& id) const
 void CommandRegistry::refreshEnabled() const
 {
     for (const auto& [action, rule] : m_rules) action->setEnabled(rule());
+}
+
+void CommandRegistry::refreshText() const
+{
+    for (const auto& [action, text] : m_texts) {
+        const QString now = text();
+        if (now == action->text()) continue;
+        action->setText(now);
+        // A tool button shows the tooltip, which was built from the old name.
+        action->setToolTip(commandToolTip(action));
+    }
 }
 
 } // namespace suspkin

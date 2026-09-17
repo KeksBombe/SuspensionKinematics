@@ -17,6 +17,8 @@ namespace suspkin {
 enum class Icon {
     AdjustmentsHorizontal,
     Angle,
+    ArrowBackUp,
+    ArrowForwardUp,
     Braces,
     ChartLine,
     ChevronDown,

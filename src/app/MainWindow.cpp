@@ -198,14 +198,7 @@ void MainWindow::buildHardpointDock()
     // again.
     connect(m_hardpointModel, &HardpointModel::pointRenamed, this,
             [this](int row, const QString& from, const QString& to) {
-                WheelsRef wheels = m_project.wheels();
-                bool wheelsChanged = false;
-                for (const WheelCorner corner : kWheelCorners) {
-                    if (wheels.spec.point(corner) != from) continue;
-                    wheels.spec.setPoint(corner, to);
-                    wheelsChanged = true;
-                }
-                if (wheelsChanged) m_project.setWheels(wheels);
+                moveWheelsToRenamedPoints({ { from, to } });
 
                 // Into the project before anything is resolved again: the
                 // configuration table is refilled from the project's copy, and
@@ -217,6 +210,7 @@ void MainWindow::buildHardpointDock()
                 syncTableToViewport(false);
                 selectRows(selection.isEmpty() ? QList<int>{ row } : selection, row);
                 markDirty();
+                recordEdit(tr("Rename %1 to %2").arg(from, to));
                 statusBar()->showMessage(tr("Renamed %1 to %2").arg(from, to), 5000);
             });
 
@@ -231,15 +225,20 @@ void MainWindow::buildHardpointDock()
         applySimulation();
         markDirty();
         updateWindowTitle();
-        updateChrome();
+        // The table's cell, the arrows and the X, Y and Z field all arrive
+        // here, so each of them is one step back.
+        recordEdit(tr("Move %1").arg(table.points[static_cast<std::size_t>(row)].name));
     });
 
     // What a point is for is project state like everything else, so an accepted
     // edit is in the project before this lambda returns. The model has already
     // refused anything that could not mean something.
-    connect(m_hardpointModel, &HardpointModel::configChanged, this, [this](int) {
+    connect(m_hardpointModel, &HardpointModel::configChanged, this, [this](int row) {
         captureHardpointConfig();
         markDirty();
+        const HardpointTable& table = m_hardpointModel->table();
+        if (row >= 0 && row < static_cast<int>(table.points.size()))
+            recordEdit(tr("Configure %1").arg(table.points[static_cast<std::size_t>(row)].name));
     });
 }
 
@@ -325,6 +324,97 @@ void MainWindow::showDragPosition(int row, int axis, double distance)
                                  .arg(point.name, MoveGizmo::axisLabel(axis),
                                       locale.toString(point.coord[axis] + distance, 'f', 3),
                                       locale.toString(distance, 'f', 3)));
+}
+
+// ---------------------------------------------------------------------------
+// Undo and redo
+// ---------------------------------------------------------------------------
+
+EditState MainWindow::currentEditState() const
+{
+    return EditState{ m_hardpointModel->table(), m_hardpointModel->config(),
+                      m_project.alignment() };
+}
+
+void MainWindow::recordEdit(const QString& label)
+{
+    m_history.record(label, currentEditState());
+    // Undo and Redo say what they would do, so they follow every step.
+    updateChrome();
+}
+
+void MainWindow::restartEditHistory()
+{
+    m_history.reset(currentEditState());
+    updateChrome();
+}
+
+void MainWindow::restoreEditState(const EditState& from, const EditState& to)
+{
+    // Taken before the rows move under it.
+    const QStringList selected = selectedPointNames();
+    applyEditState(to);
+    // What the step touched, so the user sees what came back. A step whose
+    // points have all gone again -- an undone Add -- leaves the selection that
+    // was there, less what went.
+    const QStringList touched = touchedPoints(from, to);
+    selectPointsNamed(touched.isEmpty() ? selected : touched);
+}
+
+void MainWindow::applyEditState(const EditState& state)
+{
+    // The field was typing into a point that may be about to move or go.
+    m_coordinateEntry->dismiss();
+    // Read off the table as it is on screen, which is what the wheels name.
+    const QHash<QString, QString> renamed = renamedPoints(m_hardpointModel->table(), state.table);
+
+    m_hardpointModel->setTable(state.table);
+    m_hardpointModel->setConfig(state.config);
+    m_project.setAlignment(state.alignment);
+    moveWheelsToRenamedPoints(renamed);
+    // Into the project before anything is resolved again: the configuration is
+    // refilled from the project's copy, and a step that renamed or deleted a
+    // point would otherwise be taken back by that refill.
+    captureHardpointConfig();
+    captureMirrorProvenance();
+    syncTableToViewport(false);
+    markDirty();
+}
+
+void MainWindow::moveWheelsToRenamedPoints(const QHash<QString, QString>& renamed)
+{
+    if (renamed.isEmpty()) return;
+
+    WheelsRef wheels = m_project.wheels();
+    bool moved = false;
+    for (const WheelCorner corner : kWheelCorners) {
+        const auto to = renamed.constFind(wheels.spec.point(corner));
+        if (to == renamed.constEnd()) continue;
+        wheels.spec.setPoint(corner, *to);
+        moved = true;
+    }
+    if (moved) m_project.setWheels(wheels);
+}
+
+QStringList MainWindow::selectedPointNames() const
+{
+    const HardpointTable& table = m_hardpointModel->table();
+    QStringList names;
+    for (const int row : m_viewport->selectedHardpoints())
+        if (row >= 0 && row < static_cast<int>(table.size()))
+            names << table.points[static_cast<std::size_t>(row)].name;
+    return names;
+}
+
+void MainWindow::selectPointsNamed(const QStringList& names)
+{
+    const HardpointTable& table = m_hardpointModel->table();
+    QList<int> rows;
+    for (const QString& name : names) {
+        const int row = table.indexOf(name);
+        if (row >= 0) rows << row;
+    }
+    selectRows(rows, rows.isEmpty() ? -1 : rows.front());
 }
 
 void MainWindow::buildAnalysisDock()
@@ -534,8 +624,10 @@ void MainWindow::openProjectContents()
         m_hardpointDock->show();
 
     updateHardpointStatus();
-    updateChrome();
     updateWindowTitle();
+    // After everything that fills the configuration in, so the state nothing
+    // undoes past is the project as it opened -- not half of it.
+    restartEditHistory();
 
     m_loading = false;
     RecentProjects::remember(m_project.manifestPath(), m_project.name());
@@ -797,6 +889,10 @@ void MainWindow::staticAnglesDialog()
     refreshSweep();
     applySimulation();
     markDirty();
+    // A step of its own: Generate from Design writes these too, so they are in
+    // every state, and an angle changed without a step would be put back by
+    // the next undo of anything.
+    recordEdit(tr("Set static camber and toe"));
     statusBar()->showMessage(tr("Static camber and toe saved with the project."), 5000);
 }
 
@@ -1354,6 +1450,9 @@ void MainWindow::loadHardpointFile(const QString& path)
     }
 
     setHardpointTable(m_baseline, !m_viewport->hasMesh());
+    // An import is not an edit: the steps that led to the old points lead
+    // nowhere in these.
+    restartEditHistory();
     m_hardpointDock->show();
     m_hardpointDock->raise();
     markDirty();
@@ -1420,6 +1519,7 @@ void MainWindow::mirrorHardpointsDialog()
     setHardpointTable(outcome.table, false);
     captureMirrorProvenance();
     markDirty();
+    recordEdit(tr("Mirror %n point(s)", "", outcome.added + outcome.updated));
 
     statusBar()->showMessage(tr("Mirrored %1 hardpoint(s), replaced %2")
                                  .arg(outcome.added)
@@ -1577,7 +1677,8 @@ void MainWindow::removeHardpoints()
     rebuildWheels();
     m_hardpointDock->hide();
     updateHardpointStatus();
-    updateChrome();
+    // The workbook and the edits file are deleted, which no step can put back.
+    restartEditHistory();
     updateWindowTitle();
     markDirty();
 }
@@ -1633,6 +1734,9 @@ bool MainWindow::adoptNewWorkbook(const HardpointTable& table)
 
     applyMirrorProvenance(m_baseline);
     setHardpointTable(m_baseline, !m_viewport->hasMesh());
+    // The table begins here. Undoing past it would need the workbook that was
+    // just made to be unmade, which is Remove Hardpoints, not a step.
+    restartEditHistory();
     m_hardpointDock->show();
     m_hardpointDock->raise();
     markDirty();
@@ -1680,6 +1784,7 @@ void MainWindow::addPointDialog()
     selectRows({ row }, row);
     markDirty();
     updateWindowTitle();
+    recordEdit(tr("Add %1").arg(point.name));
     statusBar()->showMessage(tr("Added %1").arg(point.name), 5000);
 }
 
@@ -1688,23 +1793,13 @@ void MainWindow::deleteSelectedPoints()
     const QList<int> rows = m_viewport->selectedHardpoints();
     if (rows.isEmpty()) return;
 
-    const HardpointTable& table = m_hardpointModel->table();
-    QStringList names;
-    for (const int row : rows) names << table.points[static_cast<std::size_t>(row)].name;
-    std::sort(names.begin(), names.end());
-    QString list = names.mid(0, 12).join(QStringLiteral(", "));
-    if (names.size() > 12) list += tr(" and %1 more").arg(names.size() - 12);
-
-    // There is no undo in this application, so a delete is asked about -- and
-    // the answer says where a point the workbook holds can still be found.
-    const QMessageBox::StandardButton answer = QMessageBox::question(
-        this, tr("Delete points"),
-        tr("Delete %n point(s)?\n\n%1\n\nA point the workbook holds stays in it until the "
-           "workbook is overwritten; until then the project remembers it as deleted.",
-           "", names.size())
-            .arg(list),
-        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-    if (answer != QMessageBox::Yes) return;
+    // Not asked about: Ctrl+Z brings them back. A point the workbook holds
+    // stays in it until the workbook is overwritten, as the command says.
+    const QString label =
+        rows.size() == 1
+            ? tr("Delete %1").arg(
+                  m_hardpointModel->table().points[static_cast<std::size_t>(rows.front())].name)
+            : tr("Delete %n point(s)", "", rows.size());
 
     const int first = *std::min_element(rows.begin(), rows.end());
     m_hardpointModel->removePoints(std::vector<int>(rows.begin(), rows.end()));
@@ -1718,7 +1813,9 @@ void MainWindow::deleteSelectedPoints()
     if (next >= 0) selectRows({ next }, next);
     markDirty();
     updateWindowTitle();
-    statusBar()->showMessage(tr("Deleted %n point(s)", "", names.size()), 5000);
+    recordEdit(label);
+    statusBar()->showMessage(tr("Deleted %n point(s). Ctrl+Z brings them back.", "", rows.size()),
+                             6000);
 }
 
 void MainWindow::renamePointDialog()
@@ -1847,6 +1944,11 @@ void MainWindow::generateFromDesignDialog()
 
     markDirty();
     updateWindowTitle();
+    // The points and the angles, one step. The steering written into the
+    // template is not in it: the template is not an edit of the points. In a
+    // project that had no workbook this records nothing -- the table began
+    // with these points.
+    recordEdit(tr("Generate from design"));
     // The advice goes on the status bar as well as in the dialog, and is not
     // applied: whether to move a chassis pivot is the designer's call.
     const QString done = tr("Generated %1 point(s): %2 new, %3 moved.")
@@ -1919,7 +2021,11 @@ void MainWindow::editPartsDialog()
             renamed.label = it.value();
             const QString from = partBodyName(part);
             const QString to = partBodyName(renamed);
-            if (from != to && !catalog.contains(from)) moved += renameBody(config, from, to);
+            if (from == to || catalog.contains(from)) continue;
+            moved += renameBody(config, from, to);
+            // True of every step, which all describe this part: an undo must
+            // not put back rows naming a body the template no longer has.
+            m_history.renameBody(from, to);
         }
     }
     if (moved > 0) {
@@ -2342,10 +2448,12 @@ void MainWindow::updateHardpointStatus()
 
 void MainWindow::updateChrome()
 {
-    // Each command decides for itself whether it can be used; this asks them
-    // all. Cheap -- a predicate each -- so anything that changes the window's
-    // state can call it rather than working out which commands it touched.
+    // Each command decides for itself whether it can be used, and the few whose
+    // name follows the state what they are called; this asks them all. Cheap
+    // -- a predicate each -- so anything that changes the window's state can
+    // call it rather than working out which commands it touched.
     m_commands.refreshEnabled();
+    m_commands.refreshText();
     updateHardpointStatus();
 }
 

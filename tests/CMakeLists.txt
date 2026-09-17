@@ -58,6 +58,10 @@ qt_add_executable(test_simulation test_simulation.cpp)
 target_link_libraries(test_simulation PRIVATE suspkin_core Qt6::Test)
 add_test(NAME simulation COMMAND test_simulation)
 
+qt_add_executable(test_edit_history test_edit_history.cpp)
+target_link_libraries(test_edit_history PRIVATE suspkin_core Qt6::Test)
+add_test(NAME edit_history COMMAND test_edit_history)
+
 qt_add_executable(test_hardpoint_config test_hardpoint_config.cpp)
 target_link_libraries(test_hardpoint_config PRIVATE suspkin_core Qt6::Test)
 add_test(NAME hardpoint_config COMMAND test_hardpoint_config)

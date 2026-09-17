@@ -6,6 +6,7 @@
 #include "app/framework/WindowActions.h"
 #include "io/LinkageTemplate.h"
 #include "io/XlsxHardpoints.h"
+#include "model/EditHistory.h"
 #include "model/Simulation.h"
 #include "model/Sweep.h"
 #include "project/Project.h"
@@ -98,6 +99,8 @@ public:
     bool workbookWritable() const override { return m_hardpointSource.isValid(); }
     void syncTableToViewport(bool refit) override;
     void refreshCommands() override { updateChrome(); }
+    EditHistory& editHistory() override { return m_history; }
+    void restoreEditState(const EditState& from, const EditState& to) override;
 
 signals:
     /// The user asked for a different project. The window is finished with by
@@ -184,6 +187,27 @@ private:
     /// Say in the status bar where a marker being dragged has got to. A
     /// readout, not an edit -- the table is untouched until the drag ends.
     void showDragPosition(int row, int axis, double distance);
+
+    /// What an edit of the points can change, as the project holds it now.
+    EditState currentEditState() const;
+    /// Note in the history that an edit called @p label has just been made.
+    /// Every edit of the points ends here, after the project holds it; one
+    /// that changed nothing is not recorded.
+    void recordEdit(const QString& label);
+    /// Start the history again from what the project holds now, with nothing
+    /// to undo: a project opened, or its points came from somewhere new.
+    void restartEditHistory();
+    /// Put @p state into the model and the project, and resolve everything
+    /// against it again. No step is recorded -- this is how a step is taken.
+    void applyEditState(const EditState& state);
+    /// Point every wheel centred on a renamed point at its new name. @p renamed
+    /// is old name to new.
+    void moveWheelsToRenamedPoints(const QHash<QString, QString>& renamed);
+    /// The names of the selected points, in picking order.
+    QStringList selectedPointNames() const;
+    /// Select the points called @p names, the first of them current. Names the
+    /// table does not have are skipped.
+    void selectPointsNamed(const QStringList& names);
 
     void buildHardpointDock();
     void buildAnalysisDock();
@@ -349,6 +373,11 @@ private:
     /// against the table as it stands now. Kept here as well as in the viewport
     /// because it is what the status line counts.
     std::vector<WheelPlacement> m_wheelPlacements;
+
+    /// Every state the user's editing of the points has passed through, for
+    /// undo and redo. Not saved: it is this session's way back, and where the
+    /// session ended up is already in the project.
+    EditHistory m_history;
 
     /// The table exactly as the workbook holds it. Everything the user changes
     /// is a difference from this, and that difference is what the project keeps

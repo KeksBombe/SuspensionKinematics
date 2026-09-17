@@ -29,6 +29,8 @@ struct IconEntry {
 constexpr IconEntry kIcons[] = {
     { Icon::AdjustmentsHorizontal, "adjustments-horizontal" },
     { Icon::Angle, "angle" },
+    { Icon::ArrowBackUp, "arrow-back-up" },
+    { Icon::ArrowForwardUp, "arrow-forward-up" },
     { Icon::Braces, "braces" },
     { Icon::ChartLine, "chart-line" },
     { Icon::ChevronDown, "chevron-down" },

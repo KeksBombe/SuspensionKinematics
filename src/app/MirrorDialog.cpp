@@ -56,8 +56,9 @@ MirrorDialog::MirrorDialog(const HardpointTable& table, const QList<int>& select
     }
     m_selectedRow->setEnabled(hasSelection);
     (hasSelection ? m_selectedRow : m_allRows)->setChecked(true);
-    // The selection is the more careful default when there is one: mirroring a
-    // whole table by accident is a lot of rows to undo by hand.
+    // The selection is the more careful default when there is one: it is what
+    // the user was looking at, and a whole table mirrored by accident is a lot
+    // of rows to read through before noticing.
     auto* scopeGroup = new QButtonGroup(this);
     scopeGroup->addButton(m_allRows);
     scopeGroup->addButton(m_selectedRow);

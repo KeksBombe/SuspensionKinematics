@@ -296,6 +296,61 @@ state and a drag is not.
   Half-typed input is Intermediate, never Invalid, or the field refuses the
   keystroke before the second operand.
 
+## Undo and redo
+
+`EditHistory` (`src/model/EditHistory.*`, core, tested) keeps **whole states**,
+not inverse edits: an `EditState` is the table, the configuration and the static
+angles. An edit's side effects -- a rename moving configuration and provenance, a
+delete taking both, Generate writing angles -- are what an inverse misses, and a
+state cannot be put back the wrong way round. Names and configuration are
+implicitly shared between states, so a step costs one copy of the rows.
+
+- **Every edit of the points ends in `MainWindow::recordEdit(label)`**, after the
+  project holds it. The model's `coordinateChanged`, `configChanged` and
+  `pointRenamed` handlers are three of them -- which is why the table cell, the
+  arrows and the X/Y/Z field need nothing of their own -- and Add, Delete,
+  Mirror, Generate and Static Camber and Toe call it directly. A new command
+  that changes anything in `EditState` has to call it too, or the next undo of
+  anything puts its change back.
+- **Everything in `EditState` changes only through a recorded step.** That is
+  the invariant the whole thing rests on, and it is why the static angles are a
+  step of their own: Generate writes them, so they are in the state, so the
+  dialog that sets them has to record. The design targets and the mirror rule are
+  *not* in the state, because both are saved even when the dialog changes no
+  point.
+- `restartEditHistory()` is for points that came from somewhere new: a project
+  opened (at the end of `openProjectContents()`, after inference has filled the
+  configuration in), a workbook imported, a table made from nothing
+  (`adoptNewWorkbook()`), the hardpoints removed. Those copy or delete files,
+  which no step can put back.
+- `applyEditState()` is the one way a state goes in, and it keeps the ordering
+  rule from "adding, deleting, renaming": `captureHardpointConfig()` before
+  `syncTableToViewport()`, or the refill from the project's copy takes the step
+  back again. Anything that changes how a table is taken in has to change here
+  as well.
+- **Things outside the state that name a point or a body are kept in step, not
+  snapshotted.** The wheels follow renames through `renamedPoints()` -- undo and
+  redo move one step at a time, and in one step a row at the same place and
+  coordinates under another name is a rename. A part relabelled in the template
+  renames its body in every state (`EditHistory::renameBody()`), because that is
+  not an edit of the points and every state describes the same part. Putting the
+  wheel names *in* the state looks simpler and is wrong: the wheel dialog changes
+  them without a step, and the next undo would take its choice back.
+- The commands are `src/app/features/EditFeature.cpp`, reaching the history
+  through `AppContext::editHistory()` and `restoreEditState()`. Not
+  `WindowActions`, which only shrinks. Their names follow the history through
+  `CommandSpec::textWhen` -- "Undo Move F_UCA_IF" in the tooltip -- while
+  `iconText` keeps the ribbon label, and the button its width, the same.
+- A step selects the points it touched (`touchedPoints()`), so the user sees
+  what came back; one that touched nothing still there keeps the selection.
+- Delete Point no longer asks first. It did only because there was no undo.
+- `Ctrl+Z` in an open editor -- a table cell, the X/Y/Z field -- is that
+  editor's own undo: `QLineEdit` takes the shortcut before the window does.
+  Checked against the real window; an offscreen check of it needs the window
+  *active*, or shortcuts are dead and it passes for the wrong reason.
+- The history is not saved. Where the session ended up is in the project
+  already; how it got there is not state anybody reopens a project to find.
+
 ## Generating a corner from design targets
 
 `src/model/HardpointGenerator.*` is section 3 of
@@ -682,8 +737,8 @@ src/model/    Hardpoint, HardpointTable, hardpoint mirroring, what each point
               is for and the rules that check it, the linkage a template
               resolves to, where the wheel models are placed, the solver and
               its sweeps, the Simulation that binds every axle and poses the
-              car, and the generator that runs it the other way: design
-              targets to hardpoints
+              car, the generator that runs it the other way -- design
+              targets to hardpoints -- and the undo history of the points
 src/io/       STL and STEP readers behind importMeshFile(), a minimal ZIP
               reader/rewriter, the hardpoint workbook reader/writer, and the
               linkage template reader/writer
