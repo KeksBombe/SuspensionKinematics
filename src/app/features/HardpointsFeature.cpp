@@ -4,6 +4,7 @@
 #include "app/framework/Feature.h"
 #include "app/framework/FeatureRegistry.h"
 #include "app/framework/WindowActions.h"
+#include "app/session/ProjectSession.h"
 #include "io/LinkageTemplate.h"
 #include "project/Project.h"
 #include "render/ViewportWidget.h"
@@ -61,7 +62,7 @@ private:
             .ribbon = { { page, group, RibbonButton::Small, nullptr, 20 } },
             .run = [&actions] { actions.overwriteWorkbook(); },
             .enabledWhen = [this] {
-                return hasPoints() && m_context.workbookWritable()
+                return hasPoints() && m_context.session().hardpoints().workbookWritable()
                        && !m_context.project().hardpoints().isEmpty();
             },
         });
@@ -76,7 +77,9 @@ private:
                             "copy is left as it is, and the edits stay pending."),
             .ribbon = { { page, group, RibbonButton::Small, nullptr, 30 } },
             .run = [&actions] { actions.exportWorkbookAs(); },
-            .enabledWhen = [this] { return hasPoints() && m_context.workbookWritable(); },
+            .enabledWhen = [this] {
+                return hasPoints() && m_context.session().hardpoints().workbookWritable();
+            },
         });
 
         commands.add({
@@ -110,7 +113,7 @@ private:
             .enabledWhen = [this] {
                 // The generator names what it makes through the template's
                 // roles, so it needs a template that loaded and named them.
-                const LinkageTemplate& templ = m_context.linkageTemplate();
+                const LinkageTemplate& templ = m_context.session().linkage().linkageTemplate();
                 return templ.canSimulate() && !templ.corners.empty();
             },
         });

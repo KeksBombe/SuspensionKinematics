@@ -2,25 +2,19 @@
 
 #include <QString>
 
-#include <vector>
-
 class QDockWidget;
 class QWidget;
 
 namespace suspkin {
 
 class AnalysisPanel;
-class EditHistory;
 class HardpointModel;
+class ProjectSession;
 class Ribbon;
-class Simulation;
 class ViewportWidget;
 class Project;
 class WindowActions;
 struct EditState;
-struct Linkage;
-struct LinkageTemplate;
-struct WheelPlacement;
 
 /// What the window offers a feature.
 ///
@@ -47,6 +41,10 @@ public:
     virtual void markDirty() = 0;
     /// Write the project out now, rather than when the timer says.
     virtual bool saveProject() = 0;
+    /// Everything the project is unfolded into: the chassis, the points and
+    /// their workbook, the template and its parts, the solve, the wheels, and
+    /// the undo history of the points.
+    virtual ProjectSession& session() = 0;
 
     // --- what is on screen --------------------------------------------------
     virtual ViewportWidget* viewport() = 0;
@@ -61,15 +59,6 @@ public:
     virtual AnalysisPanel* analysisPanel() = 0;
     virtual Ribbon* ribbon() = 0;
 
-    // --- what has been resolved against the table ---------------------------
-    virtual const LinkageTemplate& linkageTemplate() const = 0;
-    virtual const Linkage& linkage() const = 0;
-    virtual const Simulation& simulation() const = 0;
-    virtual const std::vector<WheelPlacement>& wheelPlacements() const = 0;
-    /// The project's workbook was read whole, so the table can be written back
-    /// through it.
-    virtual bool workbookWritable() const = 0;
-
     // --- saying that something changed --------------------------------------
     /// Everything that is resolved against the table, resolved again: the
     /// markers, the parts, the solve, the wheels.
@@ -79,10 +68,7 @@ public:
     virtual void refreshCommands() = 0;
 
     // --- undo and redo ------------------------------------------------------
-    /// Every state the user's editing of the points has passed through. The
-    /// window records into it -- the edits are its own -- and a feature steps
-    /// through it.
-    virtual EditHistory& editHistory() = 0;
+    // The history itself is the session's.
     /// Put the project back in @p to, coming from @p from: the points, what
     /// they are for, and everything resolved against them. What the step
     /// between the two touched is selected, so the user sees what came back.

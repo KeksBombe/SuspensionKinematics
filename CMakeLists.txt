@@ -246,6 +246,22 @@ qt_add_executable(suspkin
     src/app/framework/RibbonPages.cpp
     src/app/framework/WindowActions.h
     src/app/framework/WindowActions.cpp
+    # The live state a project is unfolded into, with no widget in it: the
+    # chassis, the points and their workbook, the template and its parts, the
+    # solve and the wheels, and the cascade that resolves them all again.
+    src/app/session/SessionMessage.h
+    src/app/session/ProjectSession.h
+    src/app/session/ProjectSession.cpp
+    src/app/session/ChassisDocument.h
+    src/app/session/ChassisDocument.cpp
+    src/app/session/HardpointDocument.h
+    src/app/session/HardpointDocument.cpp
+    src/app/session/LinkageDocument.h
+    src/app/session/LinkageDocument.cpp
+    src/app/session/SimulationRunner.h
+    src/app/session/SimulationRunner.cpp
+    src/app/session/WheelsDocument.h
+    src/app/session/WheelsDocument.cpp
     src/app/features/ProjectFeature.cpp
     src/app/features/GeometryFeature.cpp
     src/app/features/WheelsFeature.cpp

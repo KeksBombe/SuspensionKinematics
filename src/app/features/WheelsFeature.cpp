@@ -3,6 +3,7 @@
 #include "app/framework/Feature.h"
 #include "app/framework/FeatureRegistry.h"
 #include "app/framework/WindowActions.h"
+#include "app/session/ProjectSession.h"
 #include "app/HardpointModel.h"
 #include "project/Project.h"
 #include "render/ViewportWidget.h"
@@ -66,7 +67,7 @@ public:
             .checkedByDefault = true,
             .ribbon = { { .page = QStringLiteral("view"), .group = tr("Show"), .order = 70 } },
             .onToggled = [this](bool on) { m_context.viewport()->setWheelsVisible(on); },
-            .enabledWhen = [this] { return !m_context.wheelPlacements().empty(); },
+            .enabledWhen = [this] { return !m_context.session().wheels().placements().empty(); },
         });
     }
 

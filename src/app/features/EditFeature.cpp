@@ -2,6 +2,7 @@
 #include "app/framework/CommandRegistry.h"
 #include "app/framework/Feature.h"
 #include "app/framework/FeatureRegistry.h"
+#include "app/session/ProjectSession.h"
 #include "model/EditHistory.h"
 
 #include <QAction>
@@ -49,7 +50,7 @@ public:
                             "added or deleted point, a mirror or a generated corner."),
             .ribbon = { { page, group, RibbonButton::Small, nullptr, 0 } },
             .run = [this] { undo(); },
-            .enabledWhen = [this] { return m_context.editHistory().canUndo(); },
+            .enabledWhen = [this] { return m_context.session().history().canUndo(); },
             .textWhen = [this] { return undoText(); },
         });
 
@@ -62,7 +63,7 @@ public:
             .statusTip = tr("Make the last change that was undone again."),
             .ribbon = { { page, group, RibbonButton::Small, nullptr, 5 } },
             .run = [this] { redo(); },
-            .enabledWhen = [this] { return m_context.editHistory().canRedo(); },
+            .enabledWhen = [this] { return m_context.session().history().canRedo(); },
             .textWhen = [this] { return redoText(); },
         });
         // Ctrl+Y too, which is where redo lives on Windows. Second, so the
@@ -74,7 +75,7 @@ public:
 private:
     void undo()
     {
-        EditHistory& history = m_context.editHistory();
+        EditHistory& history = m_context.session().history();
         if (!history.canUndo()) return;
         const QString label = history.undoLabel();
         // Copies, not references into the history: restoring resolves the whole
@@ -87,7 +88,7 @@ private:
 
     void redo()
     {
-        EditHistory& history = m_context.editHistory();
+        EditHistory& history = m_context.session().history();
         if (!history.canRedo()) return;
         const QString label = history.redoLabel();
         const EditState from = history.current();
@@ -99,13 +100,13 @@ private:
     /// "Undo Move F_UCA_IF", or plain "Undo" with nothing to take back.
     QString undoText() const
     {
-        const QString label = m_context.editHistory().undoLabel();
+        const QString label = m_context.session().history().undoLabel();
         return label.isEmpty() ? tr("&Undo") : tr("&Undo %1").arg(asActionText(label));
     }
 
     QString redoText() const
     {
-        const QString label = m_context.editHistory().redoLabel();
+        const QString label = m_context.session().history().redoLabel();
         return label.isEmpty() ? tr("&Redo") : tr("&Redo %1").arg(asActionText(label));
     }
 

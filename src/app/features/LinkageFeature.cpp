@@ -3,6 +3,7 @@
 #include "app/framework/Feature.h"
 #include "app/framework/FeatureRegistry.h"
 #include "app/framework/WindowActions.h"
+#include "app/session/ProjectSession.h"
 #include "io/LinkageTemplate.h"
 #include "model/Linkage.h"
 #include "model/Simulation.h"
@@ -50,7 +51,7 @@ private:
             .ribbon = { { page, tr("Show"), RibbonButton::Large, nullptr, 10 },
                         { QStringLiteral("view"), tr("Show"), RibbonButton::Small, nullptr, 60 } },
             .onToggled = [this](bool on) { m_context.viewport()->setLinkageVisible(on); },
-            .enabledWhen = [this] { return !m_context.linkage().isEmpty(); },
+            .enabledWhen = [this] { return !m_context.session().linkage().parts().isEmpty(); },
         });
 
         commands.add({
@@ -97,7 +98,7 @@ private:
             .enabledWhen = [this] {
                 // A template with no corners has no axle to ask about, and one
                 // that failed to load has nothing to write into.
-                return templateLoaded() && !m_context.linkageTemplate().corners.empty();
+                return templateLoaded() && !m_context.session().linkage().linkageTemplate().corners.empty();
             },
         });
 
@@ -112,7 +113,7 @@ private:
             .ribbon = { { page, tr("Alignment"), RibbonButton::Large, nullptr, 50 } },
             .run = [&actions] { actions.staticAnglesDialog(); },
             // Angles are set on a wheel, so there has to be an axle that solves.
-            .enabledWhen = [this] { return !m_context.simulation().isEmpty(); },
+            .enabledWhen = [this] { return !m_context.session().simulation().simulation().isEmpty(); },
         });
     }
 
@@ -153,7 +154,10 @@ private:
         });
     }
 
-    bool templateLoaded() const { return !m_context.linkageTemplate().isEmpty(); }
+    bool templateLoaded() const
+    {
+        return !m_context.session().linkage().linkageTemplate().isEmpty();
+    }
 
     AppContext& m_context;
 };
