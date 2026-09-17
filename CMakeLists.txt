@@ -246,8 +246,6 @@ qt_add_executable(suspkin
     src/app/framework/RibbonPages.cpp
     src/app/framework/WindowChrome.h
     src/app/framework/WindowChrome.cpp
-    src/app/framework/WindowActions.h
-    src/app/framework/WindowActions.cpp
     # The live state a project is unfolded into, with no widget in it: the
     # chassis, the points and their workbook, the template and its parts, the
     # solve and the wheels, and the cascade that resolves them all again.
@@ -268,8 +266,12 @@ qt_add_executable(suspkin
     src/app/features/GeometryFeature.cpp
     src/app/features/WheelsFeature.cpp
     src/app/features/EditFeature.cpp
+    src/app/features/SharedCommands.h
+    src/app/features/HardpointWorkbookFeature.cpp
     src/app/features/HardpointsFeature.cpp
+    src/app/features/GenerateFeature.cpp
     src/app/features/LinkageFeature.cpp
+    src/app/features/MechanismFeature.cpp
     src/app/features/AnalysisFeature.cpp
     src/app/features/ViewFeature.cpp
     src/app/features/PanelsFeature.cpp

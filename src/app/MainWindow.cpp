@@ -1,50 +1,27 @@
 #include "app/MainWindow.h"
 
 #include "app/AnalysisPanel.h"
-#include "app/GenerateDialog.h"
 #include "app/HardpointModel.h"
 #include "app/HardpointPanel.h"
-#include "app/Icons.h"
-#include "app/MirrorDialog.h"
-#include "app/PanelAction.h"
 #include "app/PointEditController.h"
-#include "app/PartDialogs.h"
-#include "app/PointDialog.h"
-#include "app/ProjectLauncher.h"
 #include "app/RecentProjects.h"
 #include "app/Ribbon.h"
+#include "app/features/SharedCommands.h"
 #include "app/framework/FeatureRegistry.h"
 #include "app/framework/WindowChrome.h"
-#include "app/StaticAnglesDialog.h"
-#include "app/SteeringDialog.h"
-#include "app/WheelDialog.h"
-#include "io/LinkageTemplate.h"
-#include "io/MeshImport.h"
-#include "model/HardpointGenerator.h"
 
-#include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
-#include <QDesktopServices>
-#include <QDir>
 #include <QDockWidget>
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QImage>
-#include <QInputDialog>
 #include <QLabel>
-#include <QLocale>
 #include <QMatrix4x4>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPainter>
-#include <QPushButton>
-#include <QStandardPaths>
 #include <QStatusBar>
-#include <QSaveFile>
-#include <QUrl>
 
-#include <algorithm>
 #include <utility>
 
 namespace suspkin {
@@ -274,8 +251,6 @@ void MainWindow::buildAnalysisDock()
     // change nothing about the curve, but they are still the user's arrangement
     // and the project keeps them.
     connect(m_analysisPanel, &AnalysisPanel::playbackChanged, this, [this] { markDirty(); });
-    connect(m_analysisPanel, &AnalysisPanel::exportCsvRequested, this,
-            &MainWindow::exportSweepCsv);
 
     // The sweep is skipped while the dock is shut, so opening it is what asks
     // for one. Reopening a project restores the dock, and this catches that too.
@@ -380,19 +355,12 @@ void MainWindow::buildCommands()
         feature->registerCommands(m_commands);
 }
 
-void MainWindow::revealTemplateFile()
-{
-    const QString path = project().absolutePath(project().linkageTemplate().relativePath);
-    if (path.isEmpty() || !QFileInfo::exists(path)) return;
-    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
-}
-
 void MainWindow::buildRibbon()
 {
     QMenu* fileMenu = buildFileMenu(this, m_commands, project().manifestPath(),
                                     [this](const QString& manifestPath) {
                                         saveProject();
-                                        emit openProjectRequested(manifestPath);
+                                        requestProject(manifestPath);
                                     });
     m_ribbon = suspkin::buildRibbon(this, fileMenu, m_commands);
 
@@ -401,23 +369,6 @@ void MainWindow::buildRibbon()
     // is PanelsFeature's, which owns it.
     connect(m_ribbon, &Ribbon::currentPageChanged, this, [this] { markDirty(); });
     connect(m_ribbon, &Ribbon::collapsedChanged, this, [this] { markDirty(); });
-}
-
-void MainWindow::resetPanelLayout()
-{
-    const bool hardpointsOpen = !m_hardpointDock->isHidden();
-    const bool analysisOpen = !m_analysisDock->isHidden();
-
-    restoreState(m_defaultDockState);
-
-    // The default has every dock closed, because a new project has nothing to
-    // put in them. What was open stays open, docked again; and the table is
-    // open whenever there are points -- the rule a project follows the first
-    // time it is opened.
-    if (hardpointsOpen || hardpoints()->rowCount() > 0) m_hardpointDock->show();
-    if (analysisOpen) m_analysisDock->show();
-    markDirty();
-    statusBar()->showMessage(tr("Panels docked where a new project has them."), 4000);
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +424,7 @@ bool MainWindow::openChassis()
 {
     SessionMessage problem;
     std::optional<ChassisModel> model = m_session->chassis().open(&problem);
-    warn(problem);
+    showProblem(problem);
     if (!model) return false;
 
     m_viewport->setMesh(std::move(model->mesh), model->edges);
@@ -485,7 +436,7 @@ bool MainWindow::openHardpoints()
 {
     SessionMessage problem;
     std::optional<HardpointTable> table = m_session->hardpoints().open(&problem);
-    warn(problem);
+    showProblem(problem);
     if (!table) return false;
 
     setHardpointTable(std::move(*table), false);
@@ -496,7 +447,7 @@ bool MainWindow::openLinkageTemplate()
 {
     SessionMessage problem;
     const bool loaded = m_session->linkage().load(&problem);
-    warn(problem);
+    showProblem(problem);
     return loaded;
 }
 
@@ -504,7 +455,7 @@ bool MainWindow::openWheels()
 {
     SessionMessage problem;
     std::optional<WheelModels> models = m_session->wheels().open(&problem);
-    warn(problem);
+    showProblem(problem);
     if (!models) {
         m_viewport->clearWheels();
         return false;
@@ -514,11 +465,6 @@ bool MainWindow::openWheels()
                                std::move(models->rim), std::move(models->rimEdges));
     m_session->placeWheels();
     return !m_session->wheels().placements().empty();
-}
-
-void MainWindow::warn(const SessionMessage& problem)
-{
-    if (!problem.isEmpty()) QMessageBox::warning(this, problem.title, problem.text);
 }
 
 void MainWindow::applyViewState()
@@ -571,38 +517,17 @@ void MainWindow::closeEvent(QCloseEvent* event)
 }
 
 // ---------------------------------------------------------------------------
-// Projects
+// What a feature is offered
 // ---------------------------------------------------------------------------
 
-void MainWindow::newProject()
+void MainWindow::requestProject(const QString& manifestPath)
 {
-    const QString path = ProjectLauncher::runNewProjectDialog(this);
-    if (path.isEmpty()) return;
-    saveProject();
-    emit openProjectRequested(path);
+    emit openProjectRequested(manifestPath);
 }
 
-void MainWindow::openProject()
+void MainWindow::requestProjectList()
 {
-    const QString path = ProjectLauncher::runOpenProjectDialog(this);
-    if (path.isEmpty()) return;
-    if (QFileInfo(path).absoluteFilePath()
-        == QFileInfo(project().manifestPath()).absoluteFilePath()) {
-        return; // already open
-    }
-    saveProject();
-    emit openProjectRequested(path);
-}
-
-void MainWindow::showProjectList()
-{
-    saveProject();
     emit projectListRequested();
-}
-
-void MainWindow::revealProjectFolder()
-{
-    QDesktopServices::openUrl(QUrl::fromLocalFile(project().rootPath()));
 }
 
 void MainWindow::showStatus(const QString& text, int milliseconds)
@@ -610,118 +535,24 @@ void MainWindow::showStatus(const QString& text, int milliseconds)
     statusBar()->showMessage(text, milliseconds);
 }
 
-// ---------------------------------------------------------------------------
-// Geometry
-// ---------------------------------------------------------------------------
-
-QString MainWindow::geometryDialogDirectory() const
+void MainWindow::showProblem(const SessionMessage& problem)
 {
-    if (!project().lastGeometryDirectory().isEmpty()) return project().lastGeometryDirectory();
-    return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-}
-
-void MainWindow::importChassisDialog()
-{
-    const QString path = QFileDialog::getOpenFileName(this, tr("Import chassis"),
-                                                      geometryDialogDirectory(),
-                                                      importFileFilter());
-    if (!path.isEmpty()) loadFile(path);
+    if (!problem.isEmpty()) QMessageBox::warning(this, problem.title, problem.text);
 }
 
 void MainWindow::loadFile(const QString& path)
 {
-    SessionMessage problem;
-    std::optional<ChassisModel> model = m_session->chassis().import(path, &problem);
-    if (!model) {
-        warn(problem); // whatever was on screen stays there
-        return;
-    }
-
-    m_viewport->setMesh(std::move(model->mesh), model->edges);
-    m_viewport->fitToView();
-    updateChrome();
-}
-
-void MainWindow::removeChassis()
-{
-    const AssetRef asset = project().geometry();
-    if (!asset.isEmpty()) {
-        const QMessageBox::StandardButton answer = QMessageBox::question(
-            this, tr("Remove chassis"),
-            tr("Remove %1 from this project?\n\nThe copy inside the project folder is deleted. "
-               "The file it was imported from is not touched.")
-                .arg(QFileInfo(asset.relativePath).fileName()),
-            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-        if (answer != QMessageBox::Yes) return;
-    }
-
-    m_session->chassis().remove();
-    m_viewport->clearMesh();
-    updateChrome();
-}
-
-// ---------------------------------------------------------------------------
-// Hardpoints
-// ---------------------------------------------------------------------------
-
-QString MainWindow::hardpointDialogDirectory() const
-{
-    if (!project().lastHardpointDirectory().isEmpty()) return project().lastHardpointDirectory();
-    if (!project().lastGeometryDirectory().isEmpty()) return project().lastGeometryDirectory();
-    return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-}
-
-void MainWindow::importHardpointsDialog()
-{
-    const QString path = QFileDialog::getOpenFileName(this, tr("Import hardpoints"),
-                                                      hardpointDialogDirectory(),
-                                                      hardpointFileFilter());
-    if (!path.isEmpty()) loadHardpointFile(path);
+    importChassisFile(*this, path);
 }
 
 void MainWindow::loadHardpointFile(const QString& path)
 {
-    HardpointDocument& document = m_session->hardpoints();
-    const HardpointEdits pending = document.pendingEdits();
-    if (!pending.isEmpty()) {
-        const QMessageBox::StandardButton answer = QMessageBox::question(
-            this, tr("Replace the hardpoints?"),
-            tr("This project is holding %1 hardpoint change(s) that are not in its workbook "
-               "yet.\n\nImporting a different workbook discards them. Continue?")
-                .arg(pending.count()),
-            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-        if (answer != QMessageBox::Yes) return;
-    }
-
-    SessionMessage problem;
-    const std::optional<HardpointImport> imported = document.import(path, &problem);
-    warn(problem);
-    if (!imported) return; // whatever was loaded stays loaded
-
-    setHardpointTable(document.baseline(), !m_viewport->hasMesh());
-    // An import is not an edit: the steps that led to the old points lead
-    // nowhere in these.
-    m_session->restartHistory();
-    m_hardpointDock->show();
-    m_hardpointDock->raise();
-
-    statusBar()->showMessage(tr("Imported %1 hardpoints from %2 in %3 ms")
-                                 .arg(hardpoints()->rowCount())
-                                 .arg(QFileInfo(path).fileName())
-                                 .arg(imported->elapsedMs),
-                             6000);
-
-    if (!imported->warnings.isEmpty()) {
-        QMessageBox::information(this, tr("Imported with warnings"),
-                                 tr("%1 hardpoints were imported.\n\n%2")
-                                     .arg(hardpoints()->rowCount())
-                                     .arg(imported->warnings.join(QStringLiteral("\n\n"))));
-    }
+    importHardpointFile(*this, path);
 }
 
-void MainWindow::setHardpointTable(HardpointTable table, bool refit)
+void MainWindow::setHardpointTable(const HardpointTable& table, bool refit)
 {
-    hardpoints()->setTable(std::move(table));
+    hardpoints()->setTable(table);
     syncTableToViewport(refit);
 }
 
@@ -739,702 +570,12 @@ void MainWindow::syncTableToViewport(bool refit)
     updateChrome(); // which refreshes the status line and the title too
 }
 
-void MainWindow::mirrorHardpointsDialog()
-{
-    if (hardpoints()->rowCount() == 0) return;
-
-    MirrorDialog dialog(hardpoints()->table(), m_viewport->selectedHardpoints(),
-                        project().mirror(), this);
-    if (dialog.exec() != QDialog::Accepted) return;
-
-    const MirrorSpec spec = dialog.spec();
-    const MirrorOutcome outcome = mirrorHardpoints(hardpoints()->table(), dialog.rows(), spec);
-
-    // The rule is remembered whether or not it changed anything: it is the
-    // user's convention, and they will want it again next time.
-    project().setMirror(spec);
-
-    if (outcome.added == 0 && outcome.updated == 0) {
-        QMessageBox::information(this, tr("Nothing to mirror"),
-                                 outcome.notes.isEmpty()
-                                     ? tr("No hardpoints were mirrored.")
-                                     : outcome.notes.join(QStringLiteral("\n\n")));
-        markDirty();
-        return;
-    }
-
-    setHardpointTable(outcome.table, false);
-    m_session->hardpoints().captureMirrorProvenance();
-    markDirty();
-    m_session->recordEdit(tr("Mirror %n point(s)", "", outcome.added + outcome.updated));
-
-    statusBar()->showMessage(tr("Mirrored %1 hardpoint(s), replaced %2")
-                                 .arg(outcome.added)
-                                 .arg(outcome.updated),
-                             6000);
-
-    if (!outcome.notes.isEmpty()) {
-        QMessageBox::information(this, tr("Mirrored with notes"),
-                                 outcome.notes.join(QStringLiteral("\n\n")));
-    }
-}
-
-bool MainWindow::overwriteWorkbook()
-{
-    HardpointDocument& document = m_session->hardpoints();
-    const QString path = document.workbookPath();
-    if (path.isEmpty()) return false;
-
-    // Every point deleted is a workbook with no table in it, which the reader
-    // cannot open again -- and the project would lose its workbook with it.
-    if (hardpoints()->rowCount() == 0) {
-        QMessageBox::information(this, tr("Overwrite Workbook"),
-                                 tr("Every point has been deleted, so the workbook would be left "
-                                    "with nothing in it that can be read back.\n\nTo take the "
-                                    "hardpoints out of the project, use Remove Hardpoints."));
-        return false;
-    }
-
-    const HardpointEdits pending = document.pendingEdits();
-    QMessageBox box(this);
-    box.setIcon(QMessageBox::Warning);
-    box.setWindowTitle(tr("Overwrite the project's workbook?"));
-    box.setText(tr("Write %1 change(s) into %2?")
-                    .arg(pending.count())
-                    .arg(QFileInfo(path).fileName()));
-    box.setInformativeText(
-        tr("%1\n\nThe hardpoint cells are rewritten in place and mirrored points are added as new "
-           "rows; everything else in the workbook -- other sheets, formatting and formulas -- is "
-           "kept as it is.\n\nThis is the project's own copy. The file it was imported from is "
-           "not touched; use Export Workbook As to write that one.")
-            .arg(QDir::toNativeSeparators(path)));
-    QPushButton* overwrite = box.addButton(tr("Overwrite"), QMessageBox::AcceptRole);
-    box.addButton(QMessageBox::Cancel);
-    box.setDefaultButton(overwrite);
-    box.exec();
-    if (box.clickedButton() != overwrite) return false;
-
-    SessionMessage problem;
-    if (!document.overwriteWorkbook(&problem)) {
-        warn(problem);
-        return false;
-    }
-    setHardpointTable(document.baseline(), false);
-
-    saveProject(); // clears the edits file, now that they are in the workbook
-    statusBar()->showMessage(tr("Wrote the hardpoints into %1").arg(QFileInfo(path).fileName()),
-                             6000);
-    return true;
-}
-
-bool MainWindow::exportWorkbookAs()
-{
-    // Default to where the workbook came from: exporting back over the original
-    // is the common case, and this makes it one click without assuming it.
-    QString suggestion = project().hardpoints().workbook.originalPath;
-    if (suggestion.isEmpty()) {
-        QString name = QFileInfo(project().hardpoints().workbook.relativePath).fileName();
-        if (name.isEmpty()) name = QStringLiteral("hardpoints.xlsx");
-        suggestion = QDir(hardpointDialogDirectory()).filePath(name);
-    }
-
-    QString path = QFileDialog::getSaveFileName(this, tr("Export hardpoint workbook"), suggestion,
-                                                hardpointFileFilter());
-    if (path.isEmpty()) return false;
-    if (QFileInfo(path).suffix().isEmpty()) path += QStringLiteral(".xlsx");
-
-    SessionMessage problem;
-    if (!m_session->hardpoints().writeTo(path, &problem)) {
-        warn(problem);
-        return false;
-    }
-
-    project().setLastHardpointDirectory(QFileInfo(path).absolutePath());
-    markDirty();
-    statusBar()->showMessage(tr("Exported %1 hardpoints to %2")
-                                 .arg(hardpoints()->rowCount())
-                                 .arg(QFileInfo(path).fileName()),
-                             6000);
-    return true;
-}
-
-void MainWindow::removeHardpoints()
-{
-    const HardpointEdits pending = m_session->hardpoints().pendingEdits();
-    const QString question =
-        pending.isEmpty()
-            ? tr("Remove the hardpoints from this project?\n\nThe workbook copy inside the "
-                 "project folder is deleted. The file it was imported from is not touched.")
-            : tr("Remove the hardpoints from this project?\n\n%1 change(s) have not been written "
-                 "to a workbook and will be lost. The workbook copy inside the project folder is "
-                 "deleted; the file it was imported from is not touched.")
-                  .arg(pending.count());
-
-    const QMessageBox::StandardButton answer =
-        QMessageBox::question(this, tr("Remove hardpoints"), question,
-                              QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-    if (answer != QMessageBox::Yes) return;
-
-    m_session->hardpoints().remove();
-    m_viewport->clearHardpoints();
-    // The template stays: it describes a kind of car, not this workbook, and
-    // the next import should find it already there.
-    m_session->resolveFromTable();
-    // So do the wheel models, for the same reason. With no points to pin them
-    // to there is nowhere to draw them, which is what this leaves behind.
-    m_session->placeWheels();
-    m_hardpointDock->hide();
-    // The workbook and the edits file are deleted, which no step can put back.
-    m_session->restartHistory();
-    markDirty();
-}
-
 void MainWindow::selectPoints(const QList<int>& rows, int current)
 {
     m_viewport->setSelectedHardpoints(rows, current);
     m_hardpointPanel->setSelectedRows(m_viewport->selectedHardpoints(),
                                       m_viewport->selectedHardpoint());
     updateChrome();
-}
-
-bool MainWindow::adoptNewWorkbook(const HardpointTable& table)
-{
-    SessionMessage problem;
-    if (!m_session->hardpoints().adoptNewWorkbook(table, &problem)) {
-        warn(problem);
-        return false;
-    }
-
-    setHardpointTable(m_session->hardpoints().baseline(), !m_viewport->hasMesh());
-    // The table begins here. Undoing past it would need the workbook that was
-    // just made to be unmade, which is Remove Hardpoints, not a step.
-    m_session->restartHistory();
-    m_hardpointDock->show();
-    m_hardpointDock->raise();
-    markDirty();
-    return true;
-}
-
-void MainWindow::addPointDialog()
-{
-    const HardpointTable& table = hardpoints()->table();
-    const int current = m_viewport->selectedHardpoint();
-
-    // Seeded from the selection, so the new point starts where the one being
-    // worked on is -- with a name that is free.
-    Hardpoint seed;
-    seed.name = QStringLiteral("P1");
-    if (current >= 0 && current < static_cast<int>(table.size())) {
-        seed = table.points[static_cast<std::size_t>(current)];
-        seed.mirrorOf.clear();
-    }
-
-    const bool creating = project().hardpoints().isEmpty();
-    const QString note =
-        creating ? tr("This project has no hardpoint workbook yet. Adding a point makes one inside "
-                      "the project, hardpoints/hardpoints.xlsx, and the table grows from there.")
-                 : QString();
-    PointDialog dialog(table, seed, note, this);
-    if (creating) dialog.setWindowTitle(tr("New Hardpoint Table"));
-    if (dialog.exec() != QDialog::Accepted) return;
-    const Hardpoint point = dialog.point();
-
-    if (creating) {
-        HardpointTable first;
-        first.points.push_back(point);
-        if (!adoptNewWorkbook(first)) return;
-        selectPoints({ 0 }, 0);
-        statusBar()->showMessage(tr("Started a hardpoint table with %1").arg(point.name), 6000);
-        return;
-    }
-
-    // Right under the one it was seeded from, where it belongs; the edits file
-    // remembers the place, so it comes back there too.
-    const int row = current >= 0 ? current + 1 : hardpoints()->rowCount();
-    if (!hardpoints()->insertPoint(row, point)) return;
-    syncTableToViewport(false);
-    selectPoints({ row }, row);
-    markDirty();
-    m_session->recordEdit(tr("Add %1").arg(point.name));
-    statusBar()->showMessage(tr("Added %1").arg(point.name), 5000);
-}
-
-void MainWindow::deleteSelectedPoints()
-{
-    const QList<int> rows = m_viewport->selectedHardpoints();
-    if (rows.isEmpty()) return;
-
-    // Not asked about: Ctrl+Z brings them back. A point the workbook holds
-    // stays in it until the workbook is overwritten, as the command says.
-    const QString label =
-        rows.size() == 1
-            ? tr("Delete %1").arg(
-                  hardpoints()->table().points[static_cast<std::size_t>(rows.front())].name)
-            : tr("Delete %n point(s)", "", rows.size());
-
-    const int first = *std::min_element(rows.begin(), rows.end());
-    hardpoints()->removePoints(std::vector<int>(rows.begin(), rows.end()));
-    // The model has dropped their configuration; the project, which the table
-    // is refilled from, has to agree before anything is resolved again.
-    m_session->hardpoints().captureConfig();
-    m_session->hardpoints().captureMirrorProvenance();
-    syncTableToViewport(false);
-
-    const int next = std::min(first, hardpoints()->rowCount() - 1);
-    if (next >= 0) selectPoints({ next }, next);
-    markDirty();
-    m_session->recordEdit(label);
-    statusBar()->showMessage(tr("Deleted %n point(s). Ctrl+Z brings them back.", "", rows.size()),
-                             6000);
-}
-
-void MainWindow::renamePointDialog()
-{
-    const int row = m_viewport->selectedHardpoint();
-    const HardpointTable& table = hardpoints()->table();
-    if (row < 0 || row >= static_cast<int>(table.size())) return;
-    const QString current = table.points[static_cast<std::size_t>(row)].name;
-
-    QString proposed = current;
-    for (;;) {
-        bool ok = false;
-        proposed = QInputDialog::getText(this, tr("Rename Point"), tr("New name for %1:").arg(current),
-                                         QLineEdit::Normal, proposed, &ok)
-                       .trimmed();
-        if (!ok || proposed == current) return;
-        // Asked here as well as in the model, so a refusal is a message the
-        // user can act on and try again from, not an edit that silently fails.
-        const QString problem = hardpointNameProblem(proposed, table, row);
-        if (problem.isEmpty()) break;
-        QMessageBox::information(this, tr("Rename Point"), problem);
-    }
-    // The model's pointRenamed does the rest.
-    hardpoints()->renamePoint(row, proposed);
-}
-
-DesignParameters MainWindow::initialDesign() const
-{
-    DesignParameters design;
-    const LinkageTemplate& templ = m_session->linkage().linkageTemplate();
-    const std::vector<CornerSpec>& corners = templ.corners;
-
-    // This project's own corners: the first is taken to be the front and the
-    // second the rear, which is how every template written so far lists them.
-    const bool declared = templ.steeringDeclared();
-    for (const auto& [position, index] :
-         { std::pair{ AxlePosition::Front, 0 }, std::pair{ AxlePosition::Rear, 1 } }) {
-        AxleDesign& axle = design.axle(position);
-        if (index >= static_cast<int>(corners.size())) {
-            axle.generate = false;
-            continue;
-        }
-        const CornerSpec& corner = corners[static_cast<std::size_t>(index)];
-        axle.corner = corner.token;
-        // Whatever the template says about this axle's rack now is the start.
-        axle.steered = declared ? !corner.steeringRack.isEmpty() : true;
-    }
-
-    // The side the template's names are already on, when the table says.
-    if (!corners.empty()) {
-        const MechanismTemplate names = instantiateMechanism(templ.mechanism,
-                                                             corners.front().token, false,
-                                                             project().mirror());
-        if (const Hardpoint* centre = m_session->hardpoints().model().table().find(names.wheelCenter))
-            design.side = centre->y() < 0.0 ? DesignSide::Right : DesignSide::Left;
-    }
-    return design;
-}
-
-void MainWindow::generateFromDesignDialog()
-{
-    const LinkageTemplate& templ = m_session->linkage().linkageTemplate();
-    if (!templ.canSimulate() || templ.corners.empty()) return;
-
-    const DesignParameters seed = project().design().value_or(initialDesign());
-    GenerateDialog dialog(
-        seed, templ, project().mirror(), hardpoints()->table(), m_session->hardpoints().baseline(),
-        m_viewport->hasMesh(), [this] { return m_session->chassis().query(m_viewport->mesh()); },
-        this);
-    const int answer = dialog.exec();
-
-    // The targets are the user's work whether or not anything was generated
-    // from them: reopening the dialog starts where they left it.
-    if (!project().design() || *project().design() != dialog.parameters()) {
-        project().setDesign(dialog.parameters());
-        markDirty();
-    }
-    if (answer != QDialog::Accepted) return;
-
-    const DesignPlan plan = dialog.plan();
-    if (!plan.ok()) return;
-
-    // An axle whose static angles the project states would have them win over
-    // the wheel axis just generated, and the scrub, trail and roll centre built
-    // off that camber would then be missed. So a generated axle that has stated
-    // angles gets the ones it was generated with; one that has none keeps
-    // reading them off the new points. Before the points go in, so the solve
-    // they trigger already sees it.
-    const DesignParameters& generated = dialog.parameters();
-    QHash<QString, StaticAlignment> alignment = project().alignment();
-    for (const AxleDesign* axle : { &generated.front, &generated.rear }) {
-        if (axle->generate && alignment.contains(axle->corner))
-            alignment.insert(axle->corner, StaticAlignment{ axle->camber, axle->toe });
-    }
-    project().setAlignment(alignment);
-
-    // The points. A project with a workbook takes them as edits against it,
-    // like any other change; one without gets a workbook made for them.
-    if (project().hardpoints().isEmpty()) {
-        if (!adoptNewWorkbook(plan.table)) return;
-    } else {
-        setHardpointTable(plan.table, false);
-        m_session->hardpoints().captureMirrorProvenance();
-    }
-
-    // Which axle has a rack, into the template, patched like any other edit
-    // of it. Read back afterwards, which resolves the parts and the solve
-    // against the new points as well.
-    if (plan.steeringChanged) {
-        const std::vector<CornerSpec> steering = plan.steering;
-        SessionMessage problem;
-        m_session->linkage().patch(
-            [&steering](const QByteArray& bytes, QString* error) {
-                return setTemplateSteering(bytes, steering, error);
-            },
-            tr("The points were generated, but the steering could not be written into the "
-               "linkage template."),
-            &problem);
-        warn(problem);
-    }
-
-    markDirty();
-    // The points and the angles, one step. The steering written into the
-    // template is not in it: the template is not an edit of the points. In a
-    // project that had no workbook this records nothing -- the table began
-    // with these points.
-    m_session->recordEdit(tr("Generate from design"));
-    // The advice goes on the status bar as well as in the dialog, and is not
-    // applied: whether to move a chassis pivot is the designer's call.
-    const QString done = tr("Generated %1 point(s): %2 new, %3 moved.")
-                             .arg(plan.changes.size())
-                             .arg(plan.count(DesignChange::Kind::Added))
-                             .arg(plan.count(DesignChange::Kind::Moved));
-    statusBar()->showMessage(plan.advice.isEmpty() ? done
-                                                   : done + QLatin1Char(' ')
-                                                         + plan.advice.join(QLatin1Char(' ')),
-                             plan.advice.isEmpty() ? 8000 : 30000);
-}
-
-void MainWindow::newPartFromSelection()
-{
-    const QList<int> rows = m_viewport->selectedHardpoints();
-    const LinkageTemplate& templ = m_session->linkage().linkageTemplate();
-    if (rows.size() < 2 || templ.isEmpty()) return;
-
-    // In the order they were picked: that is the order the chain is drawn in.
-    const HardpointTable& table = hardpoints()->table();
-    QStringList names;
-    for (const int row : rows) names << table.points[static_cast<std::size_t>(row)].name;
-
-    NewPartDialog dialog(templ, names, this);
-    if (dialog.exec() != QDialog::Accepted) return;
-    const PartTemplate part = dialog.part();
-
-    SessionMessage problem;
-    const bool written = m_session->linkage().patch(
-        [&part](const QByteArray& bytes, QString* error) { return addTemplatePart(bytes, part, error); },
-        tr("The part could not be added."), &problem);
-    warn(problem);
-    if (written) statusBar()->showMessage(tr("Added the part \"%1\"").arg(part.label), 5000);
-}
-
-void MainWindow::editPartsDialog()
-{
-    LinkageDocument& linkage = m_session->linkage();
-    if (linkage.linkageTemplate().isEmpty()) return;
-    const LinkageTemplate before = linkage.linkageTemplate();
-
-    EditPartsDialog dialog(before, this);
-    if (dialog.exec() != QDialog::Accepted) return;
-    const QHash<QString, QString> relabelled = dialog.relabelled();
-    const QStringList removed = dialog.removed();
-    if (relabelled.isEmpty() && removed.isEmpty()) return;
-
-    SessionMessage problem;
-    const bool written = linkage.patch(
-        [&](const QByteArray& bytes, QString* error) {
-            QByteArray out = bytes;
-            for (const QString& id : removed) {
-                out = removeTemplatePart(out, id, error);
-                if (out.isEmpty()) return out;
-            }
-            for (auto it = relabelled.constBegin(); it != relabelled.constEnd(); ++it) {
-                out = setTemplatePartLabel(out, it.key(), it.value(), error);
-                if (out.isEmpty()) return out;
-            }
-            return out;
-        },
-        tr("The parts could not be changed."), &problem);
-    warn(problem);
-    if (!written) return;
-
-    // A part's label is also the name of the body the configuration table's
-    // Part columns offer. A relabelled part takes the rows that named it along,
-    // rather than leaving them all pointing at a body that is no longer there.
-    HardpointConfigMap config = hardpoints()->config();
-    const BodyCatalog catalog = bodyCatalog(linkage.linkageTemplate());
-    int moved = 0;
-    for (auto it = relabelled.constBegin(); it != relabelled.constEnd(); ++it) {
-        for (const PartTemplate& part : before.parts) {
-            if (part.id != it.key()) continue;
-            PartTemplate renamed = part;
-            renamed.label = it.value();
-            const QString from = partBodyName(part);
-            const QString to = partBodyName(renamed);
-            if (from == to || catalog.contains(from)) continue;
-            moved += renameBody(config, from, to);
-            // True of every step, which all describe this part: an undo must
-            // not put back rows naming a body the template no longer has.
-            m_session->history().renameBody(from, to);
-        }
-    }
-    if (moved > 0) {
-        hardpoints()->setConfig(config);
-        m_session->hardpoints().captureConfig();
-    }
-    statusBar()->showMessage(tr("Parts updated in the linkage template"), 5000);
-}
-
-// ---------------------------------------------------------------------------
-// Linkage
-// ---------------------------------------------------------------------------
-
-void MainWindow::steeringDialog()
-{
-    const LinkageTemplate& templ = m_session->linkage().linkageTemplate();
-    if (templ.isEmpty() || templ.corners.empty()) return;
-
-    SteeringDialog dialog(templ, project().mirror(), hardpoints()->table(), this);
-    if (dialog.exec() != QDialog::Accepted) return;
-
-    const std::vector<CornerSpec> corners = dialog.corners();
-    bool changed = corners.size() != templ.corners.size();
-    for (std::size_t i = 0; !changed && i < corners.size(); ++i) {
-        changed = corners[i].steeringRack != templ.corners[i].steeringRack
-                  || corners[i].steeringStated != templ.corners[i].steeringStated;
-    }
-    if (!changed) return;
-
-    SessionMessage problem;
-    const bool written = m_session->linkage().patch(
-        [&corners](const QByteArray& bytes, QString* error) {
-            return setTemplateSteering(bytes, corners, error);
-        },
-        tr("The steering could not be saved."), &problem);
-    warn(problem);
-    if (written) statusBar()->showMessage(tr("Steering written to the linkage template."), 5000);
-}
-
-void MainWindow::staticAnglesDialog()
-{
-    const LinkageTemplate& linkage = m_session->linkage().linkageTemplate();
-    const MechanismTemplate& mechanism = linkage.mechanism;
-    const HardpointTable& table = hardpoints()->table();
-    if (mechanism.isEmpty() || table.isEmpty()) return;
-
-    std::vector<CornerSpec> axles = linkage.corners;
-    if (axles.empty()) axles.push_back(CornerSpec{});
-    const bool steeringDeclared = linkage.steeringDeclared();
-
-    std::vector<StaticAnglesAxle> rows;
-    for (const CornerSpec& corner : axles) {
-        // Built without the project's angles, which is the only way to find out
-        // what the hardpoints would say on their own -- the numbers an axle
-        // goes back to, and the ones a newly ticked axle starts from.
-        const AxleSolver bare =
-            AxleSolver::build(mechanism, corner, table, project().mirror(), steeringDeclared);
-        const std::optional<CornerSolver>& near = bare.left() ? bare.left() : bare.right();
-        if (!near) continue;
-
-        StaticAnglesAxle row;
-        row.token = corner.token;
-        row.label = bare.label().isEmpty() ? tr("Suspension") : bare.label();
-        row.fromHardpoints = StaticAlignment{ near->designPose().camber, near->designPose().toe };
-        row.source = near->wheelAttitude();
-        row.sourcePoint = row.source == WheelAttitude::WheelAxis ? near->mechanism().wheelAxis
-                                                                 : near->mechanism().contactPatch;
-        row.stated = project().alignmentFor(corner.token);
-        row.wheelCenter = near->designPose().wheelCenter;
-        row.side = near->side();
-        // The computed patch sits on the ground whatever the angles, so its
-        // height is the ground's.
-        row.groundZ = near->designPose().contactPatch.z;
-        rows.push_back(row);
-    }
-    if (rows.empty()) return;
-
-    StaticAnglesDialog dialog(rows, this);
-    if (dialog.exec() != QDialog::Accepted) return;
-
-    // Every axle the dialog showed is replaced; an axle it could not show --
-    // one that does not solve today -- keeps whatever the project said about
-    // it, rather than losing it to a table that is half way through an edit.
-    QHash<QString, StaticAlignment> alignment = project().alignment();
-    for (const StaticAnglesAxle& row : rows) alignment.remove(row.token);
-    const QHash<QString, StaticAlignment> chosen = dialog.alignment();
-    for (auto it = chosen.begin(); it != chosen.end(); ++it) alignment.insert(it.key(), it.value());
-    if (alignment == project().alignment()) return;
-
-    project().setAlignment(alignment);
-    m_session->resolveMechanism();
-    markDirty();
-    // A step of its own: Generate from Design writes these too, so they are in
-    // every state, and an angle changed without a step would be put back by
-    // the next undo of anything.
-    m_session->recordEdit(tr("Set static camber and toe"));
-    statusBar()->showMessage(tr("Static camber and toe saved with the project."), 5000);
-}
-
-void MainWindow::importLinkageTemplateDialog()
-{
-    const QString path = QFileDialog::getOpenFileName(
-        this, tr("Import Linkage Template"), project().rootPath(), linkageTemplateFileFilter());
-    if (path.isEmpty()) return;
-
-    SessionMessage problem;
-    const std::optional<QStringList> warnings = m_session->linkage().import(path, &problem);
-    if (!warnings) {
-        warn(problem);
-        return;
-    }
-
-    statusBar()->showMessage(tr("%1 part(s) from %2")
-                                 .arg(m_session->linkage().parts().parts.size())
-                                 .arg(QFileInfo(path).fileName()),
-                             6000);
-
-    const QStringList notes = *warnings + m_session->linkage().parts().warnings;
-    if (!notes.isEmpty()) {
-        QMessageBox::information(this, tr("Imported with warnings"),
-                                 notes.join(QStringLiteral("\n")));
-    }
-}
-
-void MainWindow::resetLinkageTemplate()
-{
-    const QMessageBox::StandardButton answer = QMessageBox::question(
-        this, tr("Reset the linkage template"),
-        tr("Replace this project's linkage template with the one the application ships?\n\n"
-           "Any changes made to the project's copy are lost."),
-        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-    if (answer != QMessageBox::Yes) return;
-
-    SessionMessage problem;
-    LinkageDocument& linkage = m_session->linkage();
-    if (!linkage.installBuiltin(&problem) || !linkage.load(&problem)) {
-        warn(problem);
-        return;
-    }
-    statusBar()->showMessage(tr("Linkage template reset - %1 part(s)")
-                                 .arg(m_session->linkage().parts().parts.size()),
-                             6000);
-}
-
-// ---------------------------------------------------------------------------
-// Wheels
-// ---------------------------------------------------------------------------
-
-void MainWindow::addWheelsDialog()
-{
-    if (hardpoints()->rowCount() == 0) return; // the action is disabled
-
-    const WheelsRef& wheels = project().wheels();
-    WheelDialog dialog(hardpoints()->table(), wheels.spec,
-                       project().absolutePath(wheels.tyre.relativePath),
-                       project().absolutePath(wheels.rim.relativePath),
-                       geometryDialogDirectory(), this);
-    if (dialog.exec() != QDialog::Accepted) return;
-
-    const WheelSpec spec = dialog.spec();
-    SessionMessage failure;
-    QList<SessionMessage> problems;
-    const bool applied =
-        m_session->wheels().apply(spec, dialog.tyrePath(), dialog.rimPath(), &failure, &problems);
-    for (const SessionMessage& problem : problems) warn(problem);
-    if (!applied) {
-        warn(failure);
-        return;
-    }
-
-    // Read back out of the copies the project now holds, so what is on screen is
-    // exactly what reopening it will show. That reads a file that was just read
-    // to validate it, which a wheel is small enough for and which keeps one
-    // function responsible for loading them.
-    openWheels();
-
-    QStringList warnings;
-    const std::vector<WheelPlacement> placements =
-        resolveWheels(spec, hardpoints()->table(), &warnings);
-    statusBar()->showMessage(tr("%1 wheel(s) placed").arg(placements.size()), 6000);
-    if (!warnings.isEmpty()) {
-        QMessageBox::information(this, tr("Wheels added with warnings"),
-                                 warnings.join(QStringLiteral("\n")));
-    }
-}
-
-void MainWindow::removeWheels()
-{
-    if (project().wheels().isEmpty()) return;
-
-    const QMessageBox::StandardButton answer = QMessageBox::question(
-        this, tr("Remove wheels"),
-        tr("Remove the wheels from this project?\n\nThe copies of the models inside the "
-           "project folder are deleted. The files they were imported from are not touched."),
-        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-    if (answer != QMessageBox::Yes) return;
-
-    m_session->wheels().remove();
-    m_viewport->clearWheels();
-    updateChrome();
-}
-
-// ---------------------------------------------------------------------------
-// Analysis
-// ---------------------------------------------------------------------------
-
-void MainWindow::exportSweepCsv()
-{
-    const AxleSolver* axle = m_session->simulation().simulation().axleFor(m_analysisPanel->axle());
-    if (!axle) {
-        QMessageBox::information(this, tr("Export Sweep"),
-                                 tr("There is no axle to sweep yet. Import hardpoints, and check "
-                                    "that the linkage template names the mechanism."));
-        return;
-    }
-
-    const SweepSpec spec = m_analysisPanel->spec();
-    const SweepResult result = runSweep(*axle, spec);
-
-    const QString suggested =
-        QDir(project().rootPath())
-            .filePath(QStringLiteral("%1-%2-%3.csv")
-                          .arg(project().name().isEmpty() ? QStringLiteral("sweep")
-                                                          : project().name(),
-                               axle->label().isEmpty() ? axle->cornerToken() : axle->label(),
-                               sweepKindToString(spec.kind)));
-    const QString path = QFileDialog::getSaveFileName(this, tr("Export Sweep as CSV"), suggested,
-                                                      tr("CSV files (*.csv);;All files (*)"));
-    if (path.isEmpty()) return;
-
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(sweepToCsv(result)) < 0
-        || !file.commit()) {
-        QMessageBox::warning(this, tr("Export Sweep"),
-                             tr("Could not write %1: %2")
-                                 .arg(QDir::toNativeSeparators(path), file.errorString()));
-        return;
-    }
-    statusBar()->showMessage(tr("Sweep written to %1").arg(QDir::toNativeSeparators(path)), 5000);
 }
 
 // ---------------------------------------------------------------------------

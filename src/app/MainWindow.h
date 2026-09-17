@@ -3,9 +3,7 @@
 #include "app/framework/AppContext.h"
 #include "app/framework/CommandRegistry.h"
 #include "app/framework/Feature.h"
-#include "app/framework/WindowActions.h"
 #include "app/session/ProjectSession.h"
-#include "model/HardpointGenerator.h"
 #include "project/Project.h"
 #include "render/Camera.h"
 #include "render/ViewportWidget.h"
@@ -38,7 +36,7 @@ class Ribbon;
 ///
 /// What the project is unfolded into lives in the ProjectSession; the window
 /// draws it and says so when it changes.
-class MainWindow : public QMainWindow, public AppContext, public WindowActions {
+class MainWindow : public QMainWindow, public AppContext {
     Q_OBJECT
 
 public:
@@ -69,19 +67,23 @@ public:
     bool saveProject() override;
 
     // --- AppContext: the services a feature may use -------------------------
-    QWidget* window() override { return this; }
-    WindowActions* windowActions() override { return this; }
+    QMainWindow* window() override { return this; }
     Project& project() override { return m_session->project(); }
     ProjectSession& session() override { return *m_session; }
     void markDirty() override { m_session->markDirty(); }
+    void requestProject(const QString& manifestPath) override;
+    void requestProjectList() override;
     ViewportWidget* viewport() override { return m_viewport; }
     HardpointModel* hardpoints() override { return &m_session->hardpoints().model(); }
     void showStatus(const QString& text, int milliseconds) override;
+    void showProblem(const SessionMessage& problem) override;
     void selectPoints(const QList<int>& rows, int current) override;
     QDockWidget* hardpointDock() override { return m_hardpointDock; }
     QDockWidget* analysisDock() override { return m_analysisDock; }
     AnalysisPanel* analysisPanel() override { return m_analysisPanel; }
     Ribbon* ribbon() override { return m_ribbon; }
+    QByteArray defaultDockState() const override { return m_defaultDockState; }
+    void setHardpointTable(const HardpointTable& table, bool refit) override;
     void syncTableToViewport(bool refit) override;
     void refreshCommands() override { updateChrome(); }
     void restoreEditState(const EditState& from, const EditState& to) override;
@@ -99,49 +101,6 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
-
-    // --- WindowActions: command bodies that have not moved into a feature yet
-    // Each of these belongs in the feature that registers the command for it;
-    // see WindowActions, which is the list of what is left to move.
-private slots:
-    void importChassisDialog() override;
-    void removeChassis() override;
-    void importHardpointsDialog() override;
-    void mirrorHardpointsDialog() override;
-    bool overwriteWorkbook() override;
-    bool exportWorkbookAs() override;
-    void removeHardpoints() override;
-    /// A point of the user's own, next to the selected one. In a project with
-    /// no workbook yet this is also what makes one: New Hardpoint Table.
-    void addPointDialog() override;
-    void deleteSelectedPoints() override;
-    void renamePointDialog() override;
-    /// The targets, the preview, and -- if the user says so -- the points.
-    void generateFromDesignDialog() override;
-    void importLinkageTemplateDialog() override;
-    void resetLinkageTemplate() override;
-    /// A part drawn through the selected points, written into the template.
-    void newPartFromSelection() override;
-    void editPartsDialog() override;
-    void addWheelsDialog() override;
-    void removeWheels() override;
-    void exportSweepCsv() override;
-    void newProject() override;
-    void openProject() override;
-    void showProjectList() override;
-    void revealProjectFolder() override;
-    /// Open the project's template in whatever edits JSON on this machine.
-    void revealTemplateFile() override;
-    /// Let the user say which axle the rack drives, and write it into the
-    /// project's own template.
-    void steeringDialog() override;
-    /// Let the user state each axle's static camber and toe -- or hand an axle
-    /// back to its hardpoints -- and solve again with them.
-    void staticAnglesDialog() override;
-    /// Put every panel back where a new project has it, docked, and keep open
-    /// the ones that were open. What rescues a panel floated onto a monitor
-    /// that is not plugged in today.
-    void resetPanelLayout() override;
 
 private:
     /// Make every command. Built after the docks, because the panel toggles are
@@ -186,24 +145,11 @@ private:
     void collectViewState();
     void applyViewState();
 
-    void setHardpointTable(HardpointTable table, bool refit);
-    /// Give a project with no workbook one of its own, filled with @p table,
-    /// and read it back as the baseline -- so from here on it is an ordinary
-    /// project with an ordinary workbook, not a special case.
-    bool adoptNewWorkbook(const HardpointTable& table);
-    /// Put @p problem in front of the user, when there is one.
-    void warn(const SessionMessage& problem);
-    /// The targets a project that has never opened the generator starts from:
-    /// the 2025 car, pointed at this project's own corners and side.
-    DesignParameters initialDesign() const;
     void updateWindowTitle();
     void updateHardpointStatus();
     /// Put everything the window says about its own state back in step: which
     /// commands can be used, what the status line reads, and the title.
     void updateChrome();
-
-    QString geometryDialogDirectory() const;
-    QString hardpointDialogDirectory() const;
 
     /// The project and everything it is unfolded into. A child of the window,
     /// created before anything that is drawn from it.
