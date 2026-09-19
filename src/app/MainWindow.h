@@ -241,6 +241,11 @@ private:
     /// Fold what the table holds back into the project, which is what is saved.
     /// Called from the edit path, so a configuration is never only in a widget.
     void captureHardpointConfig();
+    /// Tell the viewport which points are chassis-fixed, so that it draws no
+    /// member between two of them. What a point is for is edited in the table
+    /// long after the parts were resolved, so this follows the configuration
+    /// rather than the linkage.
+    void syncGroundedPoints();
 
     /// Bind the template's mechanism against the current table and tell the
     /// panel which axles came out. The solve itself is Simulation's, in the

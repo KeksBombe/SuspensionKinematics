@@ -98,6 +98,7 @@ private slots:
     void aSolvedPointHeldToTheChassisWarns();
     void aBushingNeedsTwoBodiesToActBetween();
     void inferenceDoesNotTalkOverWhatTheUserSet();
+    void theChassisPointsAreFlaggedByRow();
 };
 
 void TestHardpointConfig::pointTypesRoundTripThroughTheirTokens()
@@ -390,6 +391,29 @@ void TestHardpointConfig::inferenceDoesNotTalkOverWhatTheUserSet()
 
     // Running it again has nothing left to do.
     QCOMPARE(fillMissingConfig(config, inferred), 0);
+}
+
+void TestHardpointConfig::theChassisPointsAreFlaggedByRow()
+{
+    const HardpointTable table = tableOf(frontCornerNames());
+    const std::vector<bool> grounded = groundedPoints(table, inferFrontCorner());
+
+    QCOMPARE(grounded.size(), table.points.size());
+
+    // The two inboard pivots of a wishbone: the pair the closing edge of its A
+    // would be drawn between.
+    QVERIFY(grounded[std::size_t(table.indexOf(QStringLiteral("F_UCA_IF")))]);
+    QVERIFY(grounded[std::size_t(table.indexOf(QStringLiteral("F_UCA_IR")))]);
+    // And its ball joint, which moves.
+    QVERIFY(!grounded[std::size_t(table.indexOf(QStringLiteral("F_UCA_O")))]);
+    // The wheel centre rides the upright rather than the frame.
+    QVERIFY(!grounded[std::size_t(table.indexOf(QStringLiteral("F_WheelCenter")))]);
+
+    // A table nobody has described yet claims nothing, rather than claiming
+    // every point is bolted to the car.
+    const std::vector<bool> unsaid = groundedPoints(table, HardpointConfigMap{});
+    QCOMPARE(unsaid.size(), table.points.size());
+    for (const bool flag : unsaid) QVERIFY(!flag);
 }
 
 QTEST_MAIN(TestHardpointConfig)

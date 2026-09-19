@@ -203,6 +203,8 @@ void ViewportWidget::setHardpoints(const HardpointTable& table)
     // The linkage is indices into the table too, and the one it was built from
     // has just been replaced. Whoever set the points sets the parts again.
     m_linkage = Linkage{};
+    // And what each of them was for, which is a flag per row of that same table.
+    m_grounded.clear();
     rebuildLinkageVertices();
     update();
 }
@@ -254,6 +256,17 @@ void ViewportWidget::setLinkage(const Linkage& linkage)
 void ViewportWidget::clearLinkage()
 {
     setLinkage(Linkage{});
+}
+
+void ViewportWidget::setGroundedPoints(const std::vector<bool>& grounded)
+{
+    // A flag list of the wrong length belongs to another table, and acting on
+    // half of it would hide whichever segments happened to line up.
+    if (!grounded.empty() && grounded.size() != m_hardpoints.size()) return;
+    if (grounded == m_grounded) return;
+    m_grounded = grounded;
+    rebuildLinkageVertices();
+    update();
 }
 
 void ViewportWidget::setWheelModels(TriMesh wheel, EdgeSet wheelEdges, TriMesh rim,
@@ -325,6 +338,10 @@ void ViewportWidget::rebuildLinkageVertices()
     const auto position = [this](int index) {
         return m_hardpoints[static_cast<std::size_t>(index)];
     };
+    const auto grounded = [this](int index) {
+        return index < static_cast<int>(m_grounded.size())
+               && m_grounded[static_cast<std::size_t>(index)];
+    };
 
     // Grouped by kind so that one uniform and one draw call cover each colour.
     // The kinds are an enum over a handful of values, so this is a small fixed
@@ -345,6 +362,10 @@ void ViewportWidget::rebuildLinkageVertices()
                     // A stale index cannot draw anything sensible, and reading
                     // one would be worse than dropping the segment.
                     if (a < 0 || b < 0 || a >= pointCount || b >= pointCount) continue;
+                    // Both ends bolted to the car, so there is no member here
+                    // to draw -- the chain is closed because that is the
+                    // topology, not because the frame has a bar across it.
+                    if (grounded(a) && grounded(b)) continue;
                     m_linkVertices.push_back(position(a));
                     m_linkVertices.push_back(position(b));
                 }

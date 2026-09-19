@@ -390,6 +390,16 @@ each part is built a second time with every name put through **your** mirror rul
 (Hardpoints ▸ Mirror), so whatever convention your workbook uses is the one used
 here, and `{side}` in a label becomes `left` or `right`.
 
+A segment whose **two ends are both fixed to the chassis** is not drawn. The edge
+that closes a wishbone's A runs from one inboard pivot to the other, and there is
+no member there: both ends are bolted to the frame. So the arm is drawn as the two
+legs it is, while the chain stays closed — that is the topology, and it is what
+the solver and the configuration table are both built on. It follows what each
+point is set to in the hardpoint table — **To body** — rather than which part it belongs to, so a rocker
+axis and a pair of anti-roll bar pivots are answered the same way, and a point
+nobody has typed a type for yet is not taken for chassis. The markers themselves
+are untouched: still drawn, still labelled, still selected and dragged.
+
 `"optional": true` on a part or a chain means *say nothing when these points are
 absent* — an anti-roll bar, a rocker axis point. A corner or a side with not one
 of its points in the table is skipped silently, so a workbook holding one axle,

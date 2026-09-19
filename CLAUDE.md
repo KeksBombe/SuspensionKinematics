@@ -480,6 +480,18 @@ as `:/templates/...` so the tests read the same bytes the application ships.
   refuses to replace a file any handle has open, this process's own included. A
   `QFile` still open in the scope of the write is what made the steering fail
   there with "Access is denied" while Linux let it through.
+- **A segment between two chassis-fixed points is not drawn.** `groundedPoints()`
+  (in `HardpointConfig.*`, a flag per row because the viewport holds its parts as
+  indices and has no names to look a configuration up by) flags every point whose
+  `PointType` is `ToBody`, and `ViewportWidget::rebuildLinkageVertices()` drops a
+  segment with both ends in it: the edge that closes a wishbone's A runs pivot to
+  pivot, where there is no member. The chain stays `closed` -- that is the
+  topology, and both the solver and `inferHardpointConfig()` read it -- so this
+  is the renderer's alone, and `setHardpoints()` drops the flags with the parts
+  for the same reason. A rocker's axis chain is two chassis points too, and goes
+  the same way on purpose. `MainWindow::syncGroundedPoints()` follows the
+  *configuration* rather than the linkage, because a point's type is edited in
+  the table long after the parts were resolved.
 - A template with **no `mechanism` block** -- one written before the solver
   existed, which is what older projects still hold -- is read with the built-in
   mechanism assumed and `LinkageTemplate::mechanismAssumed` set. Without it the

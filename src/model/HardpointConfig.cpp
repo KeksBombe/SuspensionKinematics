@@ -121,6 +121,21 @@ BodyCatalog bodyCatalog(const LinkageTemplate& templ)
 
 QString partBodyName(const PartTemplate& part) { return genericLabel(part); }
 
+std::vector<bool> groundedPoints(const HardpointTable& table, const HardpointConfigMap& config)
+{
+    std::vector<bool> grounded(table.size(), false);
+    if (config.isEmpty()) return grounded;
+
+    for (std::size_t row = 0; row < table.points.size(); ++row) {
+        const auto entry = config.constFind(table.points[row].name);
+        // A point nobody has typed yet is not claimed to be anything, least of
+        // all ground.
+        if (entry == config.constEnd()) continue;
+        grounded[row] = entry->type == PointType::ToBody;
+    }
+    return grounded;
+}
+
 int renameBody(HardpointConfigMap& config, const QString& from, const QString& to)
 {
     if (from.isEmpty() || from == to) return 0;

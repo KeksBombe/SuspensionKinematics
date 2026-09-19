@@ -235,6 +235,9 @@ void MainWindow::buildHardpointDock()
     // refused anything that could not mean something.
     connect(m_hardpointModel, &HardpointModel::configChanged, this, [this](int row) {
         captureHardpointConfig();
+        // A point that has just become -- or stopped being -- a chassis pivot
+        // changes what is drawn through it.
+        syncGroundedPoints();
         markDirty();
         const HardpointTable& table = m_hardpointModel->table();
         if (row >= 0 && row < static_cast<int>(table.points.size()))
@@ -999,6 +1002,9 @@ void MainWindow::rebuildLinkage()
     // The configuration table is resolved against the same two things the parts
     // are, so whatever changed here changed that too.
     refreshHardpointConfig();
+    // And it is what says which of those parts' segments run from the car to
+    // itself, so it reaches the viewport in the same breath.
+    syncGroundedPoints();
 
     // The mechanism is bound to the same two things the parts are -- this
     // template and this table -- so it is rebound in the same breath. Doing it
@@ -1034,6 +1040,12 @@ void MainWindow::refreshHardpointConfig()
     // edit rather than worked out again on every open.
     captureHardpointConfig();
     markDirty();
+}
+
+void MainWindow::syncGroundedPoints()
+{
+    m_viewport->setGroundedPoints(
+        groundedPoints(m_hardpointModel->table(), m_hardpointModel->config()));
 }
 
 void MainWindow::captureHardpointConfig()

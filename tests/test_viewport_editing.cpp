@@ -1,5 +1,6 @@
 #include "render/ViewportWidget.h"
 
+#include "model/HardpointConfig.h"
 #include "render/MoveGizmo.h"
 
 #include <QKeyEvent>
@@ -99,6 +100,68 @@ struct SelectedPoint {
     }
 };
 
+/// A front left upper wishbone: two pivots on the frame and the ball joint
+/// they carry between them.
+HardpointTable wishbone()
+{
+    HardpointTable table;
+    Hardpoint front;
+    front.name = QStringLiteral("F_UCA_IF");
+    front.coord[0] = -2068.622;
+    front.coord[1] = 271.5;
+    front.coord[2] = 318.0;
+    Hardpoint rear;
+    rear.name = QStringLiteral("F_UCA_IR");
+    rear.coord[0] = -2268.622;
+    rear.coord[1] = 271.5;
+    rear.coord[2] = 318.0;
+    Hardpoint outer;
+    outer.name = QStringLiteral("F_UCA_O");
+    outer.coord[0] = -2160.0;
+    outer.coord[1] = 560.0;
+    outer.coord[2] = 330.0;
+    table.points = { front, rear, outer };
+    return table;
+}
+
+/// The A-arm as a template draws it: one closed chain through all three, which
+/// is the topology whatever the viewport does with it. Written literally, so
+/// there is no corner to substitute and no far side to mirror.
+Linkage wishboneLinkage(const HardpointTable& table)
+{
+    ChainTemplate chain;
+    chain.points = QStringList{ QStringLiteral("F_UCA_IF"), QStringLiteral("F_UCA_O"),
+                                QStringLiteral("F_UCA_IR") };
+    chain.closed = true;
+
+    PartTemplate part;
+    part.id = QStringLiteral("upperWishbone");
+    part.label = QStringLiteral("Upper wishbone");
+    part.kind = PartKind::Wishbone;
+    part.perCorner = false;
+    part.chains.push_back(chain);
+
+    LinkageTemplate templ;
+    templ.parts.push_back(part);
+    return buildLinkage(templ, table, MirrorSpec{});
+}
+
+/// What the two pivots are: bolted to the car, which is what the template's
+/// mechanism block says about them and what the table shows.
+HardpointConfigMap wishboneConfig()
+{
+    HardpointConfig pivot;
+    pivot.type = PointType::ToBody;
+    HardpointConfig ballJoint;
+    ballJoint.type = PointType::Solved;
+
+    HardpointConfigMap config;
+    config.insert(QStringLiteral("F_UCA_IF"), pivot);
+    config.insert(QStringLiteral("F_UCA_IR"), pivot);
+    config.insert(QStringLiteral("F_UCA_O"), ballJoint);
+    return config;
+}
+
 } // namespace
 
 class TestViewportEditing : public QObject {
@@ -111,6 +174,8 @@ private slots:
     void draggingAnArmDoesNotOrbitOrSelect();
     void anAxisKeyAsksForTheCoordinate();
     void aPosedMechanismHasNoArrowsAndNoKeys();
+    void noMemberIsDrawnBetweenTwoChassisPoints();
+    void chassisFlagsGoWithTheTableTheyWereMeasuredOn();
 };
 
 void TestViewportEditing::draggingAnArmReportsHowFarItWent()
@@ -211,6 +276,56 @@ void TestViewportEditing::aPosedMechanismHasNoArrowsAndNoKeys()
 
     QCOMPARE(moved.size(), 0);
     QCOMPARE(asked.size(), 0);
+}
+
+void TestViewportEditing::noMemberIsDrawnBetweenTwoChassisPoints()
+{
+    ViewportWidget viewport;
+    viewport.resize(1000, 700);
+    const HardpointTable table = wishbone();
+    viewport.setHardpoints(table);
+    viewport.setLinkage(wishboneLinkage(table));
+    viewport.fitToView();
+
+    // The A closes, because that is what the template says it is.
+    QCOMPARE(viewport.drawnSegmentCount(), 3);
+
+    viewport.setGroundedPoints(groundedPoints(table, wishboneConfig()));
+
+    // The two legs are left; the edge between the pivots, which is a line
+    // across the frame rather than a member, is not drawn.
+    QCOMPARE(viewport.drawnSegmentCount(), 2);
+
+    // Nothing was taken away from the points themselves: all three are still
+    // on screen to be labelled and picked, and the part is still there.
+    QVERIFY(viewport.hasLinkage());
+    for (int index = 0; index < 3; ++index) {
+        QPointF screen;
+        QVERIFY(viewport.markerPosition(index, &screen));
+    }
+    viewport.setSelectedHardpoint(0);
+    QCOMPARE(viewport.selectedHardpoint(), 0);
+}
+
+void TestViewportEditing::chassisFlagsGoWithTheTableTheyWereMeasuredOn()
+{
+    ViewportWidget viewport;
+    viewport.resize(1000, 700);
+    const HardpointTable table = wishbone();
+    viewport.setHardpoints(table);
+    viewport.setLinkage(wishboneLinkage(table));
+    viewport.setGroundedPoints(groundedPoints(table, wishboneConfig()));
+    QCOMPARE(viewport.drawnSegmentCount(), 2);
+
+    // A flag list as long as somebody else's table is not applied to this one.
+    viewport.setGroundedPoints(std::vector<bool>{ true, true });
+    QCOMPARE(viewport.drawnSegmentCount(), 2);
+
+    // And replacing the points drops them, exactly as it drops the parts: both
+    // are answers about rows that have just gone.
+    viewport.setHardpoints(table);
+    viewport.setLinkage(wishboneLinkage(table));
+    QCOMPARE(viewport.drawnSegmentCount(), 3);
 }
 
 QTEST_MAIN(TestViewportEditing)
