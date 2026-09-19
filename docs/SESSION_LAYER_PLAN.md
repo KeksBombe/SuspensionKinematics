@@ -515,3 +515,43 @@ Sweep as CSV, Reset Panel Layout. Check that the analysis plots read the same
 numbers as before, that closing and reopening the project comes back to the same
 camera, tab, docks, selection and sweep, and that the workbook written out is
 byte-identical to one written before the refactor.
+
+## How it went (2026-09-19)
+
+Done. `MainWindow.cpp` is 663 lines and `MainWindow.h` 189: the window, the
+cascade drawn as the session announces it, opening a project, the undo step
+that redraws, and `AppContext`. That is more than the ~400 estimated, because
+drawing each step of the cascade and opening a project in order stayed on the
+window. The rest went where the plan said, with these differences:
+
+- **The session signals each step, not one `derivedChanged()`.** Binding the
+  axles can change which axle the panel has chosen, so the panel's axle box has
+  to follow before the sweep reads it. One signal at the end would have drawn
+  the sweep for the wrong axle. `partsResolved`, `axlesBound`, `sweepRun`,
+  `posed`, `wheelsPlaced` and `resolved` keep the old order, and the request is
+  read off the panel afresh at every step through `setRequestSource()`.
+- **Failures are a `SessionMessage`, a title and a text**, rather than a bare
+  `QString`: one call can fail more than one way -- a file missing is not a file
+  unreadable -- and only the document knows which title fits.
+- **The undo history went to `ProjectSession`**; it landed after this plan was
+  written. `restoreEditState()` stays on the window, because it redraws.
+- **The view state is split five ways, not three**: LinkageFeature and
+  WheelsFeature keep their own show toggles, next to the commands that toggle
+  them, instead of ViewFeature reaching for them by id.
+- **Opening a project stays on the window** (`openChassis()`,
+  `openHardpoints()`, `openLinkageTemplate()`, `openWheels()`): the order they
+  run in matters, and features are created in link order.
+- **Three features were split off, not one**: HardpointWorkbookFeature,
+  GenerateFeature and MechanismFeature. `features/SharedCommands.h` is what one
+  feature, or `--import`, needs from another.
+- Two small things now happen at a different moment: the title and the chassis
+  line of the status bar refresh with the rest of the chrome, and importing or
+  removing a chassis refreshes the commands after the project knows, so Remove
+  Chassis is enabled straight away rather than at the next refresh.
+
+Verified by `ctest` (24 suites, `test_session` new), and by the build before
+the first commit and after the last, run side by side on a copy of a real
+project and five variants of it -- simulating in roll and steer, still with a
+selection and hidden labels and parts, no template, no edits file, and an
+empty project: the window screenshots are pixel-identical and the project
+folders they leave behind are the same apart from timestamps.
