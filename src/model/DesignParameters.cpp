@@ -49,6 +49,34 @@ constexpr AxleField kAxleFields[] = {
     { "steeringArm", &AxleDesign::steeringArm },
     { "ackermann", &AxleDesign::ackermann },
     { "tieRodInboardOffsetX", &AxleDesign::tieRodInboardOffsetX },
+    { "pushrodPickupInboard", &AxleDesign::pushrodPickupInboard },
+    { "pushrodPickupHeight", &AxleDesign::pushrodPickupHeight },
+    { "rockerPivotY", &AxleDesign::rockerPivotY },
+    { "rockerPivotZ", &AxleDesign::rockerPivotZ },
+    { "rockerPivotOffsetX", &AxleDesign::rockerPivotOffsetX },
+    { "rockerPushrodArm", &AxleDesign::rockerPushrodArm },
+    { "rockerDamperAngle", &AxleDesign::rockerDamperAngle },
+    { "installationRatio", &AxleDesign::installationRatio },
+    { "damperLength", &AxleDesign::damperLength },
+    { "antiRollRockerArm", &AxleDesign::antiRollRockerArm },
+    { "antiRollRockerAngle", &AxleDesign::antiRollRockerAngle },
+    { "antiRollPickupInboard", &AxleDesign::antiRollPickupInboard },
+    { "dropLinkLength", &AxleDesign::dropLinkLength },
+    { "antiRollArmLength", &AxleDesign::antiRollArmLength },
+    { "antiRollBearingInset", &AxleDesign::antiRollBearingInset },
+};
+
+/// The switches, the same way.
+struct AxleFlag {
+    const char* key;
+    bool AxleDesign::*member;
+};
+
+constexpr AxleFlag kAxleFlags[] = {
+    { "generate", &AxleDesign::generate },
+    { "steered", &AxleDesign::steered },
+    { "generateRocker", &AxleDesign::generateRocker },
+    { "generateAntiRollBar", &AxleDesign::generateAntiRollBar },
 };
 
 struct CarField {
@@ -70,9 +98,9 @@ constexpr CarField kCarFields[] = {
 QJsonObject axleToJson(const AxleDesign& axle)
 {
     QJsonObject object;
-    object.insert(QStringLiteral("generate"), axle.generate);
     object.insert(QStringLiteral("corner"), axle.corner);
-    object.insert(QStringLiteral("steered"), axle.steered);
+    for (const AxleFlag& flag : kAxleFlags)
+        object.insert(QLatin1String(flag.key), axle.*flag.member);
     for (const AxleField& field : kAxleFields) object.insert(QLatin1String(field.key), axle.*field.member);
     object.insert(QStringLiteral("advisedPivot"), designPivotToString(axle.advisedPivot));
     return object;
@@ -81,9 +109,9 @@ QJsonObject axleToJson(const AxleDesign& axle)
 AxleDesign axleFromJson(const QJsonObject& object, const AxleDesign& defaults)
 {
     AxleDesign axle = defaults;
-    axle.generate = object.value(QStringLiteral("generate")).toBool(defaults.generate);
     axle.corner = object.value(QStringLiteral("corner")).toString(defaults.corner);
-    axle.steered = object.value(QStringLiteral("steered")).toBool(defaults.steered);
+    for (const AxleFlag& flag : kAxleFlags)
+        axle.*flag.member = object.value(QLatin1String(flag.key)).toBool(defaults.*flag.member);
     for (const AxleField& field : kAxleFields)
         axle.*field.member = object.value(QLatin1String(field.key)).toDouble(defaults.*field.member);
     axle.advisedPivot = designPivotFromString(object.value(QStringLiteral("advisedPivot")).toString(),

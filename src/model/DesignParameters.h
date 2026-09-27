@@ -78,6 +78,51 @@ struct AxleDesign {
     double tieRodInboardOffsetX = 0.0;
     DesignPivot advisedPivot = DesignPivot::LowerFront;
 
+    /// The pushrod, the rocker and the damper. Generated only when asked for:
+    /// a project whose rocker was placed by hand keeps it.
+    bool generateRocker = true;
+    /// Where the pushrod picks up, on the body the linkage template's pushrod
+    /// mount names: this far along that wishbone from its ball joint toward its
+    /// chassis pivots, and this far above the wishbone's plane. A pushrod on the
+    /// upright is placed by the lower wishbone's numbers; any point of the
+    /// upright moves with it.
+    double pushrodPickupInboard = 40.0;
+    double pushrodPickupHeight = 0.0;
+    /// The rocker's pivot: its distance from the centreline and its height
+    /// above the ground, and how far ahead of the pushrod pickup it sits. Its
+    /// axis runs along the car.
+    double rockerPivotY = 150.0;
+    double rockerPivotZ = 500.0;
+    double rockerPivotOffsetX = 0.0;
+    /// The rocker's arm to the pushrod. The pushrod meets it square at design,
+    /// which is where a rocker has the most leverage.
+    double rockerPushrodArm = 70.0;
+    /// The angle on the rocker from the pushrod's arm to the damper's, positive
+    /// turning inboard.
+    double rockerDamperAngle = 120.0;
+    /// Damper compression per unit of bump at design. It is what sizes the
+    /// rocker's damper arm, and it is met exactly at the design position.
+    double installationRatio = 0.6;
+    /// The damper, eye to eye, at design. It is put square to its rocker arm.
+    double damperLength = 200.0;
+
+    /// The anti-roll bar, by the four points and the mount the template names
+    /// for it. Generated only when asked for.
+    bool generateAntiRollBar = true;
+    /// On a rocker mount, the drop link's pickup: this far from the rocker
+    /// pivot, at this angle from the pushrod's arm, positive turning inboard.
+    double antiRollRockerArm = 50.0;
+    double antiRollRockerAngle = -30.0;
+    /// On any other mount, the pickup is placed the way a pushrod's is: this
+    /// far along the wishbone from its ball joint.
+    double antiRollPickupInboard = 60.0;
+    /// The drop link, square to its rocker arm, and the bar's arm, running
+    /// forward from the bar to the drop link. The bar's axis is across the car;
+    /// its bearing is this far inboard of the arm root.
+    double dropLinkLength = 70.0;
+    double antiRollArmLength = 80.0;
+    double antiRollBearingInset = 60.0;
+
     bool operator==(const AxleDesign& other) const = default;
 };
 

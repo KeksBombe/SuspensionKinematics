@@ -266,8 +266,25 @@ clearance off its surface, which is worth doing when the geometry is the chassis
 on its own. The targets are kept in the project, so reopening the dialog starts
 where you left it.
 
-The rocker, pushrod inner end, damper and anti-roll bar are not generated. They
-are packaging, not a consequence of vehicle targets; place them with Add Point.
+The **pushrod, rocker, damper and anti-roll bar** are generated too, from a few
+placement inputs per axle:
+
+- the pushrod pickup, on the wishbone the template's `pushrod.mount` names — how
+  far along it from the ball joint, and how far above its plane;
+- the rocker pivot's position (its axis runs along the car) and its arm to the
+  pushrod, which the pushrod meets square;
+- the damper arm's angle from the pushrod's, the damper's length, and the
+  **installation ratio** — the one real target here. The damper's arm on the
+  rocker is sized so that ratio comes out exactly at design, and the damper is
+  laid square to its arm so that bump closes it;
+- the anti-roll bar by its four points (see *The anti-roll bar* under Parts):
+  the drop link's pickup on the rocker, or on the body the template's
+  `antiRollBar.mount` names, the drop link's length, the bar's arm, and the
+  bearing's inset.
+
+Each group has its own switch per axle. Untick it to keep a rocker you placed by
+hand exactly where it is. A bar that hangs off the rocker is not generated
+without one, and the dialog says so.
 
 ### The configuration table
 
