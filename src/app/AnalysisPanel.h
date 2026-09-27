@@ -166,6 +166,9 @@ private:
     /// selected axle has none.
     void syncSteerAvailability();
     void syncPositionRange();
+    /// The part of @p low to @p high the mechanism assembles in, from the last
+    /// sweep. All of it when that sweep has nothing to say.
+    SweepInterval reachableRange(double low, double high) const;
     void emitPositionFromSlider(int value);
     double sliderToPosition(int value) const;
     int positionToSlider(double position) const;

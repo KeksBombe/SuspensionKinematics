@@ -271,6 +271,21 @@ struct SweepResult {
     const AxleSample* nearest(double input) const;
 };
 
+/// A closed stretch of a sweep's input, @p low to @p high.
+struct SweepInterval {
+    double low = 0.0;
+    double high = 0.0;
+};
+
+/// How far either way from the design position the mechanism holds together:
+/// the unbroken run of samples around input 0 in which every corner that
+/// assembled at design still assembles. Past it the sweep has no pose to show,
+/// so this is what the travel slider is allowed to reach.
+///
+/// Nothing when the design position itself did not assemble -- there is then
+/// no run to measure, and nothing better to say than the sweep's own range.
+std::optional<SweepInterval> assembledInterval(const SweepResult& result);
+
 /// One thing that can be plotted against the sweep's input.
 ///
 /// Named here rather than in the widget that draws them so that what a curve

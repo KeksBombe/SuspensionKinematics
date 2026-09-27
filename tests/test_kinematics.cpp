@@ -330,6 +330,7 @@ private slots:
     void anAxleSortsItsTwoSidesByWhereTheyAre();
     void aBumpSweepMovesBothWheelsTheSameWay();
     void aRollSweepMovesThemOppositeWaysAndTwistsTheBar();
+    void theAssembledIntervalStopsWhereTheMechanismJams();
     void theRollCentreIsOnTheCentrelineWhenTheAxleIsSymmetric();
     void theInstantCentreIsWhereTheArmPlanesCross();
     void theRollAxisRunsThroughEveryAxlesRollCentre();
@@ -1066,6 +1067,42 @@ void TestKinematics::aBumpSweepMovesBothWheelsTheSameWay()
     QVERIFY(middle->leftInstallationRatio > 0.05);
     QVERIFY(middle->leftInstallationRatio < 1.0);
     QVERIFY(std::abs(middle->leftInstallationRatio - middle->rightInstallationRatio) < 1e-6);
+}
+
+void TestKinematics::theAssembledIntervalStopsWhereTheMechanismJams()
+{
+    // Samples out of order, as a sweep from + to - hands them over.
+    const auto sample = [](double input, bool left, bool right) {
+        AxleSample s;
+        s.input = input;
+        s.left.valid = left;
+        s.right.valid = right;
+        return s;
+    };
+    SweepResult result;
+    result.samples = { sample(3.0, true, true),   sample(2.0, true, true),
+                       sample(1.0, true, true),   sample(0.0, true, true),
+                       sample(-1.0, true, true),  sample(-2.0, true, false),
+                       sample(-3.0, true, true),  sample(4.0, false, false) };
+
+    // One side letting go is the end of it, and a sample that happens to
+    // assemble again beyond the gap is on the far side of a jam.
+    std::optional<SweepInterval> interval = assembledInterval(result);
+    QVERIFY(interval.has_value());
+    QCOMPARE(interval->low, -1.0);
+    QCOMPARE(interval->high, 3.0);
+
+    // An axle with one corner is not held to the corner it has not got.
+    for (AxleSample& s : result.samples) s.right.valid = false;
+    interval = assembledInterval(result);
+    QVERIFY(interval.has_value());
+    QCOMPARE(interval->low, -3.0);
+    QCOMPARE(interval->high, 3.0);
+
+    // Nothing to measure from when the design position does not assemble.
+    result.samples = { sample(0.0, false, false), sample(1.0, true, true) };
+    QVERIFY(!assembledInterval(result).has_value());
+    QVERIFY(!assembledInterval(SweepResult{}).has_value());
 }
 
 void TestKinematics::aRollSweepMovesThemOppositeWaysAndTwistsTheBar()

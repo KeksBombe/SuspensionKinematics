@@ -673,6 +673,7 @@ void AnalysisPanel::setResult(const SweepResult& result)
 {
     m_result = result;
     for (PlotWidget* plot : std::as_const(m_plots)) plot->setSweep(result);
+    syncPositionRange();
 }
 
 void AnalysisPanel::setReadout(const AxleSample& sample, SweepKind kind)
@@ -719,16 +720,36 @@ void AnalysisPanel::syncPositionRange()
     m_updating = true;
     m_positionUnit->setText(sweepInputUnit(current.kind));
     m_positionBox->setSuffix(QString());
-    m_positionBox->setRange(low, high);
+    // Only as far as the mechanism holds together: past that there is no pose
+    // to show, and the car was drawn at its design position with the body
+    // rolled round it anyway.
+    const SweepInterval reachable = reachableRange(low, high);
+    m_positionBox->setRange(reachable.low, reachable.high);
     // A position that means nothing in the new range goes back to the design
     // position rather than to whichever end of the travel it happened to be
     // nearest. Twenty millimetres of wheel travel is not twenty degrees of body
-    // roll, and it is not full lock either.
-    if (previous < low || previous > high) m_positionBox->setValue(std::clamp(0.0, low, high));
+    // roll, and it is not full lock either. One merely past where the
+    // mechanism jams is the same kind of number, so setRange() clamps it to
+    // the end it went past.
+    if (previous < low || previous > high)
+        m_positionBox->setValue(std::clamp(0.0, reachable.low, reachable.high));
     m_positionBox->setSingleStep(current.kind == SweepKind::Roll ? 0.1 : 1.0);
     m_positionSlider->setValue(positionToSlider(m_positionBox->value()));
     m_updating = false;
     setPlotMarker(m_positionBox->value());
+}
+
+SweepInterval AnalysisPanel::reachableRange(double low, double high) const
+{
+    // A result for another kind of sweep is about another input altogether.
+    const std::optional<SweepInterval> assembled =
+        m_result.kind == spec().kind ? assembledInterval(m_result) : std::nullopt;
+    if (!assembled) return SweepInterval{ low, high };
+    const SweepInterval reachable{ std::max(low, assembled->low), std::min(high, assembled->high) };
+    // A result from before the travel was changed may not overlap it at all;
+    // the sweep that is about to replace it will say.
+    if (reachable.low > reachable.high) return SweepInterval{ low, high };
+    return reachable;
 }
 
 double AnalysisPanel::sliderToPosition(int value) const
