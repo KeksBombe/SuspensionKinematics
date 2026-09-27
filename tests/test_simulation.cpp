@@ -128,6 +128,7 @@ private slots:
     void onlyTheSelectedAxleMovesUnlessTheOthersAreAskedFor();
     void steeringNeverDragsTheOtherAxlesAlong();
     void aBodyCannotRollWithAnAxleLeftBehind();
+    void aBodyDoesNotRollPastWhereTheMechanismAssembles();
     void aPoseIsLaidOverTheTableWithoutChangingIt();
     void aRolledBodyMovesTheChassisPickupsTooNotOnlyWhatTheSolveMoved();
     void wheelRotationsAreKeyedByTheNameOfTheirWheelCentre();
@@ -293,6 +294,21 @@ void TestSimulation::aBodyCannotRollWithAnAxleLeftBehind()
         simulation.poseAt(QStringLiteral("F"), SweepKind::Roll, 2.0, 0.0, true);
     QCOMPARE(whole.samples.size(), std::size_t(2));
     QVERIFY(whole.bodyMotion.has_value());
+}
+
+void TestSimulation::aBodyDoesNotRollPastWhereTheMechanismAssembles()
+{
+    const Simulation simulation = wholeCarSimulation();
+
+    // Sixty degrees is several hundred millimetres of wheel travel, which no
+    // wishbone here reaches. The corners stay at their design positions, and
+    // rolling the body anyway would swing them, wheels and all, through the
+    // whole angle.
+    const SimulationPose pose =
+        simulation.poseAt(QStringLiteral("F"), SweepKind::Roll, 60.0, 0.0, true);
+    QCOMPARE(pose.samples.size(), std::size_t(2));
+    QVERIFY(!pose.samples.front().left.valid);
+    QVERIFY(!pose.bodyMotion.has_value());
 }
 
 void TestSimulation::aPoseIsLaidOverTheTableWithoutChangingIt()
