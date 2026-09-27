@@ -633,8 +633,11 @@ void TestLinkage::aPartIsRelabelledWithoutDisturbingTheFile()
     const QByteArray after = setTemplatePartLabel(kHandWritten, QStringLiteral("pushRod"),
                                                   QStringLiteral("{corner} \"push\" rod"), &error);
     QVERIFY2(!after.isEmpty(), qPrintable(error));
-    // The one value, escaped, and nothing around it moved.
-    QVERIFY(after.contains(R"("label": "{corner} \"push\" rod",)"));
+    // The one value, escaped, and nothing around it moved. The literal is kept
+    // out of the macro: MSVC's preprocessor reads the \" inside a raw string
+    // there as an escape and refuses to compile the line.
+    const QByteArray escaped = R"("label": "{corner} \"push\" rod",)";
+    QVERIFY(after.contains(escaped));
     QCOMPARE(after.size() - kHandWritten.size(),
              qsizetype(QByteArray(R"({corner} \"push\" rod)").size())
                  - qsizetype(QByteArray("{corner} pushrod").size()));
