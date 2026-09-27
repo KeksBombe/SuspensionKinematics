@@ -330,6 +330,7 @@ private slots:
     void anAxleSortsItsTwoSidesByWhereTheyAre();
     void aBumpSweepMovesBothWheelsTheSameWay();
     void aRollSweepMovesThemOppositeWaysAndTwistsTheBar();
+    void theAssembledIntervalStopsWhereTheMechanismJams();
     void theRollCentreIsOnTheCentrelineWhenTheAxleIsSymmetric();
     void theInstantCentreIsWhereTheArmPlanesCross();
     void theRollAxisRunsThroughEveryAxlesRollCentre();
@@ -338,6 +339,7 @@ private slots:
     void camberToGroundPartsFromCamberByTheRollAngle();
     void aSteerSweepChangesToeAndNotRideHeight();
     void theCsvHasOneRowPerStepAndSaysNothingAboutWhatDidNotSolve();
+    void severalAxlesShareOneCsvSideBySide();
     void theShippedTemplateSolvesTheCornerItDescribes();
 
     // ---- Ackermann ------------------------------------------------------
@@ -1068,6 +1070,42 @@ void TestKinematics::aBumpSweepMovesBothWheelsTheSameWay()
     QVERIFY(std::abs(middle->leftInstallationRatio - middle->rightInstallationRatio) < 1e-6);
 }
 
+void TestKinematics::theAssembledIntervalStopsWhereTheMechanismJams()
+{
+    // Samples out of order, as a sweep from + to - hands them over.
+    const auto sample = [](double input, bool left, bool right) {
+        AxleSample s;
+        s.input = input;
+        s.left.valid = left;
+        s.right.valid = right;
+        return s;
+    };
+    SweepResult result;
+    result.samples = { sample(3.0, true, true),   sample(2.0, true, true),
+                       sample(1.0, true, true),   sample(0.0, true, true),
+                       sample(-1.0, true, true),  sample(-2.0, true, false),
+                       sample(-3.0, true, true),  sample(4.0, false, false) };
+
+    // One side letting go is the end of it, and a sample that happens to
+    // assemble again beyond the gap is on the far side of a jam.
+    std::optional<SweepInterval> interval = assembledInterval(result);
+    QVERIFY(interval.has_value());
+    QCOMPARE(interval->low, -1.0);
+    QCOMPARE(interval->high, 3.0);
+
+    // An axle with one corner is not held to the corner it has not got.
+    for (AxleSample& s : result.samples) s.right.valid = false;
+    interval = assembledInterval(result);
+    QVERIFY(interval.has_value());
+    QCOMPARE(interval->low, -3.0);
+    QCOMPARE(interval->high, 3.0);
+
+    // Nothing to measure from when the design position does not assemble.
+    result.samples = { sample(0.0, false, false), sample(1.0, true, true) };
+    QVERIFY(!assembledInterval(result).has_value());
+    QVERIFY(!assembledInterval(SweepResult{}).has_value());
+}
+
 void TestKinematics::aRollSweepMovesThemOppositeWaysAndTwistsTheBar()
 {
     const AxleSolver axle =
@@ -1424,6 +1462,54 @@ void TestKinematics::theCsvHasOneRowPerStepAndSaysNothingAboutWhatDidNotSolve()
     QVERIFY(!refused.warnings.isEmpty());
     const QList<QByteArray> refusedLines = sweepToCsv(refused).split('\n');
     QVERIFY(refusedLines[1].contains(",,,,"));
+}
+
+void TestKinematics::severalAxlesShareOneCsvSideBySide()
+{
+    const AxleSolver front =
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{});
+    const AxleSolver rear =
+        AxleSolver::build(cornerMechanism(), rearCorner(), rearAxle(), MirrorSpec{});
+
+    SweepSpec spec;
+    spec.kind = SweepKind::Bump;
+    spec.from = -10.0;
+    spec.to = 10.0;
+    spec.steps = 5;
+    const SweepResult frontSweep = runSweep(front, spec);
+    const SweepResult rearSweep = runSweep(rear, spec);
+    QCOMPARE(frontSweep.axleToken, QStringLiteral("F"));
+
+    // One axle with both wheels is the single-axle export, byte for byte.
+    QCOMPARE(sweepsToCsv({ frontSweep }, SweepSides::Both), sweepToCsv(frontSweep));
+
+    // Two are side by side after one input column, each named after its axle.
+    const QList<QByteArray> lines =
+        sweepsToCsv({ frontSweep, rearSweep }, SweepSides::Both).split('\n');
+    QCOMPARE(lines.size(), 7);
+    const QByteArray header = lines.first();
+    QVERIFY(header.startsWith("Wheel travel [mm],Front travel_left [mm]"));
+    QVERIFY(header.contains(",Rear camber_right [deg]"));
+    QVERIFY(header.contains(",Front roll_centre_height [mm]"));
+    QVERIFY(header.contains(",Rear ackermann [%]"));
+    QCOMPARE(header.count("Wheel travel"), 1);
+    const int columns = header.count(',') + 1;
+    QCOMPARE(columns, 1 + 2 * (2 * 13 + 4));
+    for (int row = 1; row <= 5; ++row) QCOMPARE(lines[row].count(',') + 1, columns);
+
+    // A wheel that is not shown has no columns; the axle-wide ones stay.
+    const QByteArray leftOnly =
+        sweepsToCsv({ frontSweep, rearSweep }, SweepSides::Left).split('\n').first();
+    QVERIFY(leftOnly.contains("Rear camber_left [deg]"));
+    QVERIFY(!leftOnly.contains("_right"));
+    QVERIFY(leftOnly.contains("Rear roll_centre_height [mm]"));
+
+    // A sweep that has nothing in it -- a steer sweep of an unsteered axle --
+    // takes no columns, and with nothing at all there is nothing to write.
+    SweepResult refused;
+    refused.axleToken = QStringLiteral("R");
+    QCOMPARE(sweepsToCsv({ frontSweep, refused }, SweepSides::Both), sweepToCsv(frontSweep));
+    QVERIFY(sweepsToCsv({ refused }, SweepSides::Both).isEmpty());
 }
 
 void TestKinematics::theShippedTemplateSolvesTheCornerItDescribes()

@@ -6,15 +6,14 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
-#include <QEvent>
+#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
-#include <QMenu>
-#include <QMouseEvent>
+#include <QPainter>
+#include <QPixmap>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStandardItemModel>
@@ -30,31 +29,18 @@
 namespace suspkin {
 namespace {
 
-/// Wide enough for the tick labels, a title and a curve worth reading. A dock
-/// narrower than two of these gets its plots one above the other.
-constexpr int kMinPlotWidth = 360;
-
-/// Tall enough to read a curve off. More plots than fit at this height scroll,
-/// rather than being squashed into slivers.
-constexpr int kMinPlotHeight = 180;
-
-/// A menu that stays open while its ticks are clicked, so several curves can be
-/// picked in one visit instead of one visit per curve.
-class StayOpenMenu : public QMenu {
-public:
-    using QMenu::QMenu;
-
-protected:
-    void mouseReleaseEvent(QMouseEvent* event) override
-    {
-        QAction* action = actionAt(event->position().toPoint());
-        if (action && action->isEnabled() && action->isCheckable()) {
-            action->trigger();
-            return;
-        }
-        QMenu::mouseReleaseEvent(event);
-    }
-};
+/// A short stretch of line in @p color and @p style, for a checkbox that shows
+/// or hides curves drawn that way: the checkbox is the plot's legend.
+QIcon lineIcon(const QColor& color, Qt::PenStyle style)
+{
+    QPixmap pixmap(20, 12);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(color, 2.0, style, Qt::FlatCap));
+    painter.drawLine(QPointF(1.0, 6.0), QPointF(19.0, 6.0));
+    return QIcon(pixmap);
+}
 
 /// The slider works in steps of this many per full range, which is fine enough
 /// that dragging it looks continuous and coarse enough that every step is a
@@ -97,7 +83,9 @@ void AnalysisPanel::buildUi()
     controls->setVerticalSpacing(6);
 
     m_axleBox = new QComboBox(this);
-    m_axleBox->setToolTip(tr("Which axle to put through its travel."));
+    m_axleBox->setToolTip(tr("Which axle the position drives: the one the viewport moves when "
+                             "not every axle comes along, and the one the table below reads "
+                             "out. Which axles are plotted is ticked under Show."));
     controls->addWidget(new QLabel(tr("Axle"), this), 0, 0);
     controls->addWidget(m_axleBox, 0, 1, 1, 2);
 
@@ -152,67 +140,14 @@ void AnalysisPanel::buildUi()
     controls->setColumnStretch(2, 1);
     layout->addLayout(controls);
 
-    auto* curveRow = new QHBoxLayout;
-    curveRow->addWidget(new QLabel(tr("Curves"), this));
-    m_curveButton = new QToolButton(this);
-    m_curveButton->setPopupMode(QToolButton::InstantPopup);
-    m_curveButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    m_curveButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_curveMenu = new StayOpenMenu(m_curveButton);
-    for (SweepMeasure measure : sweepMeasures()) {
-        QAction* action = m_curveMenu->addAction(
-            QStringLiteral("%1 [%2]").arg(sweepMeasureLabel(measure), sweepMeasureUnit(measure)));
-        action->setCheckable(true);
-        action->setData(sweepMeasureKey(measure));
-        connect(action, &QAction::toggled, this, [this, action](bool checked) {
-            QList<SweepMeasure> picked;
-            for (const QAction* entry : m_curveMenu->actions())
-                if (entry->isChecked()) picked << sweepMeasureFromKey(entry->data().toString());
-            if (picked.isEmpty()) {
-                // The last curve stays: taking it away would leave an empty
-                // panel that looks like a fault rather than a choice.
-                const QSignalBlocker blocker(action);
-                action->setChecked(!checked);
-                return;
-            }
-            m_measures = picked;
-            syncPlots();
-            if (!m_updating) emit measuresChanged();
-        });
-    }
-    m_curveButton->setMenu(m_curveMenu);
-    curveRow->addWidget(m_curveButton, 1);
+    layout->addLayout(buildShowRow());
 
-    m_sidesBox = new QComboBox(this);
-    m_sidesBox->addItem(tr("Both sides"), int(SweepSides::Both));
-    m_sidesBox->addItem(tr("Left only"), int(SweepSides::Left));
-    m_sidesBox->addItem(tr("Right only"), int(SweepSides::Right));
-    m_sidesBox->setToolTip(
-        tr("Which wheels to plot. On a car whose two sides mirror each other, one of them is "
-           "all there is to read: the left wheel at +10 mm of rack is the right wheel at -10. "
-           "The roll centre and the other axle-wide curves are drawn either way."));
-    connect(m_sidesBox, &QComboBox::currentIndexChanged, this, [this] {
-        const auto picked = static_cast<SweepSides>(m_sidesBox->currentData().toInt());
-        if (picked == m_sides) return;
-        m_sides = picked;
-        for (PlotWidget* plot : std::as_const(m_plots)) plot->setSides(m_sides);
-        syncReadoutColumns();
-        if (!m_updating) emit sidesChanged();
+    m_plot = new PlotWidget(this);
+    connect(m_plot, &PlotWidget::markerMoved, this, [this](double value) {
+        setPosition(value);
+        emit positionChanged(value);
     });
-    curveRow->addWidget(m_sidesBox);
-    layout->addLayout(curveRow);
-
-    m_plotHost = new QWidget;
-    m_plotGrid = new QGridLayout(m_plotHost);
-    m_plotGrid->setContentsMargins(0, 0, 0, 0);
-    m_plotGrid->setSpacing(6);
-    m_plotScroll = new QScrollArea(this);
-    m_plotScroll->setWidgetResizable(true);
-    m_plotScroll->setFrameShape(QFrame::NoFrame);
-    m_plotScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_plotScroll->setWidget(m_plotHost);
-    m_plotScroll->viewport()->installEventFilter(this);
-    layout->addWidget(m_plotScroll, 1);
+    layout->addWidget(m_plot, 1);
 
     m_readout = new QTableWidget(int(readoutMeasures().size()), 2, this);
     m_readout->setHorizontalHeaderLabels({ tr("Left"), tr("Right") });
@@ -313,120 +248,213 @@ void AnalysisPanel::buildUi()
     connect(m_kindBox, &QComboBox::currentIndexChanged, this, [this] {
         m_parameters->setKind(kind());
         syncPositionRange();
+        syncAxleToggles();
         if (!m_updating) emit specChanged();
     });
 
-    syncPlots();
+    syncSideToggles();
     syncPositionRange();
 }
 
-PlotWidget* AnalysisPanel::makePlot(SweepMeasure measure)
+QHBoxLayout* AnalysisPanel::buildShowRow()
 {
-    auto* plot = new PlotWidget(m_plotHost);
-    plot->setMeasure(measure);
-    plot->setSides(m_sides);
-    plot->setSweep(m_result);
-    plot->setMarker(m_positionBox->value());
-    connect(plot, &PlotWidget::markerMoved, this, [this](double value) {
-        setPosition(value);
-        emit positionChanged(value);
+    auto* row = new QHBoxLayout;
+    row->addWidget(new QLabel(tr("Curve"), this));
+    m_curveBox = new QComboBox(this);
+    for (SweepMeasure measure : sweepMeasures())
+        m_curveBox->addItem(
+            QStringLiteral("%1 [%2]").arg(sweepMeasureLabel(measure), sweepMeasureUnit(measure)),
+            sweepMeasureKey(measure));
+    m_curveBox->setToolTip(tr("Which curve to plot. Every axle and wheel ticked beside it is "
+                              "drawn in the one plot."));
+    // A long entry would otherwise force the dock as wide as its text.
+    m_curveBox->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_curveBox->setMinimumContentsLength(12);
+    m_curveBox->setCurrentIndex(m_curveBox->findData(sweepMeasureKey(m_measure)));
+    connect(m_curveBox, &QComboBox::currentIndexChanged, this, [this] {
+        m_measure = sweepMeasureFromKey(m_curveBox->currentData().toString());
+        m_plot->setMeasure(m_measure);
+        if (!m_updating) emit measureChanged();
     });
-    // Every plot reads out wherever the pointer is over any of them, so two
-    // curves can be compared at one position without moving the model there.
-    connect(plot, &PlotWidget::hoverMoved, this, [this, plot](double input, bool hovering) {
-        for (PlotWidget* other : std::as_const(m_plots))
-            if (other != plot) other->setHover(input, hovering);
+    row->addWidget(m_curveBox, 1);
+
+    row->addSpacing(8);
+    row->addWidget(new QLabel(tr("Show"), this));
+    m_axleToggleRow = new QHBoxLayout;
+    row->addLayout(m_axleToggleRow);
+
+    auto* divider = new QFrame(this);
+    divider->setFrameShape(QFrame::VLine);
+    divider->setFrameShadow(QFrame::Sunken);
+    row->addWidget(divider);
+
+    const QColor text = palette().color(QPalette::WindowText);
+    m_leftToggle = new QCheckBox(tr("Left"), this);
+    m_leftToggle->setIcon(lineIcon(text, Qt::SolidLine));
+    m_rightToggle = new QCheckBox(tr("Right"), this);
+    m_rightToggle->setIcon(lineIcon(text, Qt::DashLine));
+    for (QCheckBox* toggle : { m_leftToggle, m_rightToggle }) {
+        toggle->setToolTip(
+            tr("Which wheels to plot: the left drawn solid, the right dashed. On a car whose "
+               "two sides mirror each other one of them is all there is to read: the left "
+               "wheel at +10 mm of rack is the right wheel at -10. The roll centre and the "
+               "other axle-wide curves are drawn either way."));
+        connect(toggle, &QCheckBox::toggled, this, &AnalysisPanel::toggleSide);
+        row->addWidget(toggle);
+    }
+    return row;
+}
+
+void AnalysisPanel::rebuildAxleToggles()
+{
+    for (QCheckBox* toggle : std::as_const(m_axleToggles)) {
+        m_axleToggleRow->removeWidget(toggle);
+        toggle->deleteLater();
+    }
+    m_axleToggles.clear();
+
+    for (int i = 0; i < m_axles.size(); ++i) {
+        const QString token = m_axles[i].token;
+        auto* toggle = new QCheckBox(m_axles[i].label, this);
+        // The colour its curves are drawn in: the checkbox is the legend.
+        toggle->setIcon(lineIcon(PlotWidget::axleColor(i), Qt::SolidLine));
+        connect(toggle, &QCheckBox::toggled, this,
+                [this, token](bool shown) { toggleAxle(token, shown); });
+        m_axleToggleRow->addWidget(toggle);
+        m_axleToggles.append(toggle);
+    }
+    syncAxleToggles();
+}
+
+void AnalysisPanel::toggleAxle(const QString& token, bool shown)
+{
+    QStringList wanted = plotAxles();
+    wanted.removeAll(token);
+    if (shown) wanted.append(token);
+    if (wanted.isEmpty()) {
+        // The last axle stays: taking it away would leave an empty plot that
+        // looks like a fault rather than a choice.
+        syncAxleToggles();
+        return;
+    }
+    m_plotAxles = wanted;
+    syncAxleToggles();
+    syncPlotSweeps();
+    if (!m_updating) emit plotAxlesChanged();
+}
+
+void AnalysisPanel::toggleSide()
+{
+    const bool left = m_leftToggle->isChecked();
+    const bool right = m_rightToggle->isChecked();
+    if (!left && !right) {
+        // The last wheel stays, for the same reason as the last axle.
+        syncSideToggles();
+        return;
+    }
+    m_sides = left && right ? SweepSides::Both : left ? SweepSides::Left : SweepSides::Right;
+    m_plot->setSides(m_sides);
+    syncReadoutColumns();
+    if (!m_updating) emit sidesChanged();
+}
+
+void AnalysisPanel::syncAxleToggles()
+{
+    const QStringList shown = plotAxles();
+    for (int i = 0; i < m_axleToggles.size() && i < m_axles.size(); ++i) {
+        QCheckBox* toggle = m_axleToggles[i];
+        const QString& token = m_axles[i].token;
+        const QSignalBlocker blocker(toggle);
+        toggle->setChecked(shown.contains(token));
+        // Greyed out rather than hidden, so the box is still there to say why.
+        const bool sweepable = canSweep(token);
+        toggle->setEnabled(sweepable);
+        toggle->setToolTip(sweepable ? tr("Plot this axle's curves, in this colour.")
+                                     : tr("This axle has no steering, so a steer sweep has no "
+                                          "curve for it. Linkage > Steering Rack names one."));
+    }
+    m_plot->setPlaceholder(!shown.isEmpty() && sweptAxles().isEmpty()
+                               ? tr("None of the axles shown has steering to sweep. Tick one "
+                                    "that does.")
+                               : QString());
+}
+
+void AnalysisPanel::syncSideToggles()
+{
+    const QSignalBlocker leftBlocker(m_leftToggle);
+    const QSignalBlocker rightBlocker(m_rightToggle);
+    m_leftToggle->setChecked(m_sides != SweepSides::Right);
+    m_rightToggle->setChecked(m_sides != SweepSides::Left);
+}
+
+void AnalysisPanel::syncPlotSweeps()
+{
+    const QStringList swept = sweptAxles();
+    QList<PlotSweep> sweeps;
+    for (const SweepResult& result : m_results)
+        if (swept.contains(result.axleToken))
+            sweeps.append(PlotSweep{ result, axleIndex(result.axleToken) });
+    m_plot->setSweeps(sweeps);
+}
+
+bool AnalysisPanel::canSweep(const QString& token) const
+{
+    return kind() != SweepKind::Steer || m_steerable.value(token, true);
+}
+
+int AnalysisPanel::axleIndex(const QString& token) const
+{
+    for (int i = 0; i < m_axles.size(); ++i)
+        if (m_axles[i].token == token) return i;
+    return -1;
+}
+
+QStringList AnalysisPanel::plotAxles() const
+{
+    QStringList shown;
+    for (const AxleEntry& entry : m_axles)
+        if (m_plotAxles.contains(entry.token)) shown.append(entry.token);
+    // With no axles to show the wish is all there is, and it is kept as it is.
+    return m_axles.isEmpty() ? m_plotAxles : shown;
+}
+
+void AnalysisPanel::setPlotAxles(const QStringList& tokens)
+{
+    const bool namesAnAxle = std::any_of(tokens.begin(), tokens.end(), [this](const QString& token) {
+        return axleIndex(token) >= 0;
     });
-    return plot;
+    if (!namesAnAxle && !m_axles.isEmpty()) return;
+    m_plotAxles = tokens;
+    syncAxleToggles();
+    syncPlotSweeps();
 }
 
-void AnalysisPanel::syncPlots()
+QStringList AnalysisPanel::sweptAxles() const
 {
-    // A plot that is still wanted is kept rather than made again, so it does
-    // not flicker or lose its hover when another curve is added beside it.
-    QList<PlotWidget*> wanted;
-    for (const SweepMeasure measure : std::as_const(m_measures)) {
-        const auto existing = std::find_if(m_plots.begin(), m_plots.end(), [measure](PlotWidget* plot) {
-            return plot->measure() == measure;
-        });
-        wanted << (existing != m_plots.end() ? *existing : makePlot(measure));
-    }
-    for (PlotWidget* plot : std::as_const(m_plots)) {
-        if (wanted.contains(plot)) continue;
-        m_plotGrid->removeWidget(plot);
-        plot->hide();
-        plot->deleteLater();
-    }
-    m_plots = wanted;
-    layOutPlots(true);
-    syncCurveMenu();
+    QStringList swept;
+    for (const QString& token : plotAxles())
+        if (canSweep(token)) swept.append(token);
+    return swept;
 }
 
-void AnalysisPanel::layOutPlots(bool force)
+void AnalysisPanel::setMeasure(SweepMeasure measure)
 {
-    const int count = int(m_plots.size());
-    const int columns =
-        std::clamp(m_plotScroll->viewport()->width() / kMinPlotWidth, 1, std::max(1, count));
-    if (!force && columns == m_plotColumns) return;
-    m_plotColumns = columns;
-
-    // A grid does not reflow on its own, so everything comes out and goes back
-    // in at its new place.
-    for (PlotWidget* plot : std::as_const(m_plots)) m_plotGrid->removeWidget(plot);
-    for (int row = 0; row < m_plotGrid->rowCount(); ++row) m_plotGrid->setRowStretch(row, 0);
-    for (int column = 0; column < m_plotGrid->columnCount(); ++column)
-        m_plotGrid->setColumnStretch(column, 0);
-
-    for (int i = 0; i < count; ++i) {
-        PlotWidget* plot = m_plots[i];
-        // One plot fills the dock, however short it is. Several are each kept
-        // tall enough to read, and scroll when the dock cannot hold them all.
-        plot->setMinimumHeight(count > 1 ? kMinPlotHeight : 0);
-        // The last one takes whatever is left of its row, rather than leaving a
-        // hole beside it.
-        const int column = i % columns;
-        const int span = i == count - 1 ? columns - column : 1;
-        m_plotGrid->addWidget(plot, i / columns, column, 1, span);
-        plot->show();
-    }
-    const int rows = (count + columns - 1) / columns;
-    for (int row = 0; row < rows; ++row) m_plotGrid->setRowStretch(row, 1);
-    for (int column = 0; column < columns; ++column) m_plotGrid->setColumnStretch(column, 1);
+    const int index = m_curveBox->findData(sweepMeasureKey(measure));
+    if (index < 0) return;
+    m_updating = true;
+    m_curveBox->setCurrentIndex(index);
+    m_updating = false;
 }
 
-void AnalysisPanel::syncCurveMenu()
-{
-    for (QAction* action : m_curveMenu->actions()) {
-        const QSignalBlocker blocker(action);
-        action->setChecked(
-            m_measures.contains(sweepMeasureFromKey(action->data().toString())));
-    }
-
-    QStringList names;
-    for (const SweepMeasure measure : std::as_const(m_measures))
-        names << QStringLiteral("%1 [%2]").arg(sweepMeasureLabel(measure), sweepMeasureUnit(measure));
-    // A count rather than the list when there are several: a button's text is
-    // not elided, and a long one would force the dock wider than the user made
-    // it. The plots are titled, and the tooltip has the whole list.
-    m_curveButton->setText(names.size() == 1 ? names.front()
-                                             : tr("%n curve(s)", "", int(names.size())));
-    m_curveButton->setToolTip(
-        tr("Which curves to plot. Tick as many as you like; each gets a plot of its own.\n\n%1")
-            .arg(names.join(QLatin1Char('\n'))));
-}
-
-void AnalysisPanel::setPlotMarker(double input)
-{
-    for (PlotWidget* plot : std::as_const(m_plots)) plot->setMarker(input);
-}
+void AnalysisPanel::setPlotMarker(double input) { m_plot->setMarker(input); }
 
 void AnalysisPanel::setSides(SweepSides sides)
 {
-    const int index = m_sidesBox->findData(int(sides));
-    if (index < 0) return;
-    m_updating = true;
-    m_sidesBox->setCurrentIndex(index);
-    m_updating = false;
+    if (sides == m_sides) return;
+    m_sides = sides;
+    syncSideToggles();
+    m_plot->setSides(m_sides);
+    syncReadoutColumns();
 }
 
 void AnalysisPanel::syncReadoutColumns()
@@ -435,17 +463,11 @@ void AnalysisPanel::syncReadoutColumns()
     m_readout->setColumnHidden(1, m_sides == SweepSides::Left);
 }
 
-bool AnalysisPanel::eventFilter(QObject* watched, QEvent* event)
-{
-    if (m_plotScroll && watched == m_plotScroll->viewport() && event->type() == QEvent::Resize)
-        layOutPlots(false);
-    return QWidget::eventFilter(watched, event);
-}
-
 void AnalysisPanel::setAxles(const QList<AxleEntry>& axles)
 {
     const QString wanted = axle();
     m_updating = true;
+    m_axles = axles;
     m_axleBox->clear();
     m_steerable.clear();
     for (const AxleEntry& entry : axles) {
@@ -454,8 +476,14 @@ void AnalysisPanel::setAxles(const QList<AxleEntry>& axles)
     }
     const int index = m_axleBox->findData(wanted);
     if (index >= 0) m_axleBox->setCurrentIndex(index);
+    // Nothing asked for that is here -- a new project, or a table that lost
+    // the axles that were shown -- shows every axle there is.
+    if (!axles.isEmpty() && plotAxles().isEmpty())
+        for (const AxleEntry& entry : axles) m_plotAxles.append(entry.token);
     m_updating = false;
     syncSteerAvailability();
+    rebuildAxleToggles();
+    syncPlotSweeps();
 
     // Nothing to sweep is not an error state to explain, it is a panel with
     // nothing in it. The window says why in the status line.
@@ -605,19 +633,6 @@ void AnalysisPanel::setSimulating(bool simulating)
     m_updating = false;
 }
 
-void AnalysisPanel::setMeasures(const QList<SweepMeasure>& measures)
-{
-    // In the menu's order and each once, whatever order they were handed over
-    // in, so the plots come back where the menu says they are.
-    QList<SweepMeasure> ordered;
-    for (const SweepMeasure measure : sweepMeasures())
-        if (measures.contains(measure)) ordered << measure;
-    if (ordered.isEmpty()) ordered << SweepMeasure::Camber;
-    if (ordered == m_measures) return;
-    m_measures = ordered;
-    syncPlots();
-}
-
 bool AnalysisPanel::animating() const { return m_playButton->isChecked(); }
 
 void AnalysisPanel::setAnimating(bool animating)
@@ -669,10 +684,11 @@ void AnalysisPanel::stepAnimation()
     emit positionChanged(position);
 }
 
-void AnalysisPanel::setResult(const SweepResult& result)
+void AnalysisPanel::setResults(const std::vector<SweepResult>& results)
 {
-    m_result = result;
-    for (PlotWidget* plot : std::as_const(m_plots)) plot->setSweep(result);
+    m_results = results;
+    syncPlotSweeps();
+    syncPositionRange();
 }
 
 void AnalysisPanel::setReadout(const AxleSample& sample, SweepKind kind)
@@ -719,16 +735,42 @@ void AnalysisPanel::syncPositionRange()
     m_updating = true;
     m_positionUnit->setText(sweepInputUnit(current.kind));
     m_positionBox->setSuffix(QString());
-    m_positionBox->setRange(low, high);
+    // Only as far as the mechanism holds together: past that there is no pose
+    // to show, and the car was drawn at its design position with the body
+    // rolled round it anyway.
+    const SweepInterval reachable = reachableRange(low, high);
+    m_positionBox->setRange(reachable.low, reachable.high);
     // A position that means nothing in the new range goes back to the design
     // position rather than to whichever end of the travel it happened to be
     // nearest. Twenty millimetres of wheel travel is not twenty degrees of body
-    // roll, and it is not full lock either.
-    if (previous < low || previous > high) m_positionBox->setValue(std::clamp(0.0, low, high));
+    // roll, and it is not full lock either. One merely past where the
+    // mechanism jams is the same kind of number, so setRange() clamps it to
+    // the end it went past.
+    if (previous < low || previous > high)
+        m_positionBox->setValue(std::clamp(0.0, reachable.low, reachable.high));
     m_positionBox->setSingleStep(current.kind == SweepKind::Roll ? 0.1 : 1.0);
     m_positionSlider->setValue(positionToSlider(m_positionBox->value()));
     m_updating = false;
     setPlotMarker(m_positionBox->value());
+}
+
+SweepInterval AnalysisPanel::reachableRange(double low, double high) const
+{
+    // Every axle swept has to hold together wherever the position is put, so
+    // the reach is where all of them do. A result for another kind of sweep is
+    // about another input altogether.
+    SweepInterval reachable{ low, high };
+    for (const SweepResult& result : m_results) {
+        const std::optional<SweepInterval> assembled =
+            result.kind == spec().kind ? assembledInterval(result) : std::nullopt;
+        if (!assembled) continue;
+        reachable.low = std::max(reachable.low, assembled->low);
+        reachable.high = std::min(reachable.high, assembled->high);
+    }
+    // A result from before the travel was changed may not overlap it at all;
+    // the sweep that is about to replace it will say.
+    if (reachable.low > reachable.high) return SweepInterval{ low, high };
+    return reachable;
 }
 
 double AnalysisPanel::sliderToPosition(int value) const

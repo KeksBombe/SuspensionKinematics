@@ -494,10 +494,14 @@ The analysis dock (`Ctrl+K`) puts an axle through **bump**, **roll** or
 **steer** and plots what it does: camber (to the body, and to the ground), toe,
 caster, kingpin inclination, scrub radius, trail, track and wheelbase change,
 damper travel and installation ratio, the roll centre, the anti-roll bar's twist
-and Ackermann. **Curves** picks as many plots as you want. Beside it, **Both
-sides / Left only / Right only** says which wheels they draw: on a symmetric car
-the two are mirror images — the left wheel at +10 mm of rack is the right wheel
-at −10 — so one of them is often all there is to read.
+and Ackermann. **Curve** picks the one plot. Beside it, **Show** says what is
+drawn in it, the way Lotus does it: tick **Front** and **Rear** to overlay both
+axles in one colour each, **Left** and **Right** for the wheels, solid and dashed.
+Any combination works. On a symmetric car the two sides are mirror images — the
+left wheel at +10 mm of rack is the right wheel at −10 — so one of them is often
+all there is to read. **Axle** is the one the position slider drives and the
+table under the plot reads out. **Export CSV** writes what is shown: every axle
+ticked, side by side, and only the wheels ticked.
 
 ### Static camber and toe
 

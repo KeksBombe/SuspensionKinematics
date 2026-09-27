@@ -11,11 +11,9 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
-class QGridLayout;
+class QHBoxLayout;
 class QLabel;
-class QMenu;
 class QPushButton;
-class QScrollArea;
 class QSlider;
 class QTableWidget;
 class QTimer;
@@ -54,8 +52,23 @@ public:
     /// The axles that can be simulated. An empty list disables the panel: there
     /// is nothing to sweep.
     void setAxles(const QList<AxleEntry>& axles);
+    /// The axle the position drives: the one the viewport moves when not every
+    /// axle comes along, and the one the readout table shows. Which axles are
+    /// *plotted* is @ref plotAxles.
     QString axle() const;
     void setAxle(const QString& token);
+
+    /// The axles whose curves are overlaid in the plot, by token, in the order
+    /// the axles are listed. Never empty while there is an axle: the last one
+    /// cannot be hidden, because an empty plot reads as broken, not as a choice.
+    QStringList plotAxles() const;
+    /// Show these axles. An empty list, or one naming no axle there is, leaves
+    /// every axle shown.
+    void setPlotAxles(const QStringList& tokens);
+    /// The plotted axles the current sweep can be run on: all of them, except
+    /// in a steer sweep, where an axle without a rack has no curve to give.
+    /// What the window runs a sweep for.
+    QStringList sweptAxles() const;
 
     /// What the sweep is run with: the travel and increment of all three kinds
     /// at once, edited in the parameters window rather than here.
@@ -98,19 +111,18 @@ public:
     bool movesAllAxles() const;
     void setMovesAllAxles(bool all);
 
-    /// The curves on screen, one plot each, in the order the curve menu lists
-    /// them. Never empty: the last one cannot be switched off, because a panel
-    /// with no plot in it reads as broken rather than as a choice.
-    QList<SweepMeasure> measures() const { return m_measures; }
-    void setMeasures(const QList<SweepMeasure>& measures);
+    /// The one curve on screen.
+    SweepMeasure measure() const { return m_measure; }
+    void setMeasure(SweepMeasure measure);
 
-    /// Which wheels the plots draw, and which column the readout keeps: both,
+    /// Which wheels the plot draws, and which column the readout keeps: both,
     /// or one of them for a car whose two sides mirror each other anyway.
     SweepSides sides() const { return m_sides; }
     void setSides(SweepSides sides);
 
-    /// The sweep every plot draws its curve from.
-    void setResult(const SweepResult& result);
+    /// The sweeps the plot draws its curves from, one per axle. Any of an axle
+    /// that is not shown is ignored.
+    void setResults(const std::vector<SweepResult>& results);
     /// The numbers at the position the model is actually standing in, which is
     /// not always one of the sweep's own steps.
     void setReadout(const AxleSample& sample, SweepKind kind);
@@ -132,7 +144,9 @@ signals:
     void positionChanged(double position);
     void simulatingChanged(bool simulating);
     void animatingChanged(bool animating);
-    void measuresChanged();
+    void measureChanged();
+    /// Axles were shown or hidden: the ones shown want sweeping.
+    void plotAxlesChanged();
     void sidesChanged();
     /// Something that is remembered but does not change the curve: how fast the
     /// animation runs, whether the parameters window is open.
@@ -143,29 +157,37 @@ signals:
     void parametersVisibilityChanged(bool visible);
     void exportCsvRequested();
 
-protected:
-    /// Watches the plots' viewport, so they reflow into more or fewer columns as
-    /// the dock is resized.
-    bool eventFilter(QObject* watched, QEvent* event) override;
-
 private:
     void buildUi();
-    /// One plot per curve in @ref m_measures: the ones still wanted are kept,
-    /// the rest removed, any new ones made. Then laid out again.
-    void syncPlots();
-    PlotWidget* makePlot(SweepMeasure measure);
-    /// Put the plots in a grid as many columns wide as the viewport has room
-    /// for. Unless @p force, only when that number of columns has changed.
-    void layOutPlots(bool force);
-    /// The curve button's text and the ticks in its menu, from @ref m_measures.
-    void syncCurveMenu();
+    /// The row that says what the plot shows: which curve, which axles, which
+    /// wheels.
+    QHBoxLayout* buildShowRow();
+    /// One checkbox per axle, in the order the axles are listed.
+    void rebuildAxleToggles();
+    /// A shown axle was ticked or unticked by the user.
+    void toggleAxle(const QString& token, bool shown);
+    /// A wheel was ticked or unticked by the user.
+    void toggleSide();
+    /// The axle checkboxes from @ref m_plotAxles, and which of them the current
+    /// sweep can use.
+    void syncAxleToggles();
+    /// The side checkboxes from @ref m_sides.
+    void syncSideToggles();
+    /// Hand the plot the sweeps of the axles it is showing.
+    void syncPlotSweeps();
+    /// Whether the current kind of sweep can be run on this axle.
+    bool canSweep(const QString& token) const;
+    int axleIndex(const QString& token) const;
     void setPlotMarker(double input);
-    /// Hide the readout column of a side the plots are not showing.
+    /// Hide the readout column of a side the plot is not showing.
     void syncReadoutColumns();
     /// Offer Steer only for an axle that has a rack, and step off it when the
     /// selected axle has none.
     void syncSteerAvailability();
     void syncPositionRange();
+    /// The part of @p low to @p high every axle swept assembles in, from the
+    /// last sweeps. All of it when they have nothing to say.
+    SweepInterval reachableRange(double low, double high) const;
     void emitPositionFromSlider(int value);
     double sliderToPosition(int value) const;
     int positionToSlider(double position) const;
@@ -176,6 +198,7 @@ private:
     void seedAnimationPhase();
 
     QComboBox* m_axleBox = nullptr;
+    QList<AxleEntry> m_axles;
     /// Which axles have a steering rack, by token. Not every axle does, and an
     /// axle that does not cannot be asked for a steer sweep at all.
     QHash<QString, bool> m_steerable;
@@ -184,10 +207,12 @@ private:
     QDoubleSpinBox* m_positionBox = nullptr;
     QLabel* m_positionUnit = nullptr;
     QComboBox* m_kindBox = nullptr;
-    /// Which curves are plotted: a button whose menu has one tick per measure.
-    QToolButton* m_curveButton = nullptr;
-    QMenu* m_curveMenu = nullptr;
-    QComboBox* m_sidesBox = nullptr;
+    QComboBox* m_curveBox = nullptr;
+    /// Where the axle checkboxes go, rebuilt whenever the axles change.
+    QHBoxLayout* m_axleToggleRow = nullptr;
+    QList<QCheckBox*> m_axleToggles;
+    QCheckBox* m_leftToggle = nullptr;
+    QCheckBox* m_rightToggle = nullptr;
     QToolButton* m_playButton = nullptr;
     QPushButton* m_parametersButton = nullptr;
     /// The travel, the increments and the playback settings, in a window of
@@ -201,17 +226,15 @@ private:
     QLabel* m_status = nullptr;
     QTableWidget* m_readout = nullptr;
 
-    /// The plots, one per curve, in a scrolling grid: as many as are wanted fit
-    /// side by side when the dock is wide, and stack and scroll when it is not.
-    QScrollArea* m_plotScroll = nullptr;
-    QWidget* m_plotHost = nullptr;
-    QGridLayout* m_plotGrid = nullptr;
-    QList<PlotWidget*> m_plots;
-    QList<SweepMeasure> m_measures{ SweepMeasure::Camber };
+    PlotWidget* m_plot = nullptr;
+    SweepMeasure m_measure = SweepMeasure::Camber;
     SweepSides m_sides = SweepSides::Both;
-    int m_plotColumns = 0;
-    /// Kept so that a plot made after the sweep arrived still gets its curve.
-    SweepResult m_result;
+    /// The axles the user asked to see, by token. Kept as asked even while an
+    /// axle is missing from the table, so it comes back shown when it returns.
+    QStringList m_plotAxles;
+    /// Kept so that an axle shown again gets its curve back at once, and one
+    /// hidden loses it at once, without waiting for the window to sweep.
+    std::vector<SweepResult> m_results;
 
     /// Set while the panel is being told what to show, so echoing it straight
     /// back out does not look like the user having done something.

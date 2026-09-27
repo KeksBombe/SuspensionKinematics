@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace suspkin {
 namespace {
@@ -18,10 +19,19 @@ constexpr int kRightMargin = 14;
 constexpr int kTopMargin = 26;
 constexpr int kBottomMargin = 40;
 
-/// The two sides. Saturated enough to read on a dark ground and a light one,
-/// and far enough apart in hue to tell apart for the commonest colour blindness.
-const QColor kLeftColor(58, 124, 216);
-const QColor kRightColor(214, 106, 42);
+/// One per axle, front first. Saturated enough to read on a dark ground and a
+/// light one, and the first two far enough apart in hue to tell apart for the
+/// commonest colour blindness. The wheels of one axle are told apart by the
+/// line, not the colour: solid for the left, dashed for the right.
+const QColor kAxleColors[] = {
+    QColor(58, 124, 216),
+    QColor(214, 106, 42),
+    QColor(46, 158, 92),
+    QColor(156, 92, 200),
+};
+
+constexpr Qt::PenStyle kLeftStyle = Qt::SolidLine;
+constexpr Qt::PenStyle kRightStyle = Qt::DashLine;
 
 /// @p a moved @p t of the way to @p b. How every neutral here is made: from the
 /// palette's own ground and text, so a dark theme gets a dark plot with a faint
@@ -70,9 +80,15 @@ PlotWidget::PlotWidget(QWidget* parent) : QWidget(parent)
 QSize PlotWidget::minimumSizeHint() const { return QSize(240, 160); }
 QSize PlotWidget::sizeHint() const { return QSize(420, 260); }
 
-void PlotWidget::setSweep(const SweepResult& result)
+QColor PlotWidget::axleColor(int colorIndex)
 {
-    m_result = result;
+    constexpr int count = int(std::size(kAxleColors));
+    return kAxleColors[((colorIndex % count) + count) % count];
+}
+
+void PlotWidget::setSweeps(const QList<PlotSweep>& sweeps)
+{
+    m_sweeps = sweeps;
     rebuild();
     update();
 }
@@ -93,6 +109,13 @@ void PlotWidget::setSides(SweepSides sides)
     update();
 }
 
+void PlotWidget::setPlaceholder(const QString& text)
+{
+    if (m_placeholder == text) return;
+    m_placeholder = text;
+    update();
+}
+
 void PlotWidget::setMarker(double input)
 {
     if (qFuzzyCompare(m_marker + 1.0, input + 1.0)) return;
@@ -100,66 +123,69 @@ void PlotWidget::setMarker(double input)
     update();
 }
 
-void PlotWidget::setHover(double input, bool hovering)
-{
-    if (m_hovering == hovering && (!hovering || qFuzzyCompare(m_hover + 1.0, input + 1.0))) return;
-    m_hover = input;
-    m_hovering = hovering;
-    update();
-}
-
 void PlotWidget::rebuild()
 {
     m_series.clear();
     m_hasData = false;
-    if (m_result.isEmpty()) return;
+    for (int i = 0; i < m_sweeps.size(); ++i) m_series += seriesOf(i);
+    if (m_series.isEmpty()) return;
+    fitRange();
+    m_hasData = true;
+}
 
-    const bool perSide = sweepMeasureIsPerSide(m_measure);
+QList<PlotWidget::Series> PlotWidget::seriesOf(int sweepIndex) const
+{
+    const PlotSweep& sweep = m_sweeps[sweepIndex];
+    const QString axle = sweep.result.axleLabel.isEmpty() ? sweep.result.axleToken
+                                                          : sweep.result.axleLabel;
     struct SideSpec {
         bool left;
-        QColor color;
+        Qt::PenStyle style;
         QString label;
     };
     QList<SideSpec> sides;
-    if (perSide) {
-        // The range below is taken from what is drawn, so a side left out does
-        // not leave its curve's room behind in the plot either.
-        if (m_sides != SweepSides::Right) sides.append({ true, kLeftColor, tr("left") });
-        if (m_sides != SweepSides::Left) sides.append({ false, kRightColor, tr("right") });
+    if (sweepMeasureIsPerSide(m_measure)) {
+        // The range is taken from what is drawn, so a side left out does not
+        // leave its curve's room behind in the plot either.
+        if (m_sides != SweepSides::Right)
+            sides.append({ true, kLeftStyle, tr("%1 left").arg(axle).trimmed() });
+        if (m_sides != SweepSides::Left)
+            sides.append({ false, kRightStyle, tr("%1 right").arg(axle).trimmed() });
     } else {
-        sides.append({ true, kLeftColor, sweepMeasureLabel(m_measure) });
+        sides.append({ true, kLeftStyle, axle.isEmpty() ? sweepMeasureLabel(m_measure) : axle });
     }
 
-    double xMin = 0.0;
-    double xMax = 0.0;
-    double yMin = 0.0;
-    double yMax = 0.0;
-    bool first = true;
-
+    QList<Series> result;
     for (const SideSpec& side : sides) {
         Series series;
-        series.color = side.color;
+        series.color = axleColor(sweep.colorIndex);
+        series.style = side.style;
         series.label = side.label;
+        series.sweep = sweepIndex;
         series.left = side.left;
-        for (const AxleSample& sample : m_result.samples) {
+        for (const AxleSample& sample : sweep.result.samples) {
             double value = 0.0;
-            if (!sweepMeasureValue(sample, m_measure, side.left, &value)) continue;
-            series.points.append(QPointF(sample.input, value));
-            if (first) {
-                xMin = xMax = sample.input;
-                yMin = yMax = value;
-                first = false;
-            } else {
-                xMin = std::min(xMin, sample.input);
-                xMax = std::max(xMax, sample.input);
-                yMin = std::min(yMin, value);
-                yMax = std::max(yMax, value);
-            }
+            if (sweepMeasureValue(sample, m_measure, side.left, &value))
+                series.points.append(QPointF(sample.input, value));
         }
-        if (!series.points.isEmpty()) m_series.append(series);
+        if (!series.points.isEmpty()) result.append(series);
     }
+    return result;
+}
 
-    if (m_series.isEmpty()) return;
+void PlotWidget::fitRange()
+{
+    double xMin = m_series.front().points.front().x();
+    double xMax = xMin;
+    double yMin = m_series.front().points.front().y();
+    double yMax = yMin;
+    for (const Series& series : std::as_const(m_series))
+        for (const QPointF& point : series.points) {
+            xMin = std::min(xMin, point.x());
+            xMax = std::max(xMax, point.x());
+            yMin = std::min(yMin, point.y());
+            yMax = std::max(yMax, point.y());
+        }
 
     if (xMax - xMin < 1e-9) {
         xMin -= 1.0;
@@ -186,7 +212,29 @@ void PlotWidget::rebuild()
     m_xMax = xMax;
     m_yMin = yMin;
     m_yMax = yMax;
-    m_hasData = true;
+}
+
+const SweepResult* PlotWidget::leadingResult() const
+{
+    for (const PlotSweep& sweep : m_sweeps)
+        if (!sweep.result.isEmpty()) return &sweep.result;
+    return nullptr;
+}
+
+QString PlotWidget::emptyText() const
+{
+    const SweepResult* lead = leadingResult();
+    if (!lead) return m_placeholder.isEmpty() ? tr("Run a sweep to see a curve.") : m_placeholder;
+    if (m_measure == SweepMeasure::Ackermann && lead->kind != SweepKind::Steer)
+        return tr("Ackermann is read off a steer sweep.");
+    if (m_measure == SweepMeasure::Ackermann)
+        return tr("Nothing to plot: Ackermann needs both wheels of an axle, and a second axle "
+                  "in the table to take the wheelbase to.");
+    return m_sweeps.size() == 1
+               ? tr("Nothing to plot: this axle has no %1.")
+                     .arg(sweepMeasureLabel(m_measure).toLower())
+               : tr("Nothing to plot: none of the axles shown has a %1.")
+                     .arg(sweepMeasureLabel(m_measure).toLower());
 }
 
 QRectF PlotWidget::plotArea() const
@@ -271,7 +319,7 @@ void PlotWidget::paintSeries(QPainter& painter, const QRectF& area) const
                 path.lineTo(widgetPoint);
             }
         }
-        painter.setPen(QPen(series.color, 2.0));
+        painter.setPen(QPen(series.color, 2.0, series.style));
         painter.setBrush(Qt::NoBrush);
         painter.drawPath(path);
     }
@@ -281,7 +329,8 @@ void PlotWidget::paintSeries(QPainter& painter, const QRectF& area) const
 void PlotWidget::paintMarkerAndReadout(QPainter& painter, const QRectF& area) const
 {
     const double input = m_hovering ? m_hover : m_marker;
-    const AxleSample* sample = m_result.nearest(input);
+    const SweepResult* lead = leadingResult();
+    const AxleSample* sample = lead ? lead->nearest(input) : nullptr;
     if (!sample) return;
 
     const double px = toWidget(area, QPointF(sample->input, m_yMin)).x();
@@ -295,22 +344,24 @@ void PlotWidget::paintMarkerAndReadout(QPainter& painter, const QRectF& area) co
     struct Line {
         QString text;
         QColor swatch; ///< invalid for the line that is not a series
+        Qt::PenStyle style = Qt::SolidLine;
     };
     QList<Line> lines;
     lines.append({ QStringLiteral("%1 %2").arg(QString::number(sample->input, 'f', 2),
-                                               sweepInputUnit(m_result.kind)),
+                                               sweepInputUnit(lead->kind)),
                    QColor() });
     painter.setRenderHint(QPainter::Antialiasing, true);
     for (const Series& series : m_series) {
+        const AxleSample* own = m_sweeps[series.sweep].result.nearest(input);
         double value = 0.0;
-        if (!sweepMeasureValue(*sample, m_measure, series.left, &value)) continue;
+        if (!own || !sweepMeasureValue(*own, m_measure, series.left, &value)) continue;
         painter.setPen(QPen(series.color, 2.0));
         painter.setBrush(base);
-        painter.drawEllipse(toWidget(area, QPointF(sample->input, value)), 3.0, 3.0);
+        painter.drawEllipse(toWidget(area, QPointF(own->input, value)), 3.0, 3.0);
         lines.append({ QStringLiteral("%1  %2 %3")
                            .arg(series.label, sweepValueText(value),
                                 sweepMeasureUnit(m_measure)),
-                       series.color });
+                       series.color, series.style });
     }
     painter.setRenderHint(QPainter::Antialiasing, false);
 
@@ -340,7 +391,7 @@ void PlotWidget::paintMarkerAndReadout(QPainter& painter, const QRectF& area) co
     for (const Line& line : lines) {
         const double baseline = y + metrics.ascent();
         if (line.swatch.isValid()) {
-            painter.setPen(QPen(line.swatch, 2.0));
+            painter.setPen(QPen(line.swatch, 2.0, line.style));
             const double mid = y + metrics.height() / 2.0;
             painter.drawLine(QPointF(box.left() + 6.0, mid), QPointF(box.left() + 6.0 + kSwatch, mid));
         }
@@ -357,17 +408,7 @@ void PlotWidget::paintEvent(QPaintEvent*)
     if (area.width() < 20.0 || area.height() < 20.0) return;
 
     if (!m_hasData) {
-        QString text;
-        if (m_result.isEmpty())
-            text = tr("Run a sweep to see a curve.");
-        else if (m_measure == SweepMeasure::Ackermann && m_result.kind != SweepKind::Steer)
-            text = tr("Ackermann is read off a steer sweep.");
-        else if (m_measure == SweepMeasure::Ackermann)
-            text = tr("Nothing to plot: Ackermann needs both wheels of this axle, and a second "
-                      "axle in the table to take the wheelbase to.");
-        else
-            text = tr("Nothing to plot: this axle has no %1.")
-                       .arg(sweepMeasureLabel(m_measure).toLower());
+        const QString text = emptyText();
         painter.setPen(palette().color(QPalette::Disabled, QPalette::Text));
         painter.drawText(QRectF(rect()).adjusted(16.0, 0.0, -16.0, 0.0),
                          Qt::AlignCenter | Qt::TextWordWrap,
@@ -384,10 +425,11 @@ void PlotWidget::paintEvent(QPaintEvent*)
                      Qt::AlignLeft | Qt::AlignVCenter,
                      QStringLiteral("%1 [%2]").arg(sweepMeasureLabel(m_measure),
                                                    sweepMeasureUnit(m_measure)));
+    // Every axle is swept with one spec, so the first says what the input is.
+    const SweepKind kind = leadingResult()->kind;
     painter.drawText(QRectF(area.left(), rect().bottom() - 18.0, area.width(), 16.0),
                      Qt::AlignHCenter | Qt::AlignVCenter,
-                     QStringLiteral("%1 [%2]").arg(sweepInputLabel(m_result.kind),
-                                                   sweepInputUnit(m_result.kind)));
+                     QStringLiteral("%1 [%2]").arg(sweepInputLabel(kind), sweepInputUnit(kind)));
 }
 
 void PlotWidget::mousePressEvent(QMouseEvent* event)
@@ -402,14 +444,12 @@ void PlotWidget::mouseMoveEvent(QMouseEvent* event)
     m_hover = fromWidgetX(plotArea(), event->position().x());
     m_hovering = true;
     if (event->buttons() & Qt::LeftButton) emit markerMoved(m_hover);
-    emit hoverMoved(m_hover, true);
     update();
 }
 
 void PlotWidget::leaveEvent(QEvent*)
 {
     m_hovering = false;
-    emit hoverMoved(m_hover, false);
     update();
 }
 

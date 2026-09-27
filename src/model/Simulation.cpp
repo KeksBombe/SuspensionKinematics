@@ -7,6 +7,12 @@ namespace {
 
 QString tr(const char* text) { return QCoreApplication::translate("Simulation", text); }
 
+/// Whether every corner @p axle has came out of the solve in one piece.
+bool cornersAssembled(const AxleSolver& axle, const AxleSample& sample)
+{
+    return (!axle.left() || sample.left.valid) && (!axle.right() || sample.right.valid);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -137,6 +143,7 @@ SimulationPose Simulation::poseAt(const QString& token, SweepKind kind, double i
     if (!selected) return pose;
 
     pose.samples.push_back(sampleAxleAt(*selected, kind, input, rackTravel));
+    bool assembled = cornersAssembled(*selected, pose.samples.back());
 
     // The other axles ride along, so the car heaves and rolls as a car rather
     // than as one axle with the rest of it left behind. Steering is the
@@ -146,6 +153,7 @@ SimulationPose Simulation::poseAt(const QString& token, SweepKind kind, double i
         for (const AxleSolver& axle : m_axles) {
             if (&axle == selected) continue;
             pose.samples.push_back(sampleAxleAt(axle, kind, input, rackTravel));
+            assembled = assembled && cornersAssembled(axle, pose.samples.back());
         }
     }
 
@@ -155,8 +163,11 @@ SimulationPose Simulation::poseAt(const QString& token, SweepKind kind, double i
     // drawn turned about the roll axis, which is what keeps the tyres on the
     // road where they were. Only when every axle is following, though: a body
     // cannot roll with an axle left behind, and drawing it would put that
-    // axle's wheels through the road.
-    if (kind == SweepKind::Roll && pose.samples.size() == m_axles.size())
+    // axle's wheels through the road. Nor past the angle the mechanism jams
+    // at: a corner that did not assemble stays at its design position, and
+    // turning that with the body swings wheels and all through the whole
+    // angle with no suspension travel to take it up.
+    if (kind == SweepKind::Roll && pose.samples.size() == m_axles.size() && assembled)
         pose.bodyMotion = bodyRollMotion(rollAxisThrough(m_axles), input);
 
     return pose;
