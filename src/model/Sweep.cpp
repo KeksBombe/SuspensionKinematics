@@ -600,6 +600,7 @@ SweepResult runSweep(const AxleSolver& axle, const SweepSpec& spec)
 {
     SweepResult result;
     result.kind = spec.kind;
+    result.axleToken = axle.cornerToken();
     result.axleLabel = axle.label();
     result.warnings = axle.warnings();
     if (axle.isEmpty()) return result;
@@ -909,6 +910,9 @@ QByteArray csvSideHeader(const QByteArray& prefix, const QByteArray& side)
     return header;
 }
 
+/// How many columns belong to the axle rather than to a wheel.
+constexpr int kCsvAxleColumns = 4;
+
 /// The header of the columns that belong to the axle rather than to a wheel.
 QByteArray csvAxleHeader(const QByteArray& prefix)
 {
@@ -944,7 +948,75 @@ QByteArray csvAxleFields(const AxleSample& sample)
     return fields;
 }
 
+/// Which of an axle's two wheels a CSV carries columns for.
+struct CsvSides {
+    bool left = true;
+    bool right = true;
+};
+
+/// What an axle's columns are prefixed with when several axles share a sheet:
+/// its label, or its corner token when the template gave it none.
+QByteArray csvAxlePrefix(const SweepResult& result)
+{
+    const QString name = result.axleLabel.isEmpty() ? result.axleToken : result.axleLabel;
+    return name.toUtf8() + ' ';
+}
+
+/// The header of one axle's columns: the wheels asked for, then the axle-wide ones.
+QByteArray csvSweepHeader(const QByteArray& prefix, CsvSides sides)
+{
+    QByteArray header;
+    if (sides.left) header += csvSideHeader(prefix, "left");
+    if (sides.right) header += csvSideHeader(prefix, "right");
+    return header + csvAxleHeader(prefix);
+}
+
+/// One axle's fields of row @p row, all of them empty past the end of its sweep.
+QByteArray csvSweepFields(const SweepResult& result, std::size_t row, CsvSides sides)
+{
+    if (row >= result.samples.size()) {
+        const int sideColumns = int(std::size(kCsvSideColumns));
+        return QByteArray((sides.left ? sideColumns : 0) + (sides.right ? sideColumns : 0)
+                              + kCsvAxleColumns,
+                          ',');
+    }
+    const AxleSample& sample = result.samples[row];
+    QByteArray fields;
+    if (sides.left) fields += csvSideFields(sample.left, sample.leftInstallationRatio);
+    if (sides.right) fields += csvSideFields(sample.right, sample.rightInstallationRatio);
+    return fields + csvAxleFields(sample);
+}
+
 } // namespace
+
+QByteArray sweepsToCsv(const std::vector<SweepResult>& results, SweepSides sides)
+{
+    std::vector<const SweepResult*> swept;
+    for (const SweepResult& result : results)
+        if (!result.isEmpty()) swept.push_back(&result);
+    if (swept.empty()) return QByteArray();
+
+    const CsvSides wanted{ sides != SweepSides::Right, sides != SweepSides::Left };
+    const bool several = swept.size() > 1;
+    // Every sweep of one spec has the same inputs; the longest supplies them.
+    const SweepResult* longest = *std::max_element(
+        swept.begin(), swept.end(), [](const SweepResult* a, const SweepResult* b) {
+            return a->samples.size() < b->samples.size();
+        });
+
+    QByteArray csv = sweepInputLabel(longest->kind).toUtf8() + " ["
+                     + sweepInputUnit(longest->kind).toUtf8() + "]";
+    for (const SweepResult* result : swept)
+        csv += csvSweepHeader(several ? csvAxlePrefix(*result) : QByteArray(), wanted);
+    csv += "\n";
+
+    for (std::size_t row = 0; row < longest->samples.size(); ++row) {
+        csv += field(longest->samples[row].input);
+        for (const SweepResult* result : swept) csv += csvSweepFields(*result, row, wanted);
+        csv += "\n";
+    }
+    return csv;
+}
 
 QByteArray sweepToCsv(const SweepResult& result)
 {

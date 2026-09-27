@@ -452,13 +452,20 @@ std::optional<Project> Project::open(const QString& manifestPath, QString* error
         state.active = simulation.value(QStringLiteral("active")).toBool(false);
         state.axle = simulation.value(QStringLiteral("axle")).toString();
         state.position = simulation.value(QStringLiteral("position")).toDouble(0.0);
-        for (const QJsonValue& value : simulation.value(QStringLiteral("measures")).toArray()) {
-            const QString key = value.toString();
-            if (!key.isEmpty() && !state.measures.contains(key)) state.measures.append(key);
+        // "measure" has always been the first curve on screen, beside the list
+        // the builds with one plot per curve wrote; the list is only read when
+        // it is missing.
+        state.measure = simulation.value(QStringLiteral("measure")).toString();
+        if (state.measure.isEmpty())
+            state.measure =
+                simulation.value(QStringLiteral("measures")).toArray().at(0).toString();
+        for (const QJsonValue& value : simulation.value(QStringLiteral("plotAxles")).toArray()) {
+            const QString token = value.toString();
+            if (!token.isEmpty() && !state.plotAxles.contains(token)) state.plotAxles.append(token);
         }
-        // A project from before there could be more than one plot names one.
-        const QString single = simulation.value(QStringLiteral("measure")).toString();
-        if (state.measures.isEmpty() && !single.isEmpty()) state.measures.append(single);
+        // Before the axles could be overlaid, the plot drew the one being swept.
+        if (!simulation.contains(QStringLiteral("plotAxles")) && !state.axle.isEmpty())
+            state.plotAxles.append(state.axle);
         state.sides = sweepSidesFromString(simulation.value(QStringLiteral("sides")).toString());
         state.kind = sweepKindFromString(simulation.value(QStringLiteral("kind")).toString());
         const QJsonObject sweep = simulation.value(QStringLiteral("sweep")).toObject();
@@ -578,13 +585,14 @@ bool Project::save(QString* error) const
     QJsonObject simulation;
     simulation.insert(QStringLiteral("active"), state.active);
     if (!state.axle.isEmpty()) simulation.insert(QStringLiteral("axle"), state.axle);
-    if (!state.measures.isEmpty()) {
-        simulation.insert(QStringLiteral("measures"), QJsonArray::fromStringList(state.measures));
-        // The first on its own as well, the way "selected" sits beside
-        // "selection": a build from before there were several plots still
-        // opens on one of the right curves.
-        simulation.insert(QStringLiteral("measure"), state.measures.front());
+    if (!state.measure.isEmpty()) {
+        simulation.insert(QStringLiteral("measure"), state.measure);
+        // As a list of one as well, which is what the builds with one plot per
+        // curve read first: they open on the same curve rather than on camber.
+        simulation.insert(QStringLiteral("measures"), QJsonArray{ state.measure });
     }
+    // Written even when empty: its absence is what marks an older project.
+    simulation.insert(QStringLiteral("plotAxles"), QJsonArray::fromStringList(state.plotAxles));
     simulation.insert(QStringLiteral("sides"), sweepSidesToString(state.sides));
     simulation.insert(QStringLiteral("kind"), sweepKindToString(state.kind));
     simulation.insert(QStringLiteral("sweep"), writeSweepSettings(state.sweep));

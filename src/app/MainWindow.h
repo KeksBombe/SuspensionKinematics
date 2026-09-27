@@ -254,6 +254,8 @@ private:
     void rebuildSolvers();
     /// Run the sweep the panel is asking for and hand the curve over.
     void refreshSweep();
+    /// A sweep of every axle the analysis plot shows, with the panel's spec.
+    std::vector<SweepResult> runShownSweeps() const;
     /// Put the mechanism where the panel says, or back at the coordinates the
     /// table holds. Nothing here touches the table itself.
     void applySimulation();
@@ -356,7 +358,7 @@ private:
     /// whenever either changes, because both are what a solver is bound to.
     Simulation m_simulation;
     /// The curve on the plot.
-    SweepResult m_sweep;
+    std::vector<SweepResult> m_sweeps;
     /// Where the car is standing while the panel is simulating, and nothing the
     /// rest of the time. Derived from the simulation and the panel, so there is
     /// nothing of it to save, and the table is never changed to match any of it.

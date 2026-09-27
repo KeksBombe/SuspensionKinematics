@@ -456,7 +456,11 @@ void MainWindow::buildAnalysisDock()
         applySimulation();
         markDirty();
     });
-    connect(m_analysisPanel, &AnalysisPanel::measuresChanged, this, [this] { markDirty(); });
+    connect(m_analysisPanel, &AnalysisPanel::measureChanged, this, [this] { markDirty(); });
+    connect(m_analysisPanel, &AnalysisPanel::plotAxlesChanged, this, [this] {
+        refreshSweep();
+        markDirty();
+    });
     connect(m_analysisPanel, &AnalysisPanel::sidesChanged, this, [this] { markDirty(); });
     // How fast the animation runs and whether the parameters window is open
     // change nothing about the curve, but they are still the user's arrangement
@@ -468,7 +472,7 @@ void MainWindow::buildAnalysisDock()
     // The sweep is skipped while the dock is shut, so opening it is what asks
     // for one. Reopening a project restores the dock, and this catches that too.
     connect(m_analysisDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
-        if (visible && m_sweep.isEmpty()) refreshSweep();
+        if (visible && m_sweeps.empty()) refreshSweep();
     });
 }
 
@@ -1142,15 +1146,11 @@ void MainWindow::applyViewState()
     m_analysisPanel->setSettings(simulation.sweep);
     m_analysisPanel->setKind(simulation.kind);
     if (!simulation.axle.isEmpty()) m_analysisPanel->setAxle(simulation.axle);
-    QList<SweepMeasure> measures;
-    for (const QString& key : simulation.measures) {
-        // A curve this build does not know -- one a later release added -- is
-        // left out rather than read as the fallback, which would put a plot on
-        // screen that nobody asked for.
-        const SweepMeasure measure = sweepMeasureFromKey(key);
-        if (sweepMeasureKey(measure) == key) measures << measure;
-    }
-    if (!measures.isEmpty()) m_analysisPanel->setMeasures(measures);
+    m_analysisPanel->setPlotAxles(simulation.plotAxles);
+    // A curve this build does not know -- one a later release added -- leaves
+    // the plot where it is rather than reading as the fallback.
+    const SweepMeasure measure = sweepMeasureFromKey(simulation.measure);
+    if (sweepMeasureKey(measure) == simulation.measure) m_analysisPanel->setMeasure(measure);
     m_analysisPanel->setSides(simulation.sides);
     m_analysisPanel->setPosition(simulation.position);
     m_analysisPanel->setMovesAllAxles(simulation.allAxles);
@@ -1192,8 +1192,8 @@ void MainWindow::collectViewState()
     simulation.kind = m_analysisPanel->kind();
     simulation.sweep = m_analysisPanel->settings();
     simulation.position = m_analysisPanel->position();
-    for (const SweepMeasure measure : m_analysisPanel->measures())
-        simulation.measures << sweepMeasureKey(measure);
+    simulation.measure = sweepMeasureKey(m_analysisPanel->measure());
+    simulation.plotAxles = m_analysisPanel->plotAxles();
     simulation.sides = m_analysisPanel->sides();
     simulation.animating = m_analysisPanel->animating();
     simulation.animationSeconds = m_analysisPanel->animationSeconds();
@@ -2147,16 +2147,27 @@ void MainWindow::refreshSweep()
     // A sweep is the most expensive thing this window does, and there is nothing
     // to draw a curve on while the dock is shut. It is run again when it opens.
     const bool wanted = !m_analysisDock || m_analysisDock->isVisible();
-    const AxleSolver* axle = m_simulation.axleFor(m_analysisPanel->axle());
-    m_sweep = (wanted && axle) ? runSweep(*axle, m_analysisPanel->spec()) : SweepResult{};
-    m_analysisPanel->setResult(m_sweep);
+    m_sweeps = wanted ? runShownSweeps() : std::vector<SweepResult>{};
+    m_analysisPanel->setResults(m_sweeps);
 
     QStringList lines;
     if (!m_simulation.note().isEmpty()) lines << m_simulation.note();
     // runSweep already carries the axle's own warnings, so they are not added
     // here a second time.
-    lines += m_sweep.warnings;
+    for (const SweepResult& sweep : m_sweeps)
+        for (const QString& warning : sweep.warnings)
+            if (!lines.contains(warning)) lines << warning;
     m_analysisPanel->setStatus(lines.join(QStringLiteral("\n")));
+}
+
+std::vector<SweepResult> MainWindow::runShownSweeps() const
+{
+    const SweepSpec spec = m_analysisPanel->spec();
+    std::vector<SweepResult> sweeps;
+    for (const QString& token : m_analysisPanel->sweptAxles())
+        if (const AxleSolver* axle = m_simulation.axleFor(token))
+            sweeps.push_back(runSweep(*axle, spec));
+    return sweeps;
 }
 
 void MainWindow::applySimulation()
@@ -2195,30 +2206,37 @@ void MainWindow::applySimulation()
 
 void MainWindow::exportSweepCsv()
 {
-    const AxleSolver* axle = m_simulation.axleFor(m_analysisPanel->axle());
-    if (!axle) {
-        QMessageBox::information(this, tr("Export Sweep"),
-                                 tr("There is no axle to sweep yet. Import hardpoints, and check "
-                                    "that the linkage template names the mechanism."));
+    // What is on screen is what is written: the axles shown, the wheels shown.
+    const std::vector<SweepResult> results = runShownSweeps();
+    const QByteArray csv = sweepsToCsv(results, m_analysisPanel->sides());
+    if (csv.isEmpty()) {
+        QMessageBox::information(
+            this, tr("Export Sweep"),
+            m_simulation.axles().empty()
+                ? tr("There is no axle to sweep yet. Import hardpoints, and check that the "
+                     "linkage template names the mechanism.")
+                : tr("None of the axles shown can be put through this sweep. Tick one under "
+                     "Show that can."));
         return;
     }
 
-    const SweepSpec spec = m_analysisPanel->spec();
-    const SweepResult result = runSweep(*axle, spec);
-
+    QStringList axles;
+    for (const SweepResult& result : results)
+        if (!result.isEmpty())
+            axles << (result.axleLabel.isEmpty() ? result.axleToken : result.axleLabel);
     const QString suggested =
         QDir(m_project.rootPath())
             .filePath(QStringLiteral("%1-%2-%3.csv")
                           .arg(m_project.name().isEmpty() ? QStringLiteral("sweep")
                                                           : m_project.name(),
-                               axle->label().isEmpty() ? axle->cornerToken() : axle->label(),
-                               sweepKindToString(spec.kind)));
+                               axles.join(QLatin1Char('-')),
+                               sweepKindToString(m_analysisPanel->kind())));
     const QString path = QFileDialog::getSaveFileName(this, tr("Export Sweep as CSV"), suggested,
                                                       tr("CSV files (*.csv);;All files (*)"));
     if (path.isEmpty()) return;
 
     QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(sweepToCsv(result)) < 0
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(csv) < 0
         || !file.commit()) {
         QMessageBox::warning(this, tr("Export Sweep"),
                              tr("Could not write %1: %2")

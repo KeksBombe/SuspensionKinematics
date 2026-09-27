@@ -1,6 +1,7 @@
 #include "project/Project.h"
 
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
@@ -46,6 +47,7 @@ private slots:
     void reimportingTheProjectsOwnCopyKeepsIt();
     void everySweepsTravelIsRememberedNotJustTheOneBeingSwept();
     void anOlderProjectsSingleRangeBecomesThatKindsOwnTravel();
+    void aProjectWithAPlotPerCurveOpensOnItsFirstCurveAndItsAxle();
     void staticAnglesAreKeptPerAxle();
 
     void editsAreTheDifferenceFromTheWorkbook();
@@ -694,7 +696,8 @@ void TestProject::everySweepsTravelIsRememberedNotJustTheOneBeingSwept()
     simulation.sweep.steerIncrement = 2.0;
     simulation.sweep.rackTravel = 4.0;
     simulation.position = 0.75;
-    simulation.measures = { QStringLiteral("toe"), QStringLiteral("rollCentreHeight") };
+    simulation.measure = QStringLiteral("toe");
+    simulation.plotAxles = { QStringLiteral("R"), QStringLiteral("F") };
     simulation.sides = SweepSides::Right;
     simulation.animating = true;
     simulation.animationSeconds = 2.5;
@@ -711,9 +714,9 @@ void TestProject::everySweepsTravelIsRememberedNotJustTheOneBeingSwept()
     QCOMPARE(back.axle, QStringLiteral("F"));
     QCOMPARE(back.kind, SweepKind::Roll);
     QCOMPARE(back.position, 0.75);
-    // Every plot, in the order they were on screen.
-    QCOMPARE(back.measures,
-             QStringList({ QStringLiteral("toe"), QStringLiteral("rollCentreHeight") }));
+    QCOMPARE(back.measure, QStringLiteral("toe"));
+    // The axles drawn, as they were written.
+    QCOMPARE(back.plotAxles, QStringList({ QStringLiteral("R"), QStringLiteral("F") }));
     QCOMPARE(back.sides, SweepSides::Right);
     QCOMPARE(back.animating, true);
     QCOMPARE(back.animationSeconds, 2.5);
@@ -784,14 +787,65 @@ void TestProject::anOlderProjectsSingleRangeBecomesThatKindsOwnTravel()
     QCOMPARE(back.sweep.rollAngle, SweepSettings{}.rollAngle);
     QCOMPARE(back.sweep.steerTravel, SweepSettings{}.steerTravel);
 
-    // The one curve it was showing is a list of one, and both wheels are drawn,
-    // which is all an older build could do.
-    QCOMPARE(back.measures, QStringList{ QStringLiteral("camber") });
+    // The one curve it was showing, both wheels drawn, which is all an older
+    // build could do. It named no axle, so it chose none to plot either.
+    QCOMPARE(back.measure, QStringLiteral("camber"));
+    QVERIFY(back.plotAxles.isEmpty());
     QCOMPARE(back.sides, SweepSides::Both);
     // Nor did it state any static angles: every axle reads its own off the
     // hardpoints, the way it always has.
     QVERIFY(reopened->alignment().isEmpty());
     QVERIFY(!reopened->alignmentFor(QStringLiteral("F")).has_value());
+}
+
+void TestProject::aProjectWithAPlotPerCurveOpensOnItsFirstCurveAndItsAxle()
+{
+    QTemporaryDir directory;
+    QString error;
+    std::optional<Project> project = Project::create(directory.filePath(QStringLiteral("Plots")),
+                                                     QStringLiteral("Plots"), &error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+    QVERIFY2(project->save(&error), qPrintable(error));
+
+    QFile manifest(project->manifestPath());
+    QVERIFY(manifest.open(QIODevice::ReadOnly));
+    QJsonObject root = QJsonDocument::fromJson(manifest.readAll()).object();
+    manifest.close();
+
+    // What a build with one plot per curve wrote: the list, and no "measure"
+    // beside it in the oldest of them. One axle swept, and no axles to plot.
+    QJsonObject simulation;
+    simulation.insert(QStringLiteral("axle"), QStringLiteral("R"));
+    simulation.insert(QStringLiteral("measures"),
+                      QJsonArray{ QStringLiteral("toe"), QStringLiteral("camber") });
+    QJsonObject view = root.value(QStringLiteral("view")).toObject();
+    view.insert(QStringLiteral("simulation"), simulation);
+    root.insert(QStringLiteral("view"), view);
+    QVERIFY(manifest.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    manifest.write(QJsonDocument(root).toJson());
+    manifest.close();
+
+    std::optional<Project> reopened = Project::open(project->manifestPath(), &error);
+    QVERIFY2(reopened.has_value(), qPrintable(error));
+    const SimulationState& back = reopened->view().simulation;
+    // The first plot is the one plot, and it draws the axle it was drawing.
+    QCOMPARE(back.measure, QStringLiteral("toe"));
+    QCOMPARE(back.plotAxles, QStringList{ QStringLiteral("R") });
+
+    // Saved again, both keys are written, so an older build opens on the same
+    // curve; and the axles are written, so this one does not fall back again.
+    QVERIFY2(reopened->save(&error), qPrintable(error));
+    QVERIFY(manifest.open(QIODevice::ReadOnly));
+    const QJsonObject saved = QJsonDocument::fromJson(manifest.readAll())
+                                  .object()
+                                  .value(QStringLiteral("view"))
+                                  .toObject()
+                                  .value(QStringLiteral("simulation"))
+                                  .toObject();
+    manifest.close();
+    QCOMPARE(saved.value(QStringLiteral("measure")).toString(), QStringLiteral("toe"));
+    QCOMPARE(saved.value(QStringLiteral("measures")).toArray(), QJsonArray{ QStringLiteral("toe") });
+    QCOMPARE(saved.value(QStringLiteral("plotAxles")).toArray(), QJsonArray{ QStringLiteral("R") });
 }
 
 void TestProject::staticAnglesAreKeptPerAxle()
