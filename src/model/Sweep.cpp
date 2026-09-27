@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace suspkin {
 namespace {
@@ -599,6 +600,7 @@ SweepResult runSweep(const AxleSolver& axle, const SweepSpec& spec)
 {
     SweepResult result;
     result.kind = spec.kind;
+    result.axleToken = axle.cornerToken();
     result.axleLabel = axle.label();
     result.warnings = axle.warnings();
     if (axle.isEmpty()) return result;
@@ -880,64 +882,157 @@ bool sweepMeasureValue(const AxleSample& sample, SweepMeasure measure, bool left
     return false;
 }
 
+namespace {
+
+/// One per-wheel column of the CSV: its name, and the unit in its header.
+struct CsvColumn {
+    const char* name;
+    const char* unit;
+};
+
+/// The columns each side of the axle takes, in the order they are written.
+constexpr CsvColumn kCsvSideColumns[] = {
+    { "travel", "mm" },           { "camber", "deg" },
+    { "camber_to_ground", "deg" }, { "toe", "deg" },
+    { "caster", "deg" },          { "kpi", "deg" },
+    { "scrub_radius", "mm" },     { "trail", "mm" },
+    { "half_track_change", "mm" }, { "wheelbase_change", "mm" },
+    { "damper_length", "mm" },    { "damper_travel", "mm" },
+    { "installation_ratio", "mm/mm" },
+};
+
+/// The header of one side's columns, each name prefixed with @p prefix.
+QByteArray csvSideHeader(const QByteArray& prefix, const QByteArray& side)
+{
+    QByteArray header;
+    for (const CsvColumn& column : kCsvSideColumns)
+        header += "," + prefix + column.name + "_" + side + " [" + column.unit + "]";
+    return header;
+}
+
+/// How many columns belong to the axle rather than to a wheel.
+constexpr int kCsvAxleColumns = 4;
+
+/// The header of the columns that belong to the axle rather than to a wheel.
+QByteArray csvAxleHeader(const QByteArray& prefix)
+{
+    return "," + prefix + "roll_centre_height [mm]," + prefix + "roll_centre_lateral [mm],"
+           + prefix + "anti_roll_twist [deg]," + prefix + "ackermann [%]";
+}
+
+/// One side's fields of one row.
+QByteArray csvSideFields(const CornerPose& pose, double installationRatio)
+{
+    // Empty fields rather than zeros: a position that did not assemble has no
+    // camber, and plotting one as zero would put a spike in the middle of an
+    // otherwise honest curve.
+    if (!pose.valid) return QByteArray(int(std::size(kCsvSideColumns)), ',');
+
+    QByteArray fields;
+    for (const double value : { pose.wheelTravel, pose.camber, pose.camberToGround, pose.toe,
+                                pose.caster, pose.kingpinInclination, pose.scrubRadius,
+                                pose.mechanicalTrail, pose.halfTrackChange, pose.wheelbaseChange,
+                                pose.damperLength, pose.damperTravel, installationRatio })
+        fields += "," + field(value);
+    return fields;
+}
+
+/// The axle-wide fields of one row.
+QByteArray csvAxleFields(const AxleSample& sample)
+{
+    QByteArray fields = sample.rollCenterValid ? "," + field(sample.rollCenterHeight) + ","
+                                                     + field(sample.rollCenterLateral)
+                                               : QByteArray(",,");
+    fields += sample.hasAntiRoll ? "," + field(sample.antiRollTwist) : QByteArray(",");
+    fields += sample.ackermannValid ? "," + field(sample.ackermann) : QByteArray(",");
+    return fields;
+}
+
+/// Which of an axle's two wheels a CSV carries columns for.
+struct CsvSides {
+    bool left = true;
+    bool right = true;
+};
+
+/// What an axle's columns are prefixed with when several axles share a sheet:
+/// its label, or its corner token when the template gave it none.
+QByteArray csvAxlePrefix(const SweepResult& result)
+{
+    const QString name = result.axleLabel.isEmpty() ? result.axleToken : result.axleLabel;
+    return name.toUtf8() + ' ';
+}
+
+/// The header of one axle's columns: the wheels asked for, then the axle-wide ones.
+QByteArray csvSweepHeader(const QByteArray& prefix, CsvSides sides)
+{
+    QByteArray header;
+    if (sides.left) header += csvSideHeader(prefix, "left");
+    if (sides.right) header += csvSideHeader(prefix, "right");
+    return header + csvAxleHeader(prefix);
+}
+
+/// One axle's fields of row @p row, all of them empty past the end of its sweep.
+QByteArray csvSweepFields(const SweepResult& result, std::size_t row, CsvSides sides)
+{
+    if (row >= result.samples.size()) {
+        const int sideColumns = int(std::size(kCsvSideColumns));
+        return QByteArray((sides.left ? sideColumns : 0) + (sides.right ? sideColumns : 0)
+                              + kCsvAxleColumns,
+                          ',');
+    }
+    const AxleSample& sample = result.samples[row];
+    QByteArray fields;
+    if (sides.left) fields += csvSideFields(sample.left, sample.leftInstallationRatio);
+    if (sides.right) fields += csvSideFields(sample.right, sample.rightInstallationRatio);
+    return fields + csvAxleFields(sample);
+}
+
+} // namespace
+
+QByteArray sweepsToCsv(const std::vector<SweepResult>& results, SweepSides sides)
+{
+    std::vector<const SweepResult*> swept;
+    for (const SweepResult& result : results)
+        if (!result.isEmpty()) swept.push_back(&result);
+    if (swept.empty()) return QByteArray();
+
+    const CsvSides wanted{ sides != SweepSides::Right, sides != SweepSides::Left };
+    const bool several = swept.size() > 1;
+    // Every sweep of one spec has the same inputs; the longest supplies them.
+    const SweepResult* longest = *std::max_element(
+        swept.begin(), swept.end(), [](const SweepResult* a, const SweepResult* b) {
+            return a->samples.size() < b->samples.size();
+        });
+
+    QByteArray csv = sweepInputLabel(longest->kind).toUtf8() + " ["
+                     + sweepInputUnit(longest->kind).toUtf8() + "]";
+    for (const SweepResult* result : swept)
+        csv += csvSweepHeader(several ? csvAxlePrefix(*result) : QByteArray(), wanted);
+    csv += "\n";
+
+    for (std::size_t row = 0; row < longest->samples.size(); ++row) {
+        csv += field(longest->samples[row].input);
+        for (const SweepResult* result : swept) csv += csvSweepFields(*result, row, wanted);
+        csv += "\n";
+    }
+    return csv;
+}
+
 QByteArray sweepToCsv(const SweepResult& result)
 {
     QByteArray csv;
     const QByteArray unit = sweepInputUnit(result.kind).toUtf8();
 
     csv += sweepInputLabel(result.kind).toUtf8() + " [" + unit + "]";
-    for (const char* side : { "left", "right" }) {
-        const QByteArray s = QByteArray(side);
-        csv += ",travel_" + s + " [mm]";
-        csv += ",camber_" + s + " [deg]";
-        csv += ",camber_to_ground_" + s + " [deg]";
-        csv += ",toe_" + s + " [deg]";
-        csv += ",caster_" + s + " [deg]";
-        csv += ",kpi_" + s + " [deg]";
-        csv += ",scrub_radius_" + s + " [mm]";
-        csv += ",trail_" + s + " [mm]";
-        csv += ",half_track_change_" + s + " [mm]";
-        csv += ",wheelbase_change_" + s + " [mm]";
-        csv += ",damper_length_" + s + " [mm]";
-        csv += ",damper_travel_" + s + " [mm]";
-        csv += ",installation_ratio_" + s + " [mm/mm]";
-    }
-    csv += ",roll_centre_height [mm],roll_centre_lateral [mm],anti_roll_twist [deg]"
-           ",ackermann [%]\n";
+    csv += csvSideHeader(QByteArray(), "left");
+    csv += csvSideHeader(QByteArray(), "right");
+    csv += csvAxleHeader(QByteArray()) + "\n";
 
     for (const AxleSample& sample : result.samples) {
         csv += field(sample.input);
-        for (int side = 0; side < 2; ++side) {
-            const CornerPose& pose = side == 0 ? sample.left : sample.right;
-            const double ratio = side == 0 ? sample.leftInstallationRatio
-                                           : sample.rightInstallationRatio;
-            if (!pose.valid) {
-                // Empty fields rather than zeros: a position that did not
-                // assemble has no camber, and plotting one as zero would put a
-                // spike in the middle of an otherwise honest curve.
-                csv += QByteArray(",,,,,,,,,,,,,");
-                continue;
-            }
-            csv += "," + field(pose.wheelTravel);
-            csv += "," + field(pose.camber);
-            csv += "," + field(pose.camberToGround);
-            csv += "," + field(pose.toe);
-            csv += "," + field(pose.caster);
-            csv += "," + field(pose.kingpinInclination);
-            csv += "," + field(pose.scrubRadius);
-            csv += "," + field(pose.mechanicalTrail);
-            csv += "," + field(pose.halfTrackChange);
-            csv += "," + field(pose.wheelbaseChange);
-            csv += "," + field(pose.damperLength);
-            csv += "," + field(pose.damperTravel);
-            csv += "," + field(ratio);
-        }
-        if (sample.rollCenterValid)
-            csv += "," + field(sample.rollCenterHeight) + "," + field(sample.rollCenterLateral);
-        else
-            csv += ",,";
-        csv += sample.hasAntiRoll ? "," + field(sample.antiRollTwist) : QByteArray(",");
-        csv += sample.ackermannValid ? "," + field(sample.ackermann) : QByteArray(",");
+        csv += csvSideFields(sample.left, sample.leftInstallationRatio);
+        csv += csvSideFields(sample.right, sample.rightInstallationRatio);
+        csv += csvAxleFields(sample);
         csv += "\n";
     }
     return csv;

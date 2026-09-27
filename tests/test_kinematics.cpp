@@ -339,6 +339,7 @@ private slots:
     void camberToGroundPartsFromCamberByTheRollAngle();
     void aSteerSweepChangesToeAndNotRideHeight();
     void theCsvHasOneRowPerStepAndSaysNothingAboutWhatDidNotSolve();
+    void severalAxlesShareOneCsvSideBySide();
     void theShippedTemplateSolvesTheCornerItDescribes();
 
     // ---- Ackermann ------------------------------------------------------
@@ -1461,6 +1462,54 @@ void TestKinematics::theCsvHasOneRowPerStepAndSaysNothingAboutWhatDidNotSolve()
     QVERIFY(!refused.warnings.isEmpty());
     const QList<QByteArray> refusedLines = sweepToCsv(refused).split('\n');
     QVERIFY(refusedLines[1].contains(",,,,"));
+}
+
+void TestKinematics::severalAxlesShareOneCsvSideBySide()
+{
+    const AxleSolver front =
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{});
+    const AxleSolver rear =
+        AxleSolver::build(cornerMechanism(), rearCorner(), rearAxle(), MirrorSpec{});
+
+    SweepSpec spec;
+    spec.kind = SweepKind::Bump;
+    spec.from = -10.0;
+    spec.to = 10.0;
+    spec.steps = 5;
+    const SweepResult frontSweep = runSweep(front, spec);
+    const SweepResult rearSweep = runSweep(rear, spec);
+    QCOMPARE(frontSweep.axleToken, QStringLiteral("F"));
+
+    // One axle with both wheels is the single-axle export, byte for byte.
+    QCOMPARE(sweepsToCsv({ frontSweep }, SweepSides::Both), sweepToCsv(frontSweep));
+
+    // Two are side by side after one input column, each named after its axle.
+    const QList<QByteArray> lines =
+        sweepsToCsv({ frontSweep, rearSweep }, SweepSides::Both).split('\n');
+    QCOMPARE(lines.size(), 7);
+    const QByteArray header = lines.first();
+    QVERIFY(header.startsWith("Wheel travel [mm],Front travel_left [mm]"));
+    QVERIFY(header.contains(",Rear camber_right [deg]"));
+    QVERIFY(header.contains(",Front roll_centre_height [mm]"));
+    QVERIFY(header.contains(",Rear ackermann [%]"));
+    QCOMPARE(header.count("Wheel travel"), 1);
+    const int columns = header.count(',') + 1;
+    QCOMPARE(columns, 1 + 2 * (2 * 13 + 4));
+    for (int row = 1; row <= 5; ++row) QCOMPARE(lines[row].count(',') + 1, columns);
+
+    // A wheel that is not shown has no columns; the axle-wide ones stay.
+    const QByteArray leftOnly =
+        sweepsToCsv({ frontSweep, rearSweep }, SweepSides::Left).split('\n').first();
+    QVERIFY(leftOnly.contains("Rear camber_left [deg]"));
+    QVERIFY(!leftOnly.contains("_right"));
+    QVERIFY(leftOnly.contains("Rear roll_centre_height [mm]"));
+
+    // A sweep that has nothing in it -- a steer sweep of an unsteered axle --
+    // takes no columns, and with nothing at all there is nothing to write.
+    SweepResult refused;
+    refused.axleToken = QStringLiteral("R");
+    QCOMPARE(sweepsToCsv({ frontSweep, refused }, SweepSides::Both), sweepToCsv(frontSweep));
+    QVERIFY(sweepsToCsv({ refused }, SweepSides::Both).isEmpty());
 }
 
 void TestKinematics::theShippedTemplateSolvesTheCornerItDescribes()

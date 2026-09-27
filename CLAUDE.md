@@ -578,9 +578,10 @@ placement is pure and testable: `src/model/Wheels.*`.
 
 ## The analysis plots
 
-`src/app/PlotWidget.*` draws one measure of a sweep; `AnalysisPanel` holds as many
-as the Curves menu has ticked, in a grid that reflows with the dock's width and
-scrolls when they do not fit.
+`src/app/PlotWidget.*` draws one measure of one or more axles' sweeps, overlaid;
+`AnalysisPanel` holds exactly one of it. There used to be a plot per ticked
+curve in a scrolling grid; that was a misreading of what Lotus does, which is one
+graph and *visibility* toggles for what is in it (issue 8).
 
 - **Colours come from the palette**, mixed from `Base` and `Text`, the same rule
   as the hardpoint table. The hover readout is `Window` and `WindowText`: a fixed
@@ -592,14 +593,27 @@ scrolls when they do not fit.
   the centreline through a bump filled the plot with the solver's rounding,
   under an axis that read "0.000" at every tick. Readouts go through
   `sweepValueText()`, which never prints "-0.000".
-- Which curves are plotted is `SimulationState::measures`, by key, in menu
-  order. `"measure"` is still written beside `"measures"` -- the first of them --
-  the way `"selected"` sits beside `"selection"`, and an older manifest's one
-  `"measure"` reads back as a list of one.
-- Which wheels they draw is `SimulationState::sides` (`SweepSides`: both, left,
-  right), next to the Curves button. It reaches every plot (`setSides()`) and the
-  readout, which hides the other column and writes the axle-wide rows into the
-  one left showing. Axle-wide measures are one curve whatever it says.
+- Which curve is plotted is `SimulationState::measure`, by key. `"measures"` is
+  still written beside it as a list of one, so the builds with a plot per curve
+  open on the same one; a manifest of theirs reads back its first.
+- **Which axles are drawn is `SimulationState::plotAxles`**, by corner token,
+  one Show checkbox each, a colour each (`PlotWidget::axleColor()`, by the axle's
+  place among *all* axles, so the front keeps its colour with the rear hidden).
+  A manifest without the key shows the one axle it was sweeping, `axle`; the key
+  is always written, so an empty list is not mistaken for that. Empty means
+  every axle. The window sweeps `AnalysisPanel::sweptAxles()` -- the ones shown,
+  less any without a rack in a steer sweep, whose checkbox is greyed out.
+- `axle` is no longer what is plotted: it is what the position drives, the one
+  the viewport moves when "Move all axles" is off, and what the readout shows.
+- Which wheels are drawn is `SimulationState::sides` (`SweepSides`: both, left,
+  right), the Left and Right checkboxes: solid for the left, dashed for the
+  right. It reaches the plot (`setSides()`) and the readout, which hides the
+  other column and writes the axle-wide rows into the one left showing.
+  Axle-wide measures are one curve per axle whatever it says. Neither the last
+  axle nor the last wheel can be unticked: an empty plot reads as a fault.
+- Export CSV writes what is shown, through `sweepsToCsv()`: the axles side by
+  side, prefixed with their labels, and only the wheels ticked. One axle with
+  both wheels is exactly `sweepToCsv()`, which a test holds it to.
 - **Camber** is to the body; **Camber to ground** (`CornerPose::camberToGround`)
   is to the road. They are one number except in a roll sweep, where the road is
   tilted under the car (`z = -y tan(roll)`) and they part by the whole roll
