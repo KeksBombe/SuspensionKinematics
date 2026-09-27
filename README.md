@@ -428,6 +428,49 @@ rows that named it along.
 > joint. If yours is mounted on the upright instead, delete the `pushRodPickup`
 > part and add `{corner}_PushRod_O` to the upright's first chain.
 
+### The anti-roll bar
+
+The bar is four points per corner, named for one side and mirrored like every
+other point. Name them this way in CAD:
+
+| Point | What it is | Needed |
+|---|---|---|
+| `{corner}_ARB_DropLink_O` | the drop link's upper end, on the body the mount names (the rocker, as shipped) | yes |
+| `{corner}_ARB_ArmEnd` | the drop link's lower end, on the bar's arm | yes |
+| `{corner}_ARB_ArmRoot` | where the arm meets the bar: a point **on the bar's axis of rotation** | yes |
+| `{corner}_ARB_Bearing` | a second point on that axis, fixed to the chassis — the centre of the bar's bearing | no |
+
+**Where the drop link picks up** is `mechanism.antiRollBar.mount` in the
+template: `rocker` (the default), `upperArm`, `lowerArm` or `upright`, the same
+words the pushrod's mount uses. Only `rocker` needs a rocker; a bar hung straight
+off the wheel solves without one.
+
+**The bar's axis** is the line through `ArmRoot` and `Bearing` on each side when
+the bearing is named, so a bar that is bent inboard of its bearings is modelled
+the way it is built. Without a bearing the bar is taken to be straight from the
+left `ArmRoot` to the right one, which needs both sides of the axle; one side on
+its own is assumed to run along y.
+
+**Anti-roll bar twist** in the analysis dock is the left arm's rotation about
+its axis minus the right arm's, so it is zero in pure bump — both arms turn
+together and the bar only turns in its bearings — and grows with roll.
+
+Workbooks measured before these names keep working. The template's
+`mechanism.formerNames` says what each point used to be called, and a table that
+has only the old name is read through it, point by point, so the CAD can be
+renamed at any pace:
+
+| Now | Before |
+|---|---|
+| `{corner}_ARB_DropLink_O` | `{corner}_AntiRoll_O` |
+| `{corner}_ARB_ArmEnd` | `{corner}_AntiRoll_I` |
+| `{corner}_ARB_ArmRoot` | `{corner}_AntiRoll_Center` |
+
+A project made before this keeps its own `linkage/template.json`, which still
+names the old points and still reads. To move a project over to the new names,
+use **Linkage ▸ Reset to Built-in Template** — which replaces that file, so any
+parts you added to it by hand have to be added again.
+
 ## Analysis
 
 The analysis dock (`Ctrl+K`) puts an axle through **bump**, **roll** or

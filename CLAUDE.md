@@ -436,6 +436,24 @@ as `:/templates/...` so the tests read the same bytes the application ships.
 - A project without a template gets the built-in one written in on open
   (`installBuiltinLinkageTemplate()`), so it becomes an ordinary project file the
   user can edit. A template that fails to parse is *not* repaired by overwriting.
+- **A point can be renamed without breaking a workbook.** `mechanism.formerNames`
+  maps a name the template uses now to the one it used before, both with
+  `{corner}` still in them. `resolvePointName()` is the one place it is applied:
+  a name the table lacks, whose former name it has, is read as the former name,
+  point by point, per corner and side. It is used by `buildLinkage()`, by
+  `AxleSolver::build()` and by `inferHardpointConfig()` -- anything that binds
+  names to a table goes through the `instantiateMechanism()` overload that
+  takes the table, or an old workbook draws but does not solve. A point missing
+  under both names is reported under the new one.
+- **The anti-roll bar** is `mechanism.antiRollBar`: `dropLinkOuter`, `armEnd`,
+  `armRoot`, an optional `bearing` and a `mount` (`rocker`, `upperArm`,
+  `lowerArm`, `upright`). The older keys `rocker`, `armOuter` and `armPivot`
+  still read, and are written back the new way. A bearing makes the bar's axis
+  that side's own (root to bearing) and `setAntiRollAxis()` leaves it alone;
+  without one the axle sets the root-to-root axis. Either way each side's axis
+  is turned by `barAxisPointingLeft()` so the right side's is the *reversed*
+  mirror image of the left's -- the plain mirror image turns the rotation round
+  and a pure bump reads as twist.
 - `mechanism.upright.wheelAxis` is a second point on the **wheel's own axis of
   rotation** (`{corner}_WheelAxis`), rigid with the upright. It is what says
   which way the wheel points -- static toe, which no other hardpoint in a table

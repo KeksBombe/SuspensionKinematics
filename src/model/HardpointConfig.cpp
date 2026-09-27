@@ -340,7 +340,7 @@ HardpointConfigMap inferHardpointConfig(const HardpointTable& table, const Linka
     for (const CornerSpec& corner : corners) {
         for (int side = 0; side < 2; ++side) {
             const MechanismTemplate mechanism =
-                instantiateMechanism(templ.mechanism, corner.token, side == 1, mirror);
+                instantiateMechanism(templ.mechanism, corner.token, side == 1, mirror, table);
 
             grounded(mechanism.lowerFront);
             grounded(mechanism.lowerRear);
@@ -351,6 +351,7 @@ HardpointConfigMap inferHardpointConfig(const HardpointTable& table, const Linka
             grounded(mechanism.rockerAxis);
             grounded(mechanism.damperInboard);
             grounded(mechanism.antiRollArmRoot);
+            grounded(mechanism.antiRollBearing);
 
             // Each of these is paired with the far end of its own member, which
             // is what says which of the two bodies at the joint is which.

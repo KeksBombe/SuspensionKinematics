@@ -39,9 +39,10 @@ QStringList frontCornerNames()
         QStringLiteral("F_PushRod_I"),       QStringLiteral("F_PushRod_O"),
         QStringLiteral("F_Rocker_Center"),   QStringLiteral("F_Rocker_AxisPoint"),
         QStringLiteral("F_Damper_I"),        QStringLiteral("F_Damper_O"),
-        QStringLiteral("F_AntiRoll_Center"), QStringLiteral("F_AntiRoll_I"),
-        QStringLiteral("F_AntiRoll_O"),      QStringLiteral("F_WheelCenter"),
-        QStringLiteral("F_WheelAxis"),       QStringLiteral("F_ContactPatch"),
+        QStringLiteral("F_ARB_DropLink_O"),  QStringLiteral("F_ARB_ArmEnd"),
+        QStringLiteral("F_ARB_ArmRoot"),     QStringLiteral("F_ARB_Bearing"),
+        QStringLiteral("F_WheelCenter"),     QStringLiteral("F_WheelAxis"),
+        QStringLiteral("F_ContactPatch"),
     };
 }
 
@@ -99,6 +100,8 @@ private slots:
     void aBushingNeedsTwoBodiesToActBetween();
     void inferenceDoesNotTalkOverWhatTheUserSet();
     void theChassisPointsAreFlaggedByRow();
+    void theBarsBearingIsGroundedAgainstTheBar();
+    void aWorkbookWithTheOldAntiRollNamesIsDescribedTheSameWay();
 };
 
 void TestHardpointConfig::pointTypesRoundTripThroughTheirTokens()
@@ -184,7 +187,7 @@ void TestHardpointConfig::anOuterJointNamesBothMembersThatMeetThere()
     QCOMPARE(damper.part1, QStringLiteral("Damper"));
     QCOMPARE(damper.part2, QStringLiteral("Rocker"));
 
-    const HardpointConfig dropLink = config.value(QStringLiteral("F_AntiRoll_O"));
+    const HardpointConfig dropLink = config.value(QStringLiteral("F_ARB_DropLink_O"));
     QCOMPARE(dropLink.part1, QStringLiteral("Anti-roll drop link"));
     QCOMPARE(dropLink.part2, QStringLiteral("Rocker"));
 }
@@ -414,6 +417,43 @@ void TestHardpointConfig::theChassisPointsAreFlaggedByRow()
     const std::vector<bool> unsaid = groundedPoints(table, HardpointConfigMap{});
     QCOMPARE(unsaid.size(), table.points.size());
     for (const bool flag : unsaid) QVERIFY(!flag);
+}
+
+void TestHardpointConfig::theBarsBearingIsGroundedAgainstTheBar()
+{
+    const HardpointConfigMap config = inferFrontCorner();
+
+    // The bearing and the arm root are both on the bar's axis, and both are
+    // where the bar meets the chassis.
+    for (const char* name : { "F_ARB_Bearing", "F_ARB_ArmRoot" }) {
+        const HardpointConfig point = config.value(QLatin1String(name));
+        QCOMPARE(point.type, PointType::ToBody);
+        QCOMPARE(point.part1, QStringLiteral("Anti-roll bar arm"));
+        QCOMPARE(point.part2, kGround);
+    }
+}
+
+void TestHardpointConfig::aWorkbookWithTheOldAntiRollNamesIsDescribedTheSameWay()
+{
+    // A workbook measured before the bar's points were renamed: read through
+    // the template's former names, each old point gets what its new name would.
+    QStringList names = frontCornerNames();
+    names.removeAll(QStringLiteral("F_ARB_Bearing"));
+    const QStringList renamed{ QStringLiteral("F_ARB_DropLink_O"), QStringLiteral("F_ARB_ArmEnd"),
+                               QStringLiteral("F_ARB_ArmRoot") };
+    const QStringList former{ QStringLiteral("F_AntiRoll_O"), QStringLiteral("F_AntiRoll_I"),
+                              QStringLiteral("F_AntiRoll_Center") };
+    for (int i = 0; i < renamed.size(); ++i) names.replaceInStrings(renamed[i], former[i]);
+
+    const HardpointConfigMap current = inferFrontCorner();
+    const HardpointConfigMap older =
+        inferHardpointConfig(tableOf(names), builtinLinkageTemplate(), suffixMirror());
+    for (int i = 0; i < renamed.size(); ++i) {
+        QVERIFY2(older.contains(former[i]), qPrintable(former[i]));
+        QCOMPARE(older.value(former[i]).type, current.value(renamed[i]).type);
+        QCOMPARE(older.value(former[i]).part1, current.value(renamed[i]).part1);
+        QCOMPARE(older.value(former[i]).part2, current.value(renamed[i]).part2);
+    }
 }
 
 QTEST_MAIN(TestHardpointConfig)

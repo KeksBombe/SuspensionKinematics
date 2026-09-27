@@ -2,6 +2,8 @@
 
 #include <QCoreApplication>
 
+#include <array>
+
 namespace suspkin {
 namespace {
 
@@ -23,6 +25,50 @@ QString instantiateName(const QString& pattern, const QString& corner, bool mirr
 void appendIfNamed(QStringList& list, const QString& name)
 {
     if (!name.isEmpty()) list.append(name);
+}
+
+using Role = QString MechanismTemplate::*;
+
+/// Every role that names one point of its own, in the order the fields are
+/// declared, so that listing them and filling them in cannot disagree about
+/// which there are. Not the steering rack, which names a point another role
+/// already names, and not the carried points, which are a list.
+const std::array<Role, 21>& namedRoles()
+{
+    static const std::array<Role, 21> roles = {
+        &MechanismTemplate::lowerFront,     &MechanismTemplate::lowerRear,
+        &MechanismTemplate::lowerOuter,     &MechanismTemplate::upperFront,
+        &MechanismTemplate::upperRear,      &MechanismTemplate::upperOuter,
+        &MechanismTemplate::tieRodInboard,  &MechanismTemplate::tieRodOutboard,
+        &MechanismTemplate::wheelCenter,    &MechanismTemplate::wheelAxis,
+        &MechanismTemplate::contactPatch,   &MechanismTemplate::pushrodOuter,
+        &MechanismTemplate::pushrodInner,   &MechanismTemplate::rockerPivot,
+        &MechanismTemplate::rockerAxis,     &MechanismTemplate::damperInboard,
+        &MechanismTemplate::damperOutboard, &MechanismTemplate::antiRollDropLinkOuter,
+        &MechanismTemplate::antiRollArmEnd, &MechanismTemplate::antiRollArmRoot,
+        &MechanismTemplate::antiRollBearing,
+    };
+    return roles;
+}
+
+/// @p templ with every name put through @p fill, and everything that is not a
+/// name carried across as it is.
+template <typename Fill>
+MechanismTemplate instantiateWith(const MechanismTemplate& templ, Fill fill)
+{
+    MechanismTemplate out;
+    out.pushrodMount = templ.pushrodMount;
+    out.antiRollMount = templ.antiRollMount;
+    out.formerNames = templ.formerNames;
+
+    for (Role role : namedRoles()) out.*role = fill(templ.*role);
+    // The rack point is a reference to a point the mechanism already names, not
+    // a point of its own, which is why it is instantiated here but stays out of
+    // allNames() and out of the coverage report -- counting it would report one
+    // hardpoint twice.
+    out.steeringRack = fill(templ.steeringRack);
+    for (const QString& name : templ.carried) appendIfNamed(out.carried, fill(name));
+    return out;
 }
 
 } // namespace
@@ -63,21 +109,48 @@ bool MechanismTemplate::hasRocker() const
            && !rockerAxis.isEmpty();
 }
 
+QString dropLinkMountToString(DropLinkMount mount)
+{
+    switch (mount) {
+    case DropLinkMount::Rocker: return QStringLiteral("rocker");
+    case DropLinkMount::UpperArm: return QStringLiteral("upperArm");
+    case DropLinkMount::LowerArm: return QStringLiteral("lowerArm");
+    case DropLinkMount::Upright: return QStringLiteral("upright");
+    }
+    return QStringLiteral("rocker");
+}
+
+DropLinkMount dropLinkMountFromString(const QString& text, DropLinkMount fallback)
+{
+    // The wishbones and the upright are spelled the way a pushrod mount is, so
+    // one word means one body wherever it is written.
+    const QString key = text.trimmed().toLower();
+    if (key == QLatin1String("rocker") || key == QLatin1String("bellcrank"))
+        return DropLinkMount::Rocker;
+    if (key == QLatin1String("upperarm") || key == QLatin1String("upper")
+        || key == QLatin1String("upperwishbone"))
+        return DropLinkMount::UpperArm;
+    if (key == QLatin1String("lowerarm") || key == QLatin1String("lower")
+        || key == QLatin1String("lowerwishbone"))
+        return DropLinkMount::LowerArm;
+    if (key == QLatin1String("upright") || key == QLatin1String("knuckle"))
+        return DropLinkMount::Upright;
+    return fallback;
+}
+
 bool MechanismTemplate::hasAntiRoll() const
 {
-    return hasRocker() && !antiRollDropLinkOuter.isEmpty() && !antiRollArmEnd.isEmpty()
+    // A drop link on the rocker needs a rocker to be on; one on the wheel's own
+    // members does not.
+    const bool mounted = antiRollMount != DropLinkMount::Rocker || hasRocker();
+    return mounted && !antiRollDropLinkOuter.isEmpty() && !antiRollArmEnd.isEmpty()
            && !antiRollArmRoot.isEmpty();
 }
 
 QStringList MechanismTemplate::allNames() const
 {
     QStringList names;
-    for (const QString* name : { &lowerFront, &lowerRear, &lowerOuter, &upperFront, &upperRear,
-                                 &upperOuter, &tieRodInboard, &tieRodOutboard, &wheelCenter,
-                                 &wheelAxis, &contactPatch, &pushrodOuter, &pushrodInner,
-                                 &rockerPivot, &rockerAxis, &damperInboard, &damperOutboard,
-                                 &antiRollDropLinkOuter, &antiRollArmEnd, &antiRollArmRoot })
-        appendIfNamed(names, *name);
+    for (Role role : namedRoles()) appendIfNamed(names, this->*role);
     names += carried;
     return names;
 }
@@ -85,41 +158,33 @@ QStringList MechanismTemplate::allNames() const
 MechanismTemplate instantiateMechanism(const MechanismTemplate& templ, const QString& cornerToken,
                                        bool mirrored, const MirrorSpec& mirror)
 {
-    MechanismTemplate out;
-    out.pushrodMount = templ.pushrodMount;
-
-    const auto fill = [&](const QString& pattern) {
+    return instantiateWith(templ, [&](const QString& pattern) {
         return instantiateName(pattern, cornerToken, mirrored, mirror);
-    };
+    });
+}
 
-    out.lowerFront = fill(templ.lowerFront);
-    out.lowerRear = fill(templ.lowerRear);
-    out.lowerOuter = fill(templ.lowerOuter);
-    out.upperFront = fill(templ.upperFront);
-    out.upperRear = fill(templ.upperRear);
-    out.upperOuter = fill(templ.upperOuter);
-    out.tieRodInboard = fill(templ.tieRodInboard);
-    out.tieRodOutboard = fill(templ.tieRodOutboard);
-    // The rack point is a reference to a point the mechanism already names, not
-    // a point of its own, which is why it is instantiated here but stays out of
-    // allNames() and out of the coverage report -- counting it would report one
-    // hardpoint twice.
-    out.steeringRack = fill(templ.steeringRack);
-    out.wheelCenter = fill(templ.wheelCenter);
-    out.wheelAxis = fill(templ.wheelAxis);
-    out.contactPatch = fill(templ.contactPatch);
-    out.pushrodOuter = fill(templ.pushrodOuter);
-    out.pushrodInner = fill(templ.pushrodInner);
-    out.rockerPivot = fill(templ.rockerPivot);
-    out.rockerAxis = fill(templ.rockerAxis);
-    out.damperInboard = fill(templ.damperInboard);
-    out.damperOutboard = fill(templ.damperOutboard);
-    out.antiRollDropLinkOuter = fill(templ.antiRollDropLinkOuter);
-    out.antiRollArmEnd = fill(templ.antiRollArmEnd);
-    out.antiRollArmRoot = fill(templ.antiRollArmRoot);
-    for (const QString& name : templ.carried) appendIfNamed(out.carried, fill(name));
+MechanismTemplate instantiateMechanism(const MechanismTemplate& templ, const QString& cornerToken,
+                                       bool mirrored, const MirrorSpec& mirror,
+                                       const HardpointTable& table)
+{
+    return instantiateWith(templ, [&](const QString& pattern) {
+        return resolvePointName(pattern, cornerToken, mirrored, mirror, templ.formerNames, table);
+    });
+}
 
-    return out;
+QString resolvePointName(const QString& pattern, const QString& cornerToken, bool mirrored,
+                         const MirrorSpec& mirror, const FormerNames& formerNames,
+                         const HardpointTable& table)
+{
+    const QString name = instantiateName(pattern, cornerToken, mirrored, mirror);
+    if (name.isEmpty() || table.indexOf(name) >= 0) return name;
+
+    const QString former = formerNames.value(pattern);
+    if (former.isEmpty()) return name;
+    const QString formerName = instantiateName(former, cornerToken, mirrored, mirror);
+    // A point in neither spelling is reported under the name it has now, which
+    // is the one the user should give it.
+    return !formerName.isEmpty() && table.indexOf(formerName) >= 0 ? formerName : name;
 }
 
 MechanismCoverage coverMechanism(const MechanismTemplate& mechanism, const HardpointTable& table)
@@ -149,7 +214,7 @@ MechanismCoverage coverMechanism(const MechanismTemplate& mechanism, const Hardp
          { &mechanism.wheelAxis, &mechanism.contactPatch, &mechanism.pushrodOuter,
            &mechanism.pushrodInner, &mechanism.rockerPivot, &mechanism.rockerAxis,
            &mechanism.damperInboard, &mechanism.damperOutboard, &mechanism.antiRollDropLinkOuter,
-           &mechanism.antiRollArmEnd, &mechanism.antiRollArmRoot })
+           &mechanism.antiRollArmEnd, &mechanism.antiRollArmRoot, &mechanism.antiRollBearing })
         check(*name, coverage.missingOptional);
 
     for (const QString& name : mechanism.carried) check(name, coverage.missingOptional);

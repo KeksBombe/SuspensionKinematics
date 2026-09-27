@@ -212,14 +212,21 @@ public:
     double side() const { return m_left ? 1.0 : -1.0; }
 
     /// The direction of the anti-roll bar's own axis, which runs through this
-    /// corner's arm pivot. Without it the bar is taken to run along y, which is
+    /// corner's arm root. Without it the bar is taken to run along y, which is
     /// what a transverse U-bar does anyway.
     ///
-    /// It is a direction rather than the far side's pivot on purpose. Both arms
+    /// It is a direction rather than the far side's root on purpose. Both arms
     /// are on one straight bar, so both have to measure their rotation about the
     /// same direction: give the two of them opposite ones and a pure bump, where
     /// the bar does nothing, reads as the arms twisting against each other.
+    ///
+    /// A corner whose table names the bar's bearing already has its axis, and
+    /// keeps it: this does nothing there.
     void setAntiRollAxis(const Vec3& direction);
+
+    /// Whether the bar's axis came from a bearing point in the table, rather
+    /// than from a guess or from the far side's arm root.
+    bool antiRollAxisFromBearing() const { return m_antiRollAxisFromBearing; }
 
     /// The corner as the workbook holds it: the zero every change is measured
     /// from.
@@ -257,6 +264,12 @@ private:
     /// patch's.
     CornerPose driveTo(double value, double rackTravel, const CornerPose* previous,
                        double (*pick)(const CornerPose&)) const;
+    /// Where the drop link's upper end is in @p pose, carried by whichever body
+    /// the mechanism mounts it on. @p upright is that pose's upright motion.
+    Vec3 dropLinkOuterAt(const CornerPose& pose, const Rigid& upright) const;
+    /// Turn the bar's arm until it is a drop link's length from where the drop
+    /// link's upper end has gone. False, with the error set, when it cannot be.
+    bool solveAntiRoll(const Rigid& upright, const CornerPose* previous, CornerPose* pose) const;
 
     MechanismTemplate m_mechanism;
     bool m_left = true;
@@ -272,7 +285,7 @@ private:
     Vec3 m_pushrodOuter, m_pushrodInner;
     Vec3 m_rockerPivot, m_rockerAxisPoint;
     Vec3 m_damperInboard, m_damperOutboard;
-    Vec3 m_antiRollDropLinkOuter, m_antiRollArmEnd, m_antiRollArmRoot;
+    Vec3 m_antiRollDropLinkOuter, m_antiRollArmEnd, m_antiRollArmRoot, m_antiRollBearing;
     std::vector<PosedPoint> m_carried; ///< design positions of the carried points
 
     Axis m_lowerAxis, m_upperAxis, m_rockerAxis, m_antiRollAxis;
@@ -300,6 +313,9 @@ private:
     bool m_hasRocker = false;
     bool m_hasDamper = false;
     bool m_hasAntiRoll = false;
+    /// The table names the bar's bearing, so its axis is known on this side
+    /// alone and nothing the axle guesses replaces it.
+    bool m_antiRollAxisFromBearing = false;
 
     /// The design wheel spin axis, outboard. From the static angles when the
     /// project states them; otherwise from the wheel axis point when the table
