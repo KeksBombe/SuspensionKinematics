@@ -77,11 +77,16 @@ Its parameter set is the 2025 car (track 1220, wheelbase 1530, CoG at 300 mm,
    all state" against "the user's hand edits are theirs to keep", and the user
    loses. Regenerating is an explicit action that says what it is about to
    overwrite.
-7. **The generator does not invent the rocker group.** Pushrod inner, rocker,
-   damper and anti-roll bar are packaging decisions, not consequences of vehicle
-   targets. The Python tool hardcoded them (`geometry_input.py:145`) and that is
-   the honest admission. The generator emits the wishbones, the upright and the
-   steering; the rest is placed by hand, which Phase A now makes possible.
+7. **The rocker group and the anti-roll bar come from placement inputs, not
+   from vehicle targets** -- and each can be left out. They are packaging, which
+   is why this rule used to say they were placed by hand; the Python tool
+   hardcoded them (`geometry_input.py:145`). Issue #9 reversed that: a generated
+   project with no pushrod has no damper travel, no installation ratio and no
+   bar to twist, so the analysis the tool is for has nothing to show. They are
+   generated from a handful of inputs of their own (steps 13 and 14), exactly
+   one of which is a target -- the **installation ratio**, which sizes the
+   damper's rocker arm and is met at design to 1e-5. A per-axle switch for each
+   group leaves a rocker placed by hand exactly where it was.
 
 ## 3. The construction, spelled out
 
@@ -102,6 +107,9 @@ static camber, `lambda` kingpin inclination, `sigma` caster angle.
 | 10 | **Tie rod outboard** | Offset from the wheel centre by the steering arm length (sign selects front or rear steer), at a height on the rim packaging circle, `y` interpolated on the steering axis, plus the Ackermann offset. |
 | 11 | **Tie rod inboard** | Three of the four wishbone inboards define a plane; the tie-rod inboard is where the line from the tie-rod outboard toward the front-view IC pierces it. `x` is then set from the outboard plus an offset. |
 | 12 | **Coplanarity advice** | The fourth wishbone inboard is reported with the position that *would* put it on that plane. Not applied -- shown, as "move this point here and the bump steer goes away". |
+
+| 13 | **Pushrod, rocker, damper** | The pushrod pickup on the body `mechanism.pushrod.mount` names: along that wishbone from its ball joint toward the middle of its pivots, then off its plane (the upright uses the lower wishbone's numbers). The rocker pivot at a stated `y` and `z`, its axis along `x`. The pushrod inner end is where the pushrod meets a rocker arm of the stated length **square** -- the tangent from the pickup to the arm's circle, the upper one. The rocker's rate `dθ/dbump` is then taken from `CornerSolver` on the corner as generated so far, and the damper arm is `ratio / abs(rate)`: laid square to that arm, pointing the way bump closes it, the damper's length changes by exactly arm × rate. |
+| 14 | **Anti-roll bar** | The four points of #12. On a rocker mount, the drop link pickup on the rocker at a stated arm and angle from the pushrod's arm, the drop link square to it and hanging down; on any other mount, the pickup along that wishbone and the drop link straight up. The bar's arm runs forward from the root to the drop link, and the bearing is inboard of the root, so the bar's axis is across the car. |
 
 Steps 11 and 12 are the sharpest idea in the Python tool and the reason it is
 worth porting at all. Zero bump steer wants the tie rod's instantaneous axis to
@@ -380,6 +388,15 @@ stack behind them in one go.
     view the way this generator does, and the 2025 car's front reads 30 mm to
     1e-6. What settled it was a real workbook designed to 10 mm that the old
     construction read as 6.3; see `KINEMATICS_PLAN.md`'s progress log.
+
+- **2026-09-27** -- Issue #9: the generator now places the pushrod, the rocker,
+  the damper and the anti-roll bar (steps 13 and 14, and rule 7 rewritten).
+  `DesignRole` gained their ten roles, `GeneratedCorner::placed` says which
+  were, and `bindGeneratedCorner()` writes only those. The mounts come from
+  the template through `DesignMounts`. Names are bound against the current
+  table, so a workbook still using `{corner}_AntiRoll_*` has those points moved
+  rather than a second bar added beside them. `aGeneratedCarSweepsWithoutAWorkbook`
+  now also checks the installation ratio and the bar's twist on the swept car.
 
 - **2026-09-09** -- The **wheel's own axis** landed in the solver ahead of this
   plan (`mechanism.upright.wheelAxis`, `{corner}_WheelAxis`), so section 3 has

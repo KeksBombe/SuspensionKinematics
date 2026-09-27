@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace suspkin {
 namespace {
@@ -52,6 +53,177 @@ bool linePlane(const Vec3& origin, const Vec3& direction, const Vec3& onPlane, c
     return true;
 }
 
+/// How far along its axis the rocker's second axis point is put. Only the
+/// direction means anything to the solver.
+constexpr double kRockerAxisReach = 50.0;
+
+/// Wheel travel either side of design over which the rocker's rate is taken.
+/// Small enough to be the slope at design, large enough to be well above the
+/// solver's tolerance.
+constexpr double kRateStep = 0.5;
+
+/// The rocker's axis: along the car, which is where a pushrod running across
+/// the car wants it.
+const Vec3 kRockerAxis(1.0, 0.0, 0.0);
+
+/// @p direction, in the rocker's plane, turned about the rocker's axis by
+/// @p degrees -- positive turning inboard on side @p s. That is right-handed
+/// about +x on the left and left-handed on the right, which is what makes one
+/// number mean the same rocker on either side.
+Vec3 turnInboard(const Vec3& direction, double degrees, double s)
+{
+    return rotateAbout(direction, Axis{ Vec3(), kRockerAxis }, s * rad(degrees));
+}
+
+/// A pickup on a wishbone: @p inboard along it from its ball joint toward the
+/// middle of its chassis pivots, then @p height off its plane, upward.
+Vec3 pickupOnArm(const GeneratedCorner& corner, bool upper, double inboard, double height)
+{
+    const Vec3 outer = corner.at(upper ? DesignRole::UpperOuter : DesignRole::LowerOuter);
+    const Vec3 pivots = (corner.at(upper ? DesignRole::UpperFront : DesignRole::LowerFront)
+                         + corner.at(upper ? DesignRole::UpperRear : DesignRole::LowerRear))
+                        * 0.5;
+    Vec3 normal = (upper ? corner.upperNormal : corner.lowerNormal).normalized();
+    if (normal.z < 0.0) normal = normal * -1.0;
+    return outer + (pivots - outer).normalized() * inboard + normal * height;
+}
+
+/// How far the rocker turns per millimetre of bump at design, in radians: the
+/// solver's own answer, from the corner as it has been generated so far. Every
+/// role is named by its own number, so nothing here depends on a template.
+std::optional<double> rockerRate(const GeneratedCorner& corner, PushrodMount mount,
+                                 QString* error)
+{
+    MechanismTemplate names;
+    for (const DesignRole role : kDesignRoles)
+        names.*mechanismRole(role) = QString::number(static_cast<int>(role));
+    names.pushrodMount = mount;
+
+    const std::optional<CornerSolver> solver =
+        CornerSolver::bind(names, bindGeneratedCorner(corner, names), error);
+    if (!solver) return std::nullopt;
+    const CornerPose bump = solver->poseAtWheelTravel(kRateStep);
+    const CornerPose droop = solver->poseAtWheelTravel(-kRateStep);
+    if (!bump.valid || !droop.valid) {
+        *error = bump.valid ? droop.error : bump.error;
+        return std::nullopt;
+    }
+    return (bump.rockerAngle - droop.rockerAngle) / (2.0 * kRateStep);
+}
+
+/// Where the pushrod meets a rocker arm of @p arm about @p pivot square: the
+/// tangent from the pickup to the arm's circle, in the rocker's plane. Of the
+/// two, the upper. Empty when the pickup is inside that circle.
+std::optional<Vec3> squareArm(const Vec3& pivot, const Vec3& pickup, double arm)
+{
+    const Vec3 toPickup(0.0, pickup.y - pivot.y, pickup.z - pivot.z);
+    const double reach = toPickup.length();
+    if (!(arm > 0.0) || reach <= arm) return std::nullopt;
+    const double swing = std::acos(arm / reach);
+    const Axis axis{ Vec3(), kRockerAxis };
+    const Vec3 one = rotateAbout(toPickup / reach, axis, swing);
+    const Vec3 other = rotateAbout(toPickup / reach, axis, -swing);
+    return one.z >= other.z ? one : other;
+}
+
+/// Step 13: the pushrod, the rocker and the damper. The damper's arm is sized
+/// so that the installation ratio comes out at its target at design, and the
+/// damper is laid square to that arm on the side that bump closes it.
+void placeRocker(const AxleDesign& a, PushrodMount mount, GeneratedCorner* out)
+{
+    const double s = out->side;
+    const Vec3 pushrodOuter = pickupOnArm(*out, mount == PushrodMount::UpperArm,
+                                          a.pushrodPickupInboard, a.pushrodPickupHeight);
+    const Vec3 pivot(pushrodOuter.x + a.rockerPivotOffsetX, s * a.rockerPivotY, a.rockerPivotZ);
+    const std::optional<Vec3> pushrodArm = squareArm(pivot, pushrodOuter, a.rockerPushrodArm);
+    if (!pushrodArm) {
+        out->warnings << tr("The rocker was not generated: its pushrod arm has to be longer than "
+                            "nothing and shorter than the distance to the pushrod pickup.");
+        return;
+    }
+    if (!(a.installationRatio > 0.0) || !(a.damperLength > 0.0)) {
+        out->warnings << tr("The rocker was not generated: the installation ratio and the "
+                            "damper's length both have to be more than nothing.");
+        return;
+    }
+
+    out->place(DesignRole::PushrodOuter, pushrodOuter);
+    out->place(DesignRole::PushrodInner, pivot + *pushrodArm * a.rockerPushrodArm);
+    out->place(DesignRole::RockerPivot, pivot);
+    out->place(DesignRole::RockerAxis, pivot + kRockerAxis * kRockerAxisReach);
+
+    QString error;
+    const std::optional<double> rate = rockerRate(*out, mount, &error);
+    if (!rate || std::abs(*rate) < 1e-9) {
+        out->warnings << (rate ? tr("The rocker does not turn in bump, so the damper was not "
+                                    "generated.")
+                               : tr("The damper was not generated: %1").arg(error));
+        return;
+    }
+    out->rockerRate = *rate;
+
+    // The damper eye moves along axis x arm at the rocker's rate. Laid along
+    // that motion, pointing the way that closes it in bump, the damper's
+    // length changes by exactly the arm times the rate -- which is what the
+    // installation ratio is, so the arm is the ratio over the rate.
+    const Vec3 damperArm = turnInboard(*pushrodArm, a.rockerDamperAngle, s);
+    out->damperArm = a.installationRatio / std::abs(*rate);
+    const Vec3 eye = pivot + damperArm * out->damperArm;
+    const Vec3 along = cross(kRockerAxis, damperArm).normalized() * (*rate > 0.0 ? 1.0 : -1.0);
+    const Vec3 mountPoint = eye + along * a.damperLength;
+    out->place(DesignRole::DamperOutboard, eye);
+    out->place(DesignRole::DamperInboard, mountPoint);
+    if (s * mountPoint.y < 0.0)
+        out->warnings << tr("The damper's chassis mount is past the car's centreline.");
+}
+
+/// Step 14: the anti-roll bar, by the four points it is defined by. The drop
+/// link is square to what carries it, and the bar's arm runs forward from the
+/// bar, square to both the drop link and the bar's axis across the car.
+void placeAntiRollBar(const AxleDesign& a, const DesignMounts& mounts, GeneratedCorner* out)
+{
+    const double s = out->side;
+    if (!(a.dropLinkLength > 0.0) || a.antiRollArmLength == 0.0
+        || !(a.antiRollBearingInset > 0.0)) {
+        out->warnings << tr("The anti-roll bar was not generated: the drop link, the bar's arm and "
+                            "the bearing's inset all have to be more than nothing.");
+        return;
+    }
+
+    Vec3 pickup;
+    Vec3 link;
+    if (mounts.dropLink == DropLinkMount::Rocker) {
+        if (!out->has(DesignRole::RockerPivot)) {
+            out->warnings << tr("The anti-roll bar hangs off the rocker, which is not being "
+                                "generated, so the bar was not generated either.");
+            return;
+        }
+        const Vec3 pivot = out->at(DesignRole::RockerPivot);
+        const Vec3 pushrodArm = (out->at(DesignRole::PushrodInner) - pivot).normalized();
+        const Vec3 arm = turnInboard(pushrodArm, a.antiRollRockerAngle, s);
+        pickup = pivot + arm * a.antiRollRockerArm;
+        // Square to its rocker arm, hanging down from it.
+        link = cross(kRockerAxis, arm).normalized();
+        if (link.z > 0.0) link = link * -1.0;
+    } else {
+        pickup = pickupOnArm(*out, mounts.dropLink == DropLinkMount::UpperArm,
+                             a.antiRollPickupInboard, 0.0);
+        // Straight up from the wheel: square to the bar's arm, which is what
+        // lets the link turn it rather than push along it.
+        link = Vec3(0.0, 0.0, 1.0);
+    }
+
+    const Vec3 armEnd = pickup + link * a.dropLinkLength;
+    const Vec3 armRoot = armEnd - Vec3(a.antiRollArmLength, 0.0, 0.0);
+    const Vec3 bearing = armRoot - Vec3(0.0, s * a.antiRollBearingInset, 0.0);
+    out->place(DesignRole::AntiRollDropLinkOuter, pickup);
+    out->place(DesignRole::AntiRollArmEnd, armEnd);
+    out->place(DesignRole::AntiRollArmRoot, armRoot);
+    out->place(DesignRole::AntiRollBearing, bearing);
+    if (s * bearing.y < 0.0)
+        out->warnings << tr("The anti-roll bar's bearing is past the car's centreline.");
+}
+
 } // namespace
 
 QString designRoleLabel(DesignRole role)
@@ -68,30 +240,55 @@ QString designRoleLabel(DesignRole role)
     case DesignRole::WheelCenter: return tr("wheel centre");
     case DesignRole::WheelAxis: return tr("point on the wheel axis");
     case DesignRole::ContactPatch: return tr("contact patch");
+    case DesignRole::PushrodOuter: return tr("pushrod pickup");
+    case DesignRole::PushrodInner: return tr("pushrod end on the rocker");
+    case DesignRole::RockerPivot: return tr("rocker pivot");
+    case DesignRole::RockerAxis: return tr("point on the rocker axis");
+    case DesignRole::DamperOutboard: return tr("damper end on the rocker");
+    case DesignRole::DamperInboard: return tr("damper chassis mount");
+    case DesignRole::AntiRollDropLinkOuter: return tr("drop link pickup");
+    case DesignRole::AntiRollArmEnd: return tr("anti-roll bar arm end");
+    case DesignRole::AntiRollArmRoot: return tr("anti-roll bar arm root");
+    case DesignRole::AntiRollBearing: return tr("anti-roll bar bearing");
     }
     return QString();
+}
+
+QString MechanismTemplate::*mechanismRole(DesignRole role)
+{
+    switch (role) {
+    case DesignRole::LowerFront: return &MechanismTemplate::lowerFront;
+    case DesignRole::LowerRear: return &MechanismTemplate::lowerRear;
+    case DesignRole::LowerOuter: return &MechanismTemplate::lowerOuter;
+    case DesignRole::UpperFront: return &MechanismTemplate::upperFront;
+    case DesignRole::UpperRear: return &MechanismTemplate::upperRear;
+    case DesignRole::UpperOuter: return &MechanismTemplate::upperOuter;
+    case DesignRole::TieRodInboard: return &MechanismTemplate::tieRodInboard;
+    case DesignRole::TieRodOutboard: return &MechanismTemplate::tieRodOutboard;
+    case DesignRole::WheelCenter: return &MechanismTemplate::wheelCenter;
+    case DesignRole::WheelAxis: return &MechanismTemplate::wheelAxis;
+    case DesignRole::ContactPatch: return &MechanismTemplate::contactPatch;
+    case DesignRole::PushrodOuter: return &MechanismTemplate::pushrodOuter;
+    case DesignRole::PushrodInner: return &MechanismTemplate::pushrodInner;
+    case DesignRole::RockerPivot: return &MechanismTemplate::rockerPivot;
+    case DesignRole::RockerAxis: return &MechanismTemplate::rockerAxis;
+    case DesignRole::DamperOutboard: return &MechanismTemplate::damperOutboard;
+    case DesignRole::DamperInboard: return &MechanismTemplate::damperInboard;
+    case DesignRole::AntiRollDropLinkOuter: return &MechanismTemplate::antiRollDropLinkOuter;
+    case DesignRole::AntiRollArmEnd: return &MechanismTemplate::antiRollArmEnd;
+    case DesignRole::AntiRollArmRoot: return &MechanismTemplate::antiRollArmRoot;
+    case DesignRole::AntiRollBearing: return &MechanismTemplate::antiRollBearing;
+    }
+    return &MechanismTemplate::lowerFront;
 }
 
 QString mechanismName(const MechanismTemplate& mechanism, DesignRole role)
 {
-    switch (role) {
-    case DesignRole::LowerFront: return mechanism.lowerFront;
-    case DesignRole::LowerRear: return mechanism.lowerRear;
-    case DesignRole::LowerOuter: return mechanism.lowerOuter;
-    case DesignRole::UpperFront: return mechanism.upperFront;
-    case DesignRole::UpperRear: return mechanism.upperRear;
-    case DesignRole::UpperOuter: return mechanism.upperOuter;
-    case DesignRole::TieRodInboard: return mechanism.tieRodInboard;
-    case DesignRole::TieRodOutboard: return mechanism.tieRodOutboard;
-    case DesignRole::WheelCenter: return mechanism.wheelCenter;
-    case DesignRole::WheelAxis: return mechanism.wheelAxis;
-    case DesignRole::ContactPatch: return mechanism.contactPatch;
-    }
-    return QString();
+    return mechanism.*mechanismRole(role);
 }
 
 GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
-                               const MeshQuery* chassis)
+                               const MeshQuery* chassis, const DesignMounts& mounts)
 {
     GeneratedCorner out;
     out.axle = axle;
@@ -158,9 +355,9 @@ GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
     wc.y += shift;
     cp.y += shift;
     out.tyreRadius = radius;
-    out.at(DesignRole::WheelCenter) = wc;
-    out.at(DesignRole::ContactPatch) = cp;
-    out.at(DesignRole::WheelAxis) = wc + n * kWheelAxisReach;
+    out.place(DesignRole::WheelCenter, wc);
+    out.place(DesignRole::ContactPatch, cp);
+    out.place(DesignRole::WheelAxis, wc + n * kWheelAxisReach);
 
     // 4. The steering axis: through the ground at the patch moved forward by
     //    the trail and inboard by the scrub, leaning top-rearward by the caster
@@ -177,8 +374,8 @@ GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
     // 5. The ball joints, on that axis, at the heights the rim leaves room for.
     const Vec3 upperOuter = onAxis(wc.z + a.upperJointHeight);
     const Vec3 lowerOuter = onAxis(wc.z - a.lowerJointDrop);
-    out.at(DesignRole::UpperOuter) = upperOuter;
-    out.at(DesignRole::LowerOuter) = lowerOuter;
+    out.place(DesignRole::UpperOuter, upperOuter);
+    out.place(DesignRole::LowerOuter, lowerOuter);
     if (lowerOuter.z <= 0.0)
         out.warnings << tr("The lower ball joint is at or below the ground.");
     for (const auto& [joint, label] : { std::pair{ upperOuter, tr("upper") },
@@ -308,8 +505,8 @@ GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
     for (const Leg& leg : legs) {
         const bool upper = leg.role == DesignRole::UpperFront || leg.role == DesignRole::UpperRear;
         QString error;
-        out.at(leg.role) =
-            pivotOn(leg.outer, leg.direction, upper ? a.upperPivotY : a.lowerPivotY, leg.role, &error);
+        out.place(leg.role, pivotOn(leg.outer, leg.direction, upper ? a.upperPivotY : a.lowerPivotY,
+                                    leg.role, &error));
         if (!error.isEmpty()) return fail(error);
     }
 
@@ -330,7 +527,7 @@ GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
     Vec3 tieOuter = onAxis(wc.z - drop);
     tieOuter.x = wc.x - a.steeringArm;
     tieOuter.y -= s * a.ackermann;
-    out.at(DesignRole::TieRodOutboard) = tieOuter;
+    out.place(DesignRole::TieRodOutboard, tieOuter);
 
     // 11. The inner tie rod end: three of the four chassis pivots make a plane,
     //     and it goes where the line from the outer end toward the front-view
@@ -348,7 +545,7 @@ GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
     if (!linePlane(tieOuter, out.rollCentre - tieOuter, plane[0], planeNormal, &tieInner))
         return fail(tr("The tie rod's line runs parallel to the pivots' plane and never meets it."));
     tieInner.x = tieOuter.x + a.tieRodInboardOffsetX;
-    out.at(DesignRole::TieRodInboard) = tieInner;
+    out.place(DesignRole::TieRodInboard, tieInner);
     if (s * (tieInner.y - tieOuter.y) >= 0.0)
         out.warnings << tr("The inner tie rod end came out outboard of the outer one.");
 
@@ -367,6 +564,13 @@ GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
     }
 
     out.ok = true;
+
+    // 13. The pushrod, the rocker and the damper, and 14. the anti-roll bar.
+    //     Packaging more than geometry, so a group that cannot be placed is
+    //     said and left out rather than failing a corner that is otherwise
+    //     whole.
+    if (a.generateRocker) placeRocker(a, mounts.pushrod, &out);
+    if (a.generateAntiRollBar) placeAntiRollBar(a, mounts, &out);
     return out;
 }
 
@@ -375,6 +579,7 @@ HardpointTable bindGeneratedCorner(const GeneratedCorner& corner, const Mechanis
     HardpointTable table;
     if (!corner.ok) return table;
     for (const DesignRole role : kDesignRoles) {
+        if (!corner.has(role)) continue; // a group that was not generated
         const QString name = mechanismName(mechanism, role);
         if (name.isEmpty()) continue; // the template has no name for it
         // Two roles under one name would be one point in two places.
@@ -445,7 +650,8 @@ DesignPlan planDesign(const DesignParameters& parameters, const LinkageTemplate&
             return plan;
         }
 
-        GeneratedCorner generated = generateCorner(parameters, position, chassis);
+        const DesignMounts mounts{ templ.mechanism.pushrodMount, templ.mechanism.antiRollMount };
+        GeneratedCorner generated = generateCorner(parameters, position, chassis, mounts);
         if (!generated.ok) {
             plan.error = QStringLiteral("%1: %2").arg(label, generated.error);
             return plan;
@@ -453,8 +659,10 @@ DesignPlan planDesign(const DesignParameters& parameters, const LinkageTemplate&
         for (const QString& warning : generated.warnings)
             plan.warnings << QStringLiteral("%1: %2").arg(label, warning);
 
+        // Named against the table, so a point it still holds under a former
+        // name is moved under that name rather than joined by a second one.
         const MechanismTemplate names =
-            instantiateMechanism(templ.mechanism, axle.corner, false, mirror);
+            instantiateMechanism(templ.mechanism, axle.corner, false, mirror, current);
         const HardpointTable points = bindGeneratedCorner(generated, names);
 
         // Into the table: over a point of the same name, or on the end.

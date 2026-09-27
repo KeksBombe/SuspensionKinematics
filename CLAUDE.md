@@ -388,7 +388,16 @@ the manifest under `design`) in, roles out. Pure and in the core.
   stated angles would outrank the wheel axis just placed, and the scrub, trail
   and roll centre built off the generator's camber would come out wrong. An axle
   with none keeps reading its angles off the new points.
-- The rocker group is not generated: packaging, placed by hand.
+- **The rocker group and the bar are generated from placement inputs**, per
+  axle and each behind its own switch (`generateRocker`, `generateAntiRollBar`),
+  so a hand-placed rocker is left alone. The one target among them is the
+  installation ratio: the rocker's rate comes from `CornerSolver` on the corner
+  generated so far, and the damper arm is the ratio over it, with the damper
+  square to its arm. A role that was not placed is not in
+  `GeneratedCorner::placed` and `bindGeneratedCorner()` does not write it.
+  `planDesign()` names points through the table-aware `instantiateMechanism()`,
+  so a workbook still on the bar's former names gets those points moved, not a
+  second bar.
 - `src/geom/MeshQuery.*` (a BVH, ray casting and unsigned distance) is what puts
   inboard pivots on the imported chassis. A ball joint already inside the
   geometry -- an upright in the model -- is detected and those pivots go on their
