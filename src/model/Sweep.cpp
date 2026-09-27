@@ -172,7 +172,10 @@ AxleSolver AxleSolver::build(const MechanismTemplate& mechanism, const CornerSpe
     std::optional<CornerSolver> sides[2];
     for (int side = 0; side < 2; ++side) {
         const bool mirrored = (side == 1);
-        const MechanismTemplate named = instantiateMechanism(roles, corner.token, mirrored, mirror);
+        // Read against the table, so a point it still holds under a former name
+        // is found under that one.
+        const MechanismTemplate named =
+            instantiateMechanism(roles, corner.token, mirrored, mirror, table);
         if (named.isEmpty()) continue;
 
         // A corner or a side with not one of its points in the table is not a
@@ -209,12 +212,13 @@ AxleSolver AxleSolver::build(const MechanismTemplate& mechanism, const CornerSpe
 
     // A U-bar's axis runs from one arm root to the other, and only an axle knows
     // both. Without the far side it stays the y direction, which is what a
-    // transverse bar is anyway.
+    // transverse bar is anyway. A side whose table names the bar's bearing has
+    // its own axis already, and keeps it.
     if (axle.m_left && axle.m_right) {
         const MechanismTemplate& leftNames = axle.m_left->mechanism();
         const MechanismTemplate& rightNames = axle.m_right->mechanism();
-        const Hardpoint* leftPivot = table.find(leftNames.antiRollArmPivot);
-        const Hardpoint* rightPivot = table.find(rightNames.antiRollArmPivot);
+        const Hardpoint* leftPivot = table.find(leftNames.antiRollArmRoot);
+        const Hardpoint* rightPivot = table.find(rightNames.antiRollArmRoot);
         if (leftPivot && rightPivot) {
             const Vec3 leftPoint(leftPivot->coord[0], leftPivot->coord[1], leftPivot->coord[2]);
             const Vec3 rightPoint(rightPivot->coord[0], rightPivot->coord[1], rightPivot->coord[2]);

@@ -14,6 +14,8 @@
         "{corner}_WheelAxis is a second point on the wheel's own axis of rotation, anywhere along it, inboard or outboard of the wheel centre -- the end of the stub axle is the usual one to measure. It is what says which way the wheel points: static toe, which no other hardpoint can state, and static camber with it. The wheel model is turned by the upright it is bolted to, so with this named the wheels steer and lean instead of sliding about flat.",
         "{corner}_ContactPatch is optional now. With a wheel axis named the patch is computed -- straight down the wheel's own plane from the centre onto the ground at z = 0, which is where a leaning wheel really touches -- and a patch in the workbook is then only a measurement of the tyre radius to compute it at. Leave it out and nothing is lost.",
         "'steering' on a corner names the hardpoint this axle's steering rack drives -- the inboard tie rod end. A corner that does not name one is not steered: the Steer sweep is not offered for it, and rack travel leaves its toe link where the workbook put it. A rear-steer car names one on the rear corner too. Parts > Steering... edits this without opening the file. NOTE: if NO corner names one, every axle is taken to be steered, which is what templates written before this existed have always done.",
+        "THE ANTI-ROLL BAR is four points per corner. {corner}_ARB_DropLink_O is the drop link's upper end, on the body 'mechanism.antiRollBar.mount' names: 'rocker' (the default), 'upperArm', 'lowerArm' or 'upright'. {corner}_ARB_ArmEnd is the drop link's lower end, on the bar's arm. {corner}_ARB_ArmRoot is where that arm meets the bar -- a point ON the bar's axis of rotation. {corner}_ARB_Bearing is optional: a second point on that axis, fixed to the chassis, usually the centre of the bar's bearing. With it the axis is the line through ArmRoot and Bearing on each side, so a bar with bends inboard of its bearings is modelled as it is; without it the axis is the straight line from the left ArmRoot to the right one.",
+        "'mechanism.formerNames' maps a point's name to what it used to be called. A table that has only the old name is read through it, so a workbook measured with {corner}_AntiRoll_O, _AntiRoll_I and _AntiRoll_Center keeps working until it is renamed. Rename in CAD at your own pace: each point is looked up on its own.",
         "The mechanism has one degree of freedom: the lower wishbone's rotation about its own pivot axis. Everything else follows -- the upper wishbone from the upright being rigid, the tie rod end from being rigid with both ball joints, the wheel from the three of them together, and the rocker from the pushrod's length. Leave out 'rocker', 'damper' or 'antiRollBar' and what remains is still solved; leave out a wishbone and there is nothing to solve."
     ],
     "corners": [
@@ -59,9 +61,16 @@
             "outboard": "{corner}_Damper_O"
         },
         "antiRollBar": {
-            "rocker": "{corner}_AntiRoll_O",
-            "armOuter": "{corner}_AntiRoll_I",
-            "armPivot": "{corner}_AntiRoll_Center"
+            "mount": "rocker",
+            "dropLinkOuter": "{corner}_ARB_DropLink_O",
+            "armEnd": "{corner}_ARB_ArmEnd",
+            "armRoot": "{corner}_ARB_ArmRoot",
+            "bearing": "{corner}_ARB_Bearing"
+        },
+        "formerNames": {
+            "{corner}_ARB_DropLink_O": "{corner}_AntiRoll_O",
+            "{corner}_ARB_ArmEnd": "{corner}_AntiRoll_I",
+            "{corner}_ARB_ArmRoot": "{corner}_AntiRoll_Center"
         }
     },
     "parts": [
@@ -114,9 +123,9 @@
             "chains": [
                 { "points": ["{corner}_Rocker_Center", "{corner}_Rocker_AxisPoint"], "optional": true },
                 { "points": ["{corner}_PushRod_I", "{corner}_Rocker_Center", "{corner}_Damper_O"] },
-                { "points": ["{corner}_AntiRoll_O", "{corner}_Rocker_Center"], "optional": true },
+                { "points": ["{corner}_ARB_DropLink_O", "{corner}_Rocker_Center"], "optional": true },
                 {
-                    "points": ["{corner}_PushRod_I", "{corner}_Damper_O", "{corner}_AntiRoll_O"],
+                    "points": ["{corner}_PushRod_I", "{corner}_Damper_O", "{corner}_ARB_DropLink_O"],
                     "closed": true,
                     "optional": true
                 }
@@ -133,14 +142,14 @@
             "label": "{corner} {side} anti-roll bar arm",
             "kind": "antiroll",
             "optional": true,
-            "points": ["{corner}_AntiRoll_Center", "{corner}_AntiRoll_I"]
+            "points": ["{corner}_ARB_Bearing", "{corner}_ARB_ArmRoot", "{corner}_ARB_ArmEnd"]
         },
         {
             "id": "antiRollDropLink",
             "label": "{corner} {side} anti-roll drop link",
             "kind": "link",
             "optional": true,
-            "points": ["{corner}_AntiRoll_I", "{corner}_AntiRoll_O"]
+            "points": ["{corner}_ARB_ArmEnd", "{corner}_ARB_DropLink_O"]
         },
         {
             "id": "wheel",
