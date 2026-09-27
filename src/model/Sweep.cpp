@@ -332,6 +332,35 @@ const AxleSample* SweepResult::nearest(double input) const
 
 namespace {
 
+/// Whether every corner that assembled at @p design assembled in @p sample too.
+bool assembledLike(const AxleSample& sample, const AxleSample& design)
+{
+    return (!design.left.valid || sample.left.valid) && (!design.right.valid || sample.right.valid);
+}
+
+} // namespace
+
+std::optional<SweepInterval> assembledInterval(const SweepResult& result)
+{
+    const AxleSample* design = result.nearest(0.0);
+    if (!design || !(design->left.valid || design->right.valid)) return std::nullopt;
+
+    std::vector<const AxleSample*> byInput;
+    byInput.reserve(result.samples.size());
+    for (const AxleSample& sample : result.samples) byInput.push_back(&sample);
+    std::sort(byInput.begin(), byInput.end(),
+              [](const AxleSample* a, const AxleSample* b) { return a->input < b->input; });
+
+    const auto at = std::find(byInput.begin(), byInput.end(), design);
+    auto first = at;
+    while (first != byInput.begin() && assembledLike(**(first - 1), *design)) --first;
+    auto last = at;
+    while (last + 1 != byInput.end() && assembledLike(**(last + 1), *design)) ++last;
+    return SweepInterval{ (*first)->input, (*last)->input };
+}
+
+namespace {
+
 /// One corner posed for one point of one kind of sweep.
 CornerPose poseFor(const CornerSolver& solver, SweepKind kind, double input, double rackTravel,
                    const CornerPose* previous)
