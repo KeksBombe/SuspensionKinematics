@@ -113,9 +113,9 @@ MechanismTemplate cornerMechanism()
     mechanism.rockerAxis = QStringLiteral("{corner}_Rocker_AxisPoint");
     mechanism.damperInboard = QStringLiteral("{corner}_Damper_I");
     mechanism.damperOutboard = QStringLiteral("{corner}_Damper_O");
-    mechanism.antiRollRocker = QStringLiteral("{corner}_AntiRoll_O");
-    mechanism.antiRollArmOuter = QStringLiteral("{corner}_AntiRoll_I");
-    mechanism.antiRollArmPivot = QStringLiteral("{corner}_AntiRoll_Center");
+    mechanism.antiRollDropLinkOuter = QStringLiteral("{corner}_AntiRoll_O");
+    mechanism.antiRollArmEnd = QStringLiteral("{corner}_AntiRoll_I");
+    mechanism.antiRollArmRoot = QStringLiteral("{corner}_AntiRoll_Center");
     return mechanism;
 }
 
@@ -432,7 +432,7 @@ void TestKinematics::instantiationFillsInTheCornerAndTheMirror()
     const MechanismTemplate mirrored =
         instantiateMechanism(cornerMechanism(), QStringLiteral("R"), true, MirrorSpec{});
     QCOMPARE(mirrored.lowerOuter, QStringLiteral("R_LCA_O_M"));
-    QCOMPARE(mirrored.antiRollArmPivot, QStringLiteral("R_AntiRoll_Center_M"));
+    QCOMPARE(mirrored.antiRollArmRoot, QStringLiteral("R_AntiRoll_Center_M"));
 }
 
 void TestKinematics::aTableMissingACornerIsAbsentRatherThanBroken()

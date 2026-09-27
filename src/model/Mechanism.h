@@ -86,13 +86,13 @@ struct MechanismTemplate {
     QString damperInboard;
     QString damperOutboard;
 
-    /// The anti-roll bar, all three optional. @ref antiRollRocker is the point
-    /// on the rocker the drop link hangs off, @ref antiRollArmOuter is the drop
-    /// link's other end on the bar's arm, and @ref antiRollArmPivot is where
+    /// The anti-roll bar, all three optional. @ref antiRollDropLinkOuter is the
+    /// point on the rocker the drop link hangs off, @ref antiRollArmEnd is the
+    /// drop link's other end on the bar's arm, and @ref antiRollArmRoot is where
     /// that arm meets the bar itself.
-    QString antiRollRocker;
-    QString antiRollArmOuter;
-    QString antiRollArmPivot;
+    QString antiRollDropLinkOuter;
+    QString antiRollArmEnd;
+    QString antiRollArmRoot;
 
     /// Nothing to solve without a lower wishbone and an upright to hang off it.
     bool isEmpty() const;

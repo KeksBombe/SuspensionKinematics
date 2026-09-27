@@ -350,7 +350,7 @@ HardpointConfigMap inferHardpointConfig(const HardpointTable& table, const Linka
             grounded(mechanism.rockerPivot);
             grounded(mechanism.rockerAxis);
             grounded(mechanism.damperInboard);
-            grounded(mechanism.antiRollArmPivot);
+            grounded(mechanism.antiRollArmRoot);
 
             // Each of these is paired with the far end of its own member, which
             // is what says which of the two bodies at the joint is which.
@@ -359,8 +359,8 @@ HardpointConfigMap inferHardpointConfig(const HardpointTable& table, const Linka
             solved(mechanism.tieRodOutboard, mechanism.tieRodInboard);
             solved(mechanism.pushrodInner, mechanism.pushrodOuter);
             solved(mechanism.damperOutboard, mechanism.damperInboard);
-            solved(mechanism.antiRollRocker, mechanism.antiRollArmOuter);
-            solved(mechanism.antiRollArmOuter, mechanism.antiRollRocker);
+            solved(mechanism.antiRollDropLinkOuter, mechanism.antiRollArmEnd);
+            solved(mechanism.antiRollArmEnd, mechanism.antiRollDropLinkOuter);
 
             // The pushrod's outer end is the one place where what the template
             // draws and what the mechanism means come apart: a "pickup" member

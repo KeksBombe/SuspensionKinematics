@@ -147,12 +147,12 @@ std::optional<CornerSolver> CornerSolver::bind(const MechanismTemplate& mechanis
         solver.m_damperOutboard = at(mechanism.damperOutboard);
     }
 
-    solver.m_hasAntiRoll = solver.m_hasRocker && has(mechanism.antiRollRocker)
-                           && has(mechanism.antiRollArmOuter) && has(mechanism.antiRollArmPivot);
+    solver.m_hasAntiRoll = solver.m_hasRocker && has(mechanism.antiRollDropLinkOuter)
+                           && has(mechanism.antiRollArmEnd) && has(mechanism.antiRollArmRoot);
     if (solver.m_hasAntiRoll) {
-        solver.m_antiRollRocker = at(mechanism.antiRollRocker);
-        solver.m_antiRollArmOuter = at(mechanism.antiRollArmOuter);
-        solver.m_antiRollArmPivot = at(mechanism.antiRollArmPivot);
+        solver.m_antiRollDropLinkOuter = at(mechanism.antiRollDropLinkOuter);
+        solver.m_antiRollArmEnd = at(mechanism.antiRollArmEnd);
+        solver.m_antiRollArmRoot = at(mechanism.antiRollArmRoot);
     }
 
     for (const QString& name : mechanism.carried)
@@ -195,10 +195,11 @@ std::optional<CornerSolver> CornerSolver::bind(const MechanismTemplate& mechanis
     if (solver.m_hasAntiRoll) {
         // A U-bar runs across the car, so without the far side's arm root to
         // give the real axis, y is the right guess and not much of one.
-        solver.m_antiRollAxis = axisThrough(solver.m_antiRollArmPivot,
-                                            solver.m_antiRollArmPivot + Vec3(0, 1, 0));
-        solver.m_antiRollCircle = circleAbout(solver.m_antiRollArmOuter, solver.m_antiRollAxis);
-        solver.m_dropLinkLength = distance(solver.m_antiRollRocker, solver.m_antiRollArmOuter);
+        solver.m_antiRollAxis = axisThrough(solver.m_antiRollArmRoot,
+                                            solver.m_antiRollArmRoot + Vec3(0, 1, 0));
+        solver.m_antiRollCircle = circleAbout(solver.m_antiRollArmEnd, solver.m_antiRollAxis);
+        solver.m_dropLinkLength =
+            distance(solver.m_antiRollDropLinkOuter, solver.m_antiRollArmEnd);
         if (!solver.m_antiRollCircle.isValid()) solver.m_hasAntiRoll = false;
     }
 
@@ -286,9 +287,9 @@ std::optional<CornerSolver> CornerSolver::bind(const MechanismTemplate& mechanis
 void CornerSolver::setAntiRollAxis(const Vec3& direction)
 {
     if (!m_hasAntiRoll) return;
-    const Axis axis = axisThrough(m_antiRollArmPivot, m_antiRollArmPivot + direction);
+    const Axis axis = axisThrough(m_antiRollArmRoot, m_antiRollArmRoot + direction);
     if (!axis.isValid()) return;
-    const Circle circle = circleAbout(m_antiRollArmOuter, axis);
+    const Circle circle = circleAbout(m_antiRollArmEnd, axis);
     if (!circle.isValid()) return;
     m_antiRollAxis = axis;
     m_antiRollCircle = circle;
@@ -394,17 +395,18 @@ bool CornerSolver::solveAt(double angle, double rackTravel, const CornerPose* pr
             pose.damperOutboard = rotateAbout(m_damperOutboard, m_rockerAxis, pose.rockerAngle);
 
         if (m_hasAntiRoll) {
-            pose.antiRollRocker = rotateAbout(m_antiRollRocker, m_rockerAxis, pose.rockerAngle);
-            count = intersectCircleSphere(m_antiRollCircle, pose.antiRollRocker, m_dropLinkLength,
-                                          candidates);
+            pose.antiRollDropLinkOuter =
+                rotateAbout(m_antiRollDropLinkOuter, m_rockerAxis, pose.rockerAngle);
+            count = intersectCircleSphere(m_antiRollCircle, pose.antiRollDropLinkOuter,
+                                          m_dropLinkLength, candidates);
             if (count == 0) {
                 pose.error = tr("The anti-roll drop link cannot reach the bar here.");
                 *out = pose;
                 return false;
             }
-            pose.antiRollArmOuter = nearestTo(
-                previous ? previous->antiRollArmOuter : m_antiRollArmOuter, candidates, count, &ok);
-            pose.antiRollArmAngle = m_antiRollCircle.angleOf(pose.antiRollArmOuter);
+            pose.antiRollArmEnd = nearestTo(
+                previous ? previous->antiRollArmEnd : m_antiRollArmEnd, candidates, count, &ok);
+            pose.antiRollArmAngle = m_antiRollCircle.angleOf(pose.antiRollArmEnd);
         }
     }
 
@@ -425,8 +427,8 @@ bool CornerSolver::solveAt(double angle, double rackTravel, const CornerPose* pr
     }
     if (m_hasDamper) add(m_mechanism.damperOutboard, pose.damperOutboard);
     if (m_hasAntiRoll) {
-        add(m_mechanism.antiRollRocker, pose.antiRollRocker);
-        add(m_mechanism.antiRollArmOuter, pose.antiRollArmOuter);
+        add(m_mechanism.antiRollDropLinkOuter, pose.antiRollDropLinkOuter);
+        add(m_mechanism.antiRollArmEnd, pose.antiRollArmEnd);
     }
 
     pose.hasDamper = m_hasDamper;

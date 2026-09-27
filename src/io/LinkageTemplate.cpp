@@ -112,9 +112,9 @@ MechanismTemplate mechanismFromJson(const QJsonObject& root)
     mechanism.rockerAxis = roleName(object, "rocker", "axis");
     mechanism.damperInboard = roleName(object, "damper", "inboard");
     mechanism.damperOutboard = roleName(object, "damper", "outboard");
-    mechanism.antiRollRocker = roleName(object, "antiRollBar", "rocker");
-    mechanism.antiRollArmOuter = roleName(object, "antiRollBar", "armOuter");
-    mechanism.antiRollArmPivot = roleName(object, "antiRollBar", "armPivot");
+    mechanism.antiRollDropLinkOuter = roleName(object, "antiRollBar", "rocker");
+    mechanism.antiRollArmEnd = roleName(object, "antiRollBar", "armOuter");
+    mechanism.antiRollArmRoot = roleName(object, "antiRollBar", "armPivot");
     return mechanism;
 }
 
@@ -174,9 +174,9 @@ QJsonObject mechanismToJson(const MechanismTemplate& mechanism)
                 { { "inboard", &mechanism.damperInboard },
                   { "outboard", &mechanism.damperOutboard } });
     insertGroup(object, "antiRollBar",
-                { { "rocker", &mechanism.antiRollRocker },
-                  { "armOuter", &mechanism.antiRollArmOuter },
-                  { "armPivot", &mechanism.antiRollArmPivot } });
+                { { "rocker", &mechanism.antiRollDropLinkOuter },
+                  { "armOuter", &mechanism.antiRollArmEnd },
+                  { "armPivot", &mechanism.antiRollArmRoot } });
     return object;
 }
 

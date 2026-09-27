@@ -679,7 +679,7 @@ void TestLinkage::theMechanismSurvivesAWriteAndAReadBack()
     QCOMPARE(after.allNames(), before.allNames());
     QCOMPARE(after.pushrodMount, before.pushrodMount);
     QCOMPARE(after.lowerRear, before.lowerRear);
-    QCOMPARE(after.antiRollArmPivot, before.antiRollArmPivot);
+    QCOMPARE(after.antiRollArmRoot, before.antiRollArmRoot);
     QCOMPARE(after.wheelAxis, before.wheelAxis);
     QCOMPARE(after.contactPatch, before.contactPatch);
 }

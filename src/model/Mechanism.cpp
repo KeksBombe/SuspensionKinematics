@@ -65,8 +65,8 @@ bool MechanismTemplate::hasRocker() const
 
 bool MechanismTemplate::hasAntiRoll() const
 {
-    return hasRocker() && !antiRollRocker.isEmpty() && !antiRollArmOuter.isEmpty()
-           && !antiRollArmPivot.isEmpty();
+    return hasRocker() && !antiRollDropLinkOuter.isEmpty() && !antiRollArmEnd.isEmpty()
+           && !antiRollArmRoot.isEmpty();
 }
 
 QStringList MechanismTemplate::allNames() const
@@ -76,7 +76,7 @@ QStringList MechanismTemplate::allNames() const
                                  &upperOuter, &tieRodInboard, &tieRodOutboard, &wheelCenter,
                                  &wheelAxis, &contactPatch, &pushrodOuter, &pushrodInner,
                                  &rockerPivot, &rockerAxis, &damperInboard, &damperOutboard,
-                                 &antiRollRocker, &antiRollArmOuter, &antiRollArmPivot })
+                                 &antiRollDropLinkOuter, &antiRollArmEnd, &antiRollArmRoot })
         appendIfNamed(names, *name);
     names += carried;
     return names;
@@ -114,9 +114,9 @@ MechanismTemplate instantiateMechanism(const MechanismTemplate& templ, const QSt
     out.rockerAxis = fill(templ.rockerAxis);
     out.damperInboard = fill(templ.damperInboard);
     out.damperOutboard = fill(templ.damperOutboard);
-    out.antiRollRocker = fill(templ.antiRollRocker);
-    out.antiRollArmOuter = fill(templ.antiRollArmOuter);
-    out.antiRollArmPivot = fill(templ.antiRollArmPivot);
+    out.antiRollDropLinkOuter = fill(templ.antiRollDropLinkOuter);
+    out.antiRollArmEnd = fill(templ.antiRollArmEnd);
+    out.antiRollArmRoot = fill(templ.antiRollArmRoot);
     for (const QString& name : templ.carried) appendIfNamed(out.carried, fill(name));
 
     return out;
@@ -148,8 +148,8 @@ MechanismCoverage coverMechanism(const MechanismTemplate& mechanism, const Hardp
     for (const QString* name :
          { &mechanism.wheelAxis, &mechanism.contactPatch, &mechanism.pushrodOuter,
            &mechanism.pushrodInner, &mechanism.rockerPivot, &mechanism.rockerAxis,
-           &mechanism.damperInboard, &mechanism.damperOutboard, &mechanism.antiRollRocker,
-           &mechanism.antiRollArmOuter, &mechanism.antiRollArmPivot })
+           &mechanism.damperInboard, &mechanism.damperOutboard, &mechanism.antiRollDropLinkOuter,
+           &mechanism.antiRollArmEnd, &mechanism.antiRollArmRoot })
         check(*name, coverage.missingOptional);
 
     for (const QString& name : mechanism.carried) check(name, coverage.missingOptional);

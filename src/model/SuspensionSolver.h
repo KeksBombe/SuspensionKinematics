@@ -108,8 +108,8 @@ struct CornerPose {
     Vec3 pushrodOuter;
     Vec3 pushrodInner;
     Vec3 damperOutboard;
-    Vec3 antiRollRocker;
-    Vec3 antiRollArmOuter;
+    Vec3 antiRollDropLinkOuter;
+    Vec3 antiRollArmEnd;
 
     /// The wheel's spin axis, pointing outboard. Camber and toe are this vector
     /// in two different views.
@@ -272,7 +272,7 @@ private:
     Vec3 m_pushrodOuter, m_pushrodInner;
     Vec3 m_rockerPivot, m_rockerAxisPoint;
     Vec3 m_damperInboard, m_damperOutboard;
-    Vec3 m_antiRollRocker, m_antiRollArmOuter, m_antiRollArmPivot;
+    Vec3 m_antiRollDropLinkOuter, m_antiRollArmEnd, m_antiRollArmRoot;
     std::vector<PosedPoint> m_carried; ///< design positions of the carried points
 
     Axis m_lowerAxis, m_upperAxis, m_rockerAxis, m_antiRollAxis;
