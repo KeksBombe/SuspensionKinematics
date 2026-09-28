@@ -49,8 +49,10 @@ public:
     /// Delete the copies of the models and forget the wheels.
     void remove();
 
-    /// Place the models on @p table as @p pose stands it.
-    void place(const HardpointTable& table, const SimulationPose& pose);
+    /// Place the models on @p table as @p pose stands it, each first turned
+    /// to the static camber and toe @p designAttitudes gives its wheel centre.
+    void place(const HardpointTable& table, const WheelRotations& designAttitudes,
+               const SimulationPose& pose);
     const std::vector<WheelPlacement>& placements() const { return m_placements; }
 
     /// Point every wheel centred on a renamed point at its new name. @p renamed

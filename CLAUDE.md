@@ -551,9 +551,16 @@ placement is pure and testable: `src/model/Wheels.*`.
   carries a rotation as well as a centre: `SimulationPose::wheelRotations()`
   reads `CornerPose::uprightMotion` out of the current poses, keyed by
   `CornerPose::wheelCenterName`, and `orientWheels()` puts it on the placements.
-  Identity when nothing is being simulated, which is the model as its CAD file
-  drew it. Without this the models slide about the car on steering lock without
-  ever pointing anywhere -- which is what they used to do.
+  Without this the models slide about the car on steering lock without ever
+  pointing anywhere -- which is what they used to do.
+- **Under that turn is the static camber and toe.** A wheel model is assumed to
+  be drawn upright and square to the car, its axis along Y, with no camber of
+  its own. `Simulation::designWheelAttitudes()` turns that axis onto each
+  corner's design spin axis -- stated angles, the wheel axis point or the patch,
+  whichever the solver bound -- and `WheelsDocument::place()` applies it first,
+  whether or not anything is being simulated, so the models lean the way the
+  measures say they do. `orientWheels()` composes onto what a placement already
+  has, which is what lets the two go on one after the other.
 - The mirror comes *before* the rotation in `wheelTransform()`. The rotation is
   a real one, measured on that corner of the car; mirroring it would steer the
   far wheel the wrong way.

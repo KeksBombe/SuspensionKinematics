@@ -197,11 +197,15 @@ void WheelsDocument::remove()
     m_session.markDirty();
 }
 
-void WheelsDocument::place(const HardpointTable& table, const SimulationPose& pose)
+void WheelsDocument::place(const HardpointTable& table, const WheelRotations& designAttitudes,
+                           const SimulationPose& pose)
 {
     const WheelsRef& wheels = m_session.project().wheels();
     m_placements = wheels.isEmpty() ? std::vector<WheelPlacement>{}
                                     : resolveWheels(wheels.spec, pose.layOver(table));
+    // The models are drawn upright and square to the car, so each is first
+    // turned to its corner's static camber and toe.
+    orientWheels(m_placements, designAttitudes);
     // A wheel is bolted to its upright, so it goes where the upright goes and
     // turns the way the upright turns. Without this the models slide about the
     // car on steering lock without ever pointing anywhere.

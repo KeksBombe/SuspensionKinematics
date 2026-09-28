@@ -36,9 +36,10 @@ struct SimulationPose {
     /// on the body too, and a part is drawn between the two.
     HardpointTable layOver(const HardpointTable& design) const;
 
-    /// How far each posed upright has turned, by the name of its wheel centre.
-    /// Empty when nothing is being simulated, which leaves every wheel model at
-    /// the attitude its CAD file drew it in.
+    /// How far each posed upright has turned from design, by the name of its
+    /// wheel centre. Empty when nothing is being simulated, which leaves every
+    /// wheel model at its design attitude
+    /// (@ref Simulation::designWheelAttitudes).
     WheelRotations wheelRotations() const;
 };
 
@@ -71,6 +72,13 @@ public:
     /// panel asking about an axle that has gone still has to show something;
     /// nothing at all only when there are no axles.
     const AxleSolver* axleFor(const QString& token) const;
+
+    /// Which way each wheel points at design, by the name of its wheel centre:
+    /// the turn from a model drawn upright and square to the car onto the
+    /// corner's design spin axis. That is the static camber and toe, stated or
+    /// read off the table, and a wheel model is drawn with it whether or not
+    /// anything is being simulated.
+    WheelRotations designWheelAttitudes() const;
 
     /// What to tell the user about the solve: why there is no curve when there
     /// is none, or what was assumed to get one. Empty when there is nothing to

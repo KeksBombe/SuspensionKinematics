@@ -139,7 +139,8 @@ void ProjectSession::resolvePose()
 
 void ProjectSession::placeWheels()
 {
-    m_wheels.place(m_hardpoints.model().table(), m_simulation.currentPose());
+    m_wheels.place(m_hardpoints.model().table(), m_simulation.simulation().designWheelAttitudes(),
+                   m_simulation.currentPose());
     emit wheelsPlaced();
 }
 

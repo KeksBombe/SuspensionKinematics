@@ -176,7 +176,7 @@ void orientWheels(std::vector<WheelPlacement>& placements, const WheelRotations&
     for (WheelPlacement& placement : placements) {
         const auto it = rotations.constFind(placement.pointName);
         if (it == rotations.constEnd()) continue;
-        placement.rotation = *it;
+        placement.rotation = *it * placement.rotation;
     }
 }
 
