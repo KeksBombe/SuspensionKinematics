@@ -332,6 +332,10 @@ qt_add_executable(suspkin
     src/app/SweepParametersDialog.cpp
     src/app/AppController.h
     src/app/AppController.cpp
+    # Letting go of a floating panel's native title bar over a dock area docks
+    # it -- on Windows, Qt would otherwise wait for another move.
+    src/app/DockDragEnd.h
+    src/app/DockDragEnd.cpp
     # How commands are reached: an icon per command, drawn in the palette's
     # colours, the ribbon that lays them out in tabs, and the action that opens
     # or brings forward a panel rather than blindly toggling it.
