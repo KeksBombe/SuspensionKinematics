@@ -83,6 +83,38 @@ QString roleName(const QJsonObject& parent, const char* group, const char* key)
     return parent.value(QLatin1String(group)).toObject().value(QLatin1String(key)).toString();
 }
 
+/// The value under @p key, or under @p formerKey when a file written before the
+/// key was renamed has only that one.
+QString renamedRole(const QJsonObject& group, const char* key, const char* formerKey)
+{
+    const QString name = group.value(QLatin1String(key)).toString();
+    return name.isEmpty() ? group.value(QLatin1String(formerKey)).toString() : name;
+}
+
+/// The anti-roll bar's roles. Its keys were named after the rocker the drop
+/// link hung off until the drop link could hang off something else; a
+/// template written then still reads, and is written back the new way.
+void readAntiRollBar(const QJsonObject& group, MechanismTemplate& mechanism)
+{
+    mechanism.antiRollMount =
+        dropLinkMountFromString(group.value(QStringLiteral("mount")).toString());
+    mechanism.antiRollDropLinkOuter = renamedRole(group, "dropLinkOuter", "rocker");
+    mechanism.antiRollArmEnd = renamedRole(group, "armEnd", "armOuter");
+    mechanism.antiRollArmRoot = renamedRole(group, "armRoot", "armPivot");
+    mechanism.antiRollBearing = group.value(QStringLiteral("bearing")).toString();
+}
+
+FormerNames formerNamesFromJson(const QJsonValue& value)
+{
+    FormerNames names;
+    const QJsonObject object = value.toObject();
+    for (auto it = object.begin(); it != object.end(); ++it) {
+        const QString former = it.value().toString();
+        if (!it.key().isEmpty() && !former.isEmpty()) names.insert(it.key(), former);
+    }
+    return names;
+}
+
 /// The mechanism block: which hardpoint plays which role, grouped by the part it
 /// belongs to so the file reads like the suspension it describes.
 MechanismTemplate mechanismFromJson(const QJsonObject& root)
@@ -112,9 +144,8 @@ MechanismTemplate mechanismFromJson(const QJsonObject& root)
     mechanism.rockerAxis = roleName(object, "rocker", "axis");
     mechanism.damperInboard = roleName(object, "damper", "inboard");
     mechanism.damperOutboard = roleName(object, "damper", "outboard");
-    mechanism.antiRollRocker = roleName(object, "antiRollBar", "rocker");
-    mechanism.antiRollArmOuter = roleName(object, "antiRollBar", "armOuter");
-    mechanism.antiRollArmPivot = roleName(object, "antiRollBar", "armPivot");
+    readAntiRollBar(object.value(QStringLiteral("antiRollBar")).toObject(), mechanism);
+    mechanism.formerNames = formerNamesFromJson(object.value(QStringLiteral("formerNames")));
     return mechanism;
 }
 
@@ -174,9 +205,24 @@ QJsonObject mechanismToJson(const MechanismTemplate& mechanism)
                 { { "inboard", &mechanism.damperInboard },
                   { "outboard", &mechanism.damperOutboard } });
     insertGroup(object, "antiRollBar",
-                { { "rocker", &mechanism.antiRollRocker },
-                  { "armOuter", &mechanism.antiRollArmOuter },
-                  { "armPivot", &mechanism.antiRollArmPivot } });
+                { { "dropLinkOuter", &mechanism.antiRollDropLinkOuter },
+                  { "armEnd", &mechanism.antiRollArmEnd },
+                  { "armRoot", &mechanism.antiRollArmRoot },
+                  { "bearing", &mechanism.antiRollBearing } });
+    // The mount goes with the bar, and only with one: a corner without a bar
+    // should not carry a word about where it would have hung.
+    if (object.contains(QStringLiteral("antiRollBar"))) {
+        QJsonObject bar = object.value(QStringLiteral("antiRollBar")).toObject();
+        bar.insert(QStringLiteral("mount"), dropLinkMountToString(mechanism.antiRollMount));
+        object.insert(QStringLiteral("antiRollBar"), bar);
+    }
+
+    if (!mechanism.formerNames.isEmpty()) {
+        QJsonObject former;
+        for (auto it = mechanism.formerNames.begin(); it != mechanism.formerNames.end(); ++it)
+            former.insert(it.key(), it.value());
+        object.insert(QStringLiteral("formerNames"), former);
+    }
     return object;
 }
 

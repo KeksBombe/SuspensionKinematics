@@ -116,6 +116,18 @@ QString partBodyName(const PartTemplate& part);
 /// whose rows would otherwise all name a body the catalog no longer has.
 int renameBody(HardpointConfigMap& config, const QString& from, const QString& to);
 
+/// Which rows of @p table are bolted to the chassis, one flag per row.
+///
+/// A segment running between two of them is not a member of anything: both ends
+/// are fixed to the car and nothing lies between them. The edge that closes a
+/// wishbone's A between its two chassis pivots is the one everybody sees, but
+/// the rule is about the points and not about wishbones, so a rocker axis or a
+/// pair of anti-roll bar pivots is answered the same way.
+///
+/// By row rather than by name because the viewport holds its parts as indices
+/// into this table, and has no names to look a configuration up by.
+std::vector<bool> groundedPoints(const HardpointTable& table, const HardpointConfigMap& config);
+
 /// How badly wrong an entry is.
 ///
 /// An error is refused before it reaches the store; a warning is stored and

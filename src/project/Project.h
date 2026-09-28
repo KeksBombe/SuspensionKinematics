@@ -37,11 +37,16 @@ struct SimulationState {
     /// back to the wheel travel it was given, not to the roll angle.
     SweepSettings sweep;
     double position = 0.0; ///< where along that sweep the model stands
-    /// Which curves are plotted, one plot each, by @ref sweepMeasureKey. A
-    /// project from before there could be more than one has the one, which is
-    /// a list of one.
-    QStringList measures;
-    /// Which wheels those plots draw, for the measures that have one per wheel.
+    /// Which curve is plotted, by @ref sweepMeasureKey. There is one plot; a
+    /// project from the builds that had one per curve comes back on the first
+    /// of them. Empty for a project that never chose one.
+    QString measure;
+    /// Which axles that plot draws, by corner token, overlaid in it. A project
+    /// from before there could be more than one comes back showing @ref axle,
+    /// which is the one it was drawing. Empty means none was chosen, and every
+    /// axle is shown.
+    QStringList plotAxles;
+    /// Which wheels it draws, for the measures that have one per wheel.
     SweepSides sides = SweepSides::Both;
     /// Whether it is running through its travel on its own, how long one run of
     /// the travel takes, and whether every axle comes along or only the one the

@@ -58,6 +58,10 @@ private:
         double AxleDesign::*member;
         QDoubleSpinBox* spin[2];
     };
+    struct AxleFlag {
+        bool AxleDesign::*member;
+        QCheckBox* box[2];
+    };
     struct CarNumber {
         double DesignParameters::*member;
         QDoubleSpinBox* spin;
@@ -82,10 +86,10 @@ private:
 
     DesignParameters m_seed; ///< what the dialog opened with: fields it has no widget for
     std::vector<AxleNumber> m_axleNumbers;
+    std::vector<AxleFlag> m_axleFlags;
     std::vector<CarNumber> m_carNumbers;
     QCheckBox* m_generate[2] = { nullptr, nullptr };
     QComboBox* m_corner[2] = { nullptr, nullptr };
-    QCheckBox* m_steered[2] = { nullptr, nullptr };
     QComboBox* m_advised[2] = { nullptr, nullptr };
     QComboBox* m_side = nullptr;
     QCheckBox* m_useChassis = nullptr;

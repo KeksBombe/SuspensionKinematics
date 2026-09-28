@@ -41,10 +41,23 @@ QStringList frontCornerNames()
         QStringLiteral("F_PushRod_I"),       QStringLiteral("F_PushRod_O"),
         QStringLiteral("F_Rocker_Center"),   QStringLiteral("F_Rocker_AxisPoint"),
         QStringLiteral("F_Damper_I"),        QStringLiteral("F_Damper_O"),
-        QStringLiteral("F_AntiRoll_Center"), QStringLiteral("F_AntiRoll_I"),
-        QStringLiteral("F_AntiRoll_O"),      QStringLiteral("F_WheelCenter"),
-        QStringLiteral("F_WheelAxis"),       QStringLiteral("F_ContactPatch"),
+        QStringLiteral("F_ARB_DropLink_O"),  QStringLiteral("F_ARB_ArmEnd"),
+        QStringLiteral("F_ARB_ArmRoot"),     QStringLiteral("F_ARB_Bearing"),
+        QStringLiteral("F_WheelCenter"),     QStringLiteral("F_WheelAxis"),
+        QStringLiteral("F_ContactPatch"),
     };
+}
+
+/// The same corner as a workbook measured before the anti-roll bar's points
+/// were renamed: the three old names, and no bearing, because there was none.
+QStringList frontCornerFormerNames()
+{
+    QStringList names = frontCornerNames();
+    names.removeAll(QStringLiteral("F_ARB_Bearing"));
+    names.replaceInStrings(QStringLiteral("F_ARB_DropLink_O"), QStringLiteral("F_AntiRoll_O"));
+    names.replaceInStrings(QStringLiteral("F_ARB_ArmEnd"), QStringLiteral("F_AntiRoll_I"));
+    names.replaceInStrings(QStringLiteral("F_ARB_ArmRoot"), QStringLiteral("F_AntiRoll_Center"));
+    return names;
 }
 
 const LinkagePart* findPart(const Linkage& linkage, const QString& id)
@@ -84,6 +97,12 @@ private slots:
     void patchingTheSteeringLeavesTheRestOfTheFileAlone();
     void theMechanismSurvivesAWriteAndAReadBack();
     void aTemplateWithoutAMechanismStillLoads();
+
+    void theAntiRollBarIsDefinedByFourPoints();
+    void aTemplateWithTheOldAntiRollKeysStillReads();
+    void theDropLinkMountAndTheBearingSurviveAWriteAndAReadBack();
+    void aWorkbookWithTheOldAntiRollNamesStillDrawsTheBar();
+    void aPointIsReadUnderItsFormerNameOnlyWhenTheNewOneIsMissing();
 
     void aLiteralPartIsDrawnOnceThroughTheNamesItGives();
     void aLiteralPartThatLostAPointSaysSo();
@@ -210,8 +229,8 @@ void TestLinkage::aMissingPointIsReportedAndTheRestIsStillDrawn()
 void TestLinkage::anOptionalPartSaysNothingWhenItIsAbsent()
 {
     QStringList names = frontCornerNames();
-    for (const char* absent : { "F_AntiRoll_Center", "F_AntiRoll_I", "F_AntiRoll_O",
-                                "F_Rocker_AxisPoint" })
+    for (const char* absent : { "F_ARB_DropLink_O", "F_ARB_ArmEnd", "F_ARB_ArmRoot",
+                                "F_ARB_Bearing", "F_Rocker_AxisPoint" })
         names.removeAll(QLatin1String(absent));
 
     const Linkage linkage = buildLinkage(builtinLinkageTemplate(), tableOf(names), suffixMirror());
@@ -633,8 +652,11 @@ void TestLinkage::aPartIsRelabelledWithoutDisturbingTheFile()
     const QByteArray after = setTemplatePartLabel(kHandWritten, QStringLiteral("pushRod"),
                                                   QStringLiteral("{corner} \"push\" rod"), &error);
     QVERIFY2(!after.isEmpty(), qPrintable(error));
-    // The one value, escaped, and nothing around it moved.
-    QVERIFY(after.contains(R"("label": "{corner} \"push\" rod",)"));
+    // The one value, escaped, and nothing around it moved. The literal is kept
+    // out of the macro: MSVC's preprocessor reads the \" inside a raw string
+    // there as an escape and refuses to compile the line.
+    const QByteArray escaped = R"("label": "{corner} \"push\" rod",)";
+    QVERIFY(after.contains(escaped));
     QCOMPARE(after.size() - kHandWritten.size(),
              qsizetype(QByteArray(R"({corner} \"push\" rod)").size())
                  - qsizetype(QByteArray("{corner} pushrod").size()));
@@ -676,7 +698,10 @@ void TestLinkage::theMechanismSurvivesAWriteAndAReadBack()
     QCOMPARE(after.allNames(), before.allNames());
     QCOMPARE(after.pushrodMount, before.pushrodMount);
     QCOMPARE(after.lowerRear, before.lowerRear);
-    QCOMPARE(after.antiRollArmPivot, before.antiRollArmPivot);
+    QCOMPARE(after.antiRollArmRoot, before.antiRollArmRoot);
+    QCOMPARE(after.antiRollBearing, before.antiRollBearing);
+    QCOMPARE(after.antiRollMount, before.antiRollMount);
+    QCOMPARE(after.formerNames, before.formerNames);
     QCOMPARE(after.wheelAxis, before.wheelAxis);
     QCOMPARE(after.contactPatch, before.contactPatch);
 }
@@ -707,6 +732,131 @@ void TestLinkage::aTemplateWithoutAMechanismStillLoads()
     // A template that does say so keeps what it says, and is not flagged.
     QVERIFY(!builtinLinkageTemplate().mechanismAssumed);
     QVERIFY(!builtinMechanismTemplate().isEmpty());
+}
+
+void TestLinkage::theAntiRollBarIsDefinedByFourPoints()
+{
+    // The definition CAD is asked to follow: where the drop link picks up, both
+    // ends of the bar's arm, and a bearing on the bar's own axis.
+    const MechanismTemplate mechanism = builtinLinkageTemplate().mechanism;
+    QCOMPARE(mechanism.antiRollMount, DropLinkMount::Rocker);
+    QCOMPARE(mechanism.antiRollDropLinkOuter, QStringLiteral("{corner}_ARB_DropLink_O"));
+    QCOMPARE(mechanism.antiRollArmEnd, QStringLiteral("{corner}_ARB_ArmEnd"));
+    QCOMPARE(mechanism.antiRollArmRoot, QStringLiteral("{corner}_ARB_ArmRoot"));
+    QCOMPARE(mechanism.antiRollBearing, QStringLiteral("{corner}_ARB_Bearing"));
+
+    // And what each of them used to be called. The bearing is new, so it has no
+    // former name to be read through.
+    QCOMPARE(mechanism.formerNames.value(mechanism.antiRollDropLinkOuter),
+             QStringLiteral("{corner}_AntiRoll_O"));
+    QCOMPARE(mechanism.formerNames.value(mechanism.antiRollArmEnd),
+             QStringLiteral("{corner}_AntiRoll_I"));
+    QCOMPARE(mechanism.formerNames.value(mechanism.antiRollArmRoot),
+             QStringLiteral("{corner}_AntiRoll_Center"));
+    QVERIFY(!mechanism.formerNames.contains(mechanism.antiRollBearing));
+}
+
+void TestLinkage::aTemplateWithTheOldAntiRollKeysStillReads()
+{
+    // What every project made before the bar was redefined holds in its own
+    // linkage/template.json: keys named after the rocker, and no mount.
+    const QByteArray older = R"({
+        "format": "suspkin-linkage-template",
+        "formatVersion": 1,
+        "mechanism": {
+            "lowerWishbone": { "front": "{corner}_LCA_IF", "rear": "{corner}_LCA_IR",
+                               "outer": "{corner}_LCA_O" },
+            "antiRollBar": {
+                "rocker": "{corner}_AntiRoll_O",
+                "armOuter": "{corner}_AntiRoll_I",
+                "armPivot": "{corner}_AntiRoll_Center"
+            }
+        },
+        "parts": [ { "id": "arm", "points": ["{corner}_AntiRoll_Center", "{corner}_AntiRoll_I"] } ]
+    })";
+    const LinkageTemplateLoadResult result = readLinkageTemplate(older, QStringLiteral("older"));
+    QVERIFY2(result.ok(), qPrintable(result.error));
+
+    const MechanismTemplate& mechanism = result.templ->mechanism;
+    QCOMPARE(mechanism.antiRollMount, DropLinkMount::Rocker);
+    QCOMPARE(mechanism.antiRollDropLinkOuter, QStringLiteral("{corner}_AntiRoll_O"));
+    QCOMPARE(mechanism.antiRollArmEnd, QStringLiteral("{corner}_AntiRoll_I"));
+    QCOMPARE(mechanism.antiRollArmRoot, QStringLiteral("{corner}_AntiRoll_Center"));
+    QVERIFY(mechanism.antiRollBearing.isEmpty());
+
+    // Written back, it says the same thing the new way.
+    const QByteArray written = writeLinkageTemplate(*result.templ);
+    QVERIFY(written.contains("\"dropLinkOuter\""));
+    QVERIFY(written.contains("\"armRoot\""));
+    QVERIFY(!written.contains("\"armPivot\""));
+    const LinkageTemplateLoadResult reread = readLinkageTemplate(written, QStringLiteral("again"));
+    QVERIFY2(reread.ok(), qPrintable(reread.error));
+    QCOMPARE(reread.templ->mechanism.allNames(), mechanism.allNames());
+}
+
+void TestLinkage::theDropLinkMountAndTheBearingSurviveAWriteAndAReadBack()
+{
+    LinkageTemplate templ = builtinLinkageTemplate();
+    for (DropLinkMount mount : { DropLinkMount::Rocker, DropLinkMount::UpperArm,
+                                 DropLinkMount::LowerArm, DropLinkMount::Upright }) {
+        templ.mechanism.antiRollMount = mount;
+        const LinkageTemplateLoadResult reread =
+            readLinkageTemplate(writeLinkageTemplate(templ), QStringLiteral("round trip"));
+        QVERIFY2(reread.ok(), qPrintable(reread.error));
+        QCOMPARE(reread.templ->mechanism.antiRollMount, mount);
+        QCOMPARE(reread.templ->mechanism.antiRollBearing, templ.mechanism.antiRollBearing);
+    }
+    // Spelled the way a pushrod mount is, so one word means one body anywhere.
+    QCOMPARE(dropLinkMountFromString(QStringLiteral("upperWishbone")), DropLinkMount::UpperArm);
+    QCOMPARE(dropLinkMountFromString(QStringLiteral("knuckle")), DropLinkMount::Upright);
+    QCOMPARE(dropLinkMountFromString(QString()), DropLinkMount::Rocker);
+}
+
+void TestLinkage::aWorkbookWithTheOldAntiRollNamesStillDrawsTheBar()
+{
+    const HardpointTable table = tableOf(frontCornerFormerNames());
+    const Linkage linkage = buildLinkage(builtinLinkageTemplate(), table, suffixMirror());
+    QVERIFY2(linkage.warnings.isEmpty(), qPrintable(linkage.warnings.join(QLatin1Char('\n'))));
+
+    // The arm is drawn root to end through the old names; the bearing it would
+    // start from is not in a workbook this old, and is not asked for.
+    const LinkagePart* arm = findPart(linkage, QStringLiteral("antiRollArm@F:base"));
+    QVERIFY(arm);
+    QCOMPARE(arm->chains.size(), std::size_t(1));
+    const std::vector<int>& points = arm->chains.front().points;
+    QCOMPARE(points.size(), std::size_t(2));
+    QCOMPARE(table.points[std::size_t(points[0])].name, QStringLiteral("F_AntiRoll_Center"));
+    QCOMPARE(table.points[std::size_t(points[1])].name, QStringLiteral("F_AntiRoll_I"));
+    QVERIFY(findPart(linkage, QStringLiteral("antiRollDropLink@F:base")));
+}
+
+void TestLinkage::aPointIsReadUnderItsFormerNameOnlyWhenTheNewOneIsMissing()
+{
+    const FormerNames former{ { QStringLiteral("{corner}_ARB_ArmRoot"),
+                                QStringLiteral("{corner}_AntiRoll_Center") } };
+    const QString pattern = QStringLiteral("{corner}_ARB_ArmRoot");
+    const QString corner = QStringLiteral("F");
+    const MirrorSpec mirror = suffixMirror();
+
+    // Only the old one: read through it, on the far side as well.
+    const HardpointTable old =
+        tableOf({ QStringLiteral("F_AntiRoll_Center"),
+                  mirroredName(QStringLiteral("F_AntiRoll_Center"), mirror) });
+    QCOMPARE(resolvePointName(pattern, corner, false, mirror, former, old),
+             QStringLiteral("F_AntiRoll_Center"));
+    QCOMPARE(resolvePointName(pattern, corner, true, mirror, former, old),
+             mirroredName(QStringLiteral("F_AntiRoll_Center"), mirror));
+
+    // Both: the new one wins, so a half-renamed workbook moves over point by point.
+    const HardpointTable both =
+        tableOf({ QStringLiteral("F_AntiRoll_Center"), QStringLiteral("F_ARB_ArmRoot") });
+    QCOMPARE(resolvePointName(pattern, corner, false, mirror, former, both),
+             QStringLiteral("F_ARB_ArmRoot"));
+
+    // Neither: reported under the name it should be given.
+    const HardpointTable neither = tableOf({ QStringLiteral("F_LCA_O") });
+    QCOMPARE(resolvePointName(pattern, corner, false, mirror, former, neither),
+             QStringLiteral("F_ARB_ArmRoot"));
 }
 
 QTEST_MAIN(TestLinkage)

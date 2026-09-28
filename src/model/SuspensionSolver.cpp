@@ -27,6 +27,27 @@ constexpr double kMaxStep = 0.35;
 /// patch, which is taken over it.
 constexpr double kGroundZ = 0.0;
 
+/// The direction of an anti-roll bar's axis, @p along it either way, turned so
+/// that the two sides of an axle measure their arms the same way round.
+///
+/// A mirrored side does not want the mirror image of the near side's direction:
+/// mirroring turns a rotation the other way, and a pure bump would then read as
+/// the arms twisting against each other. It wants that image reversed -- which,
+/// for a bar straight across the car, is the same +y both sides already use. So
+/// the direction is seen from the left (a right side's is mirrored over),
+/// pointed left, and taken back to this side as the reversed mirror image.
+Vec3 barAxisPointingLeft(const Vec3& along, double side)
+{
+    const Vec3 unit = along.normalized();
+    Vec3 seenFromLeft(unit.x, unit.y * side, unit.z);
+    // A bar along the car has no left to point to; forward decides instead, so
+    // both sides still agree.
+    const bool reversed = std::abs(seenFromLeft.y) > 1e-9 ? seenFromLeft.y < 0.0
+                                                          : seenFromLeft.x < 0.0;
+    if (reversed) seenFromLeft = seenFromLeft * -1.0;
+    return side > 0.0 ? seenFromLeft : Vec3(-seenFromLeft.x, seenFromLeft.y, -seenFromLeft.z);
+}
+
 double pickWheelHeight(const CornerPose& pose) { return pose.wheelCenter.z; }
 double pickContactHeight(const CornerPose& pose) { return pose.contactPatch.z; }
 
@@ -147,12 +168,17 @@ std::optional<CornerSolver> CornerSolver::bind(const MechanismTemplate& mechanis
         solver.m_damperOutboard = at(mechanism.damperOutboard);
     }
 
-    solver.m_hasAntiRoll = solver.m_hasRocker && has(mechanism.antiRollRocker)
-                           && has(mechanism.antiRollArmOuter) && has(mechanism.antiRollArmPivot);
+    // A drop link on the rocker needs the rocker bound; one on the wheel's own
+    // members does not, and is checked against the rocker further down.
+    solver.m_hasAntiRoll = mechanism.hasAntiRoll() && has(mechanism.antiRollDropLinkOuter)
+                           && has(mechanism.antiRollArmEnd) && has(mechanism.antiRollArmRoot);
     if (solver.m_hasAntiRoll) {
-        solver.m_antiRollRocker = at(mechanism.antiRollRocker);
-        solver.m_antiRollArmOuter = at(mechanism.antiRollArmOuter);
-        solver.m_antiRollArmPivot = at(mechanism.antiRollArmPivot);
+        solver.m_antiRollDropLinkOuter = at(mechanism.antiRollDropLinkOuter);
+        solver.m_antiRollArmEnd = at(mechanism.antiRollArmEnd);
+        solver.m_antiRollArmRoot = at(mechanism.antiRollArmRoot);
+        solver.m_antiRollAxisFromBearing = has(mechanism.antiRollBearing);
+        if (solver.m_antiRollAxisFromBearing)
+            solver.m_antiRollBearing = at(mechanism.antiRollBearing);
     }
 
     for (const QString& name : mechanism.carried)
@@ -189,16 +215,25 @@ std::optional<CornerSolver> CornerSolver::bind(const MechanismTemplate& mechanis
     }
     if (!solver.m_hasRocker) {
         solver.m_hasDamper = false;
-        solver.m_hasAntiRoll = false;
+        if (mechanism.antiRollMount == DropLinkMount::Rocker) solver.m_hasAntiRoll = false;
     }
 
     if (solver.m_hasAntiRoll) {
-        // A U-bar runs across the car, so without the far side's arm root to
-        // give the real axis, y is the right guess and not much of one.
-        solver.m_antiRollAxis = axisThrough(solver.m_antiRollArmPivot,
-                                            solver.m_antiRollArmPivot + Vec3(0, 1, 0));
-        solver.m_antiRollCircle = circleAbout(solver.m_antiRollArmOuter, solver.m_antiRollAxis);
-        solver.m_dropLinkLength = distance(solver.m_antiRollRocker, solver.m_antiRollArmOuter);
+        // A bearing in the table says where the bar's axis is outright. Without
+        // one, a U-bar runs across the car, so until the far side's arm root
+        // gives the real axis y is the right guess and not much of one.
+        const Vec3 alongBar = solver.m_antiRollAxisFromBearing
+                                  ? solver.m_antiRollBearing - solver.m_antiRollArmRoot
+                                  : Vec3();
+        if (alongBar.lengthSquared() < 1e-12) solver.m_antiRollAxisFromBearing = false;
+        const Vec3 direction = solver.m_antiRollAxisFromBearing
+                                   ? barAxisPointingLeft(alongBar, solver.side())
+                                   : Vec3(0, 1, 0);
+        solver.m_antiRollAxis =
+            axisThrough(solver.m_antiRollArmRoot, solver.m_antiRollArmRoot + direction);
+        solver.m_antiRollCircle = circleAbout(solver.m_antiRollArmEnd, solver.m_antiRollAxis);
+        solver.m_dropLinkLength =
+            distance(solver.m_antiRollDropLinkOuter, solver.m_antiRollArmEnd);
         if (!solver.m_antiRollCircle.isValid()) solver.m_hasAntiRoll = false;
     }
 
@@ -285,10 +320,10 @@ std::optional<CornerSolver> CornerSolver::bind(const MechanismTemplate& mechanis
 
 void CornerSolver::setAntiRollAxis(const Vec3& direction)
 {
-    if (!m_hasAntiRoll) return;
-    const Axis axis = axisThrough(m_antiRollArmPivot, m_antiRollArmPivot + direction);
+    if (!m_hasAntiRoll || m_antiRollAxisFromBearing) return;
+    const Axis axis = axisThrough(m_antiRollArmRoot, m_antiRollArmRoot + direction);
     if (!axis.isValid()) return;
-    const Circle circle = circleAbout(m_antiRollArmOuter, axis);
+    const Circle circle = circleAbout(m_antiRollArmEnd, axis);
     if (!circle.isValid()) return;
     m_antiRollAxis = axis;
     m_antiRollCircle = circle;
@@ -392,20 +427,13 @@ bool CornerSolver::solveAt(double angle, double rackTravel, const CornerPose* pr
 
         if (m_hasDamper)
             pose.damperOutboard = rotateAbout(m_damperOutboard, m_rockerAxis, pose.rockerAngle);
+    }
 
-        if (m_hasAntiRoll) {
-            pose.antiRollRocker = rotateAbout(m_antiRollRocker, m_rockerAxis, pose.rockerAngle);
-            count = intersectCircleSphere(m_antiRollCircle, pose.antiRollRocker, m_dropLinkLength,
-                                          candidates);
-            if (count == 0) {
-                pose.error = tr("The anti-roll drop link cannot reach the bar here.");
-                *out = pose;
-                return false;
-            }
-            pose.antiRollArmOuter = nearestTo(
-                previous ? previous->antiRollArmOuter : m_antiRollArmOuter, candidates, count, &ok);
-            pose.antiRollArmAngle = m_antiRollCircle.angleOf(pose.antiRollArmOuter);
-        }
+    // 7. The bar's arm turns until it is a drop link away from wherever the
+    //    drop link's upper end has been carried.
+    if (m_hasAntiRoll && !solveAntiRoll(upright, previous, &pose)) {
+        *out = pose;
+        return false;
     }
 
     const auto add = [&pose](const QString& name, const Vec3& position) {
@@ -425,8 +453,8 @@ bool CornerSolver::solveAt(double angle, double rackTravel, const CornerPose* pr
     }
     if (m_hasDamper) add(m_mechanism.damperOutboard, pose.damperOutboard);
     if (m_hasAntiRoll) {
-        add(m_mechanism.antiRollRocker, pose.antiRollRocker);
-        add(m_mechanism.antiRollArmOuter, pose.antiRollArmOuter);
+        add(m_mechanism.antiRollDropLinkOuter, pose.antiRollDropLinkOuter);
+        add(m_mechanism.antiRollArmEnd, pose.antiRollArmEnd);
     }
 
     pose.hasDamper = m_hasDamper;
@@ -434,6 +462,39 @@ bool CornerSolver::solveAt(double angle, double rackTravel, const CornerPose* pr
     pose.valid = true;
     measure(&pose);
     *out = pose;
+    return true;
+}
+
+Vec3 CornerSolver::dropLinkOuterAt(const CornerPose& pose, const Rigid& upright) const
+{
+    switch (m_mechanism.antiRollMount) {
+    case DropLinkMount::Rocker:
+        return rotateAbout(m_antiRollDropLinkOuter, m_rockerAxis, pose.rockerAngle);
+    case DropLinkMount::UpperArm:
+        return rotateAbout(m_antiRollDropLinkOuter, m_upperAxis, pose.upperArmAngle);
+    case DropLinkMount::LowerArm:
+        return rotateAbout(m_antiRollDropLinkOuter, m_lowerAxis, pose.armAngle);
+    case DropLinkMount::Upright: return upright.map(m_antiRollDropLinkOuter);
+    }
+    return m_antiRollDropLinkOuter;
+}
+
+bool CornerSolver::solveAntiRoll(const Rigid& upright, const CornerPose* previous,
+                                 CornerPose* pose) const
+{
+    pose->antiRollDropLinkOuter = dropLinkOuterAt(*pose, upright);
+
+    Vec3 candidates[2];
+    const int count = intersectCircleSphere(m_antiRollCircle, pose->antiRollDropLinkOuter,
+                                            m_dropLinkLength, candidates);
+    if (count == 0) {
+        pose->error = tr("The anti-roll drop link cannot reach the bar here.");
+        return false;
+    }
+    bool ok = false;
+    pose->antiRollArmEnd = nearestTo(previous ? previous->antiRollArmEnd : m_antiRollArmEnd,
+                                     candidates, count, &ok);
+    pose->antiRollArmAngle = m_antiRollCircle.angleOf(pose->antiRollArmEnd);
     return true;
 }
 

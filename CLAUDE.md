@@ -396,7 +396,16 @@ the manifest under `design`) in, roles out. Pure and in the core.
   stated angles would outrank the wheel axis just placed, and the scrub, trail
   and roll centre built off the generator's camber would come out wrong. An axle
   with none keeps reading its angles off the new points.
-- The rocker group is not generated: packaging, placed by hand.
+- **The rocker group and the bar are generated from placement inputs**, per
+  axle and each behind its own switch (`generateRocker`, `generateAntiRollBar`),
+  so a hand-placed rocker is left alone. The one target among them is the
+  installation ratio: the rocker's rate comes from `CornerSolver` on the corner
+  generated so far, and the damper arm is the ratio over it, with the damper
+  square to its arm. A role that was not placed is not in
+  `GeneratedCorner::placed` and `bindGeneratedCorner()` does not write it.
+  `planDesign()` names points through the table-aware `instantiateMechanism()`,
+  so a workbook still on the bar's former names gets those points moved, not a
+  second bar.
 - `src/geom/MeshQuery.*` (a BVH, ray casting and unsigned distance) is what puts
   inboard pivots on the imported chassis. A ball joint already inside the
   geometry -- an upright in the model -- is detected and those pivots go on their
@@ -446,6 +455,24 @@ as `:/templates/...` so the tests read the same bytes the application ships.
 - A project without a template gets the built-in one written in on open
   (`LinkageDocument::installBuiltin()`), so it becomes an ordinary project file the
   user can edit. A template that fails to parse is *not* repaired by overwriting.
+- **A point can be renamed without breaking a workbook.** `mechanism.formerNames`
+  maps a name the template uses now to the one it used before, both with
+  `{corner}` still in them. `resolvePointName()` is the one place it is applied:
+  a name the table lacks, whose former name it has, is read as the former name,
+  point by point, per corner and side. It is used by `buildLinkage()`, by
+  `AxleSolver::build()` and by `inferHardpointConfig()` -- anything that binds
+  names to a table goes through the `instantiateMechanism()` overload that
+  takes the table, or an old workbook draws but does not solve. A point missing
+  under both names is reported under the new one.
+- **The anti-roll bar** is `mechanism.antiRollBar`: `dropLinkOuter`, `armEnd`,
+  `armRoot`, an optional `bearing` and a `mount` (`rocker`, `upperArm`,
+  `lowerArm`, `upright`). The older keys `rocker`, `armOuter` and `armPivot`
+  still read, and are written back the new way. A bearing makes the bar's axis
+  that side's own (root to bearing) and `setAntiRollAxis()` leaves it alone;
+  without one the axle sets the root-to-root axis. Either way each side's axis
+  is turned by `barAxisPointingLeft()` so the right side's is the *reversed*
+  mirror image of the left's -- the plain mirror image turns the rotation round
+  and a pure bump reads as twist.
 - `mechanism.upright.wheelAxis` is a second point on the **wheel's own axis of
   rotation** (`{corner}_WheelAxis`), rigid with the upright. It is what says
   which way the wheel points -- static toe, which no other hardpoint in a table
@@ -490,6 +517,18 @@ as `:/templates/...` so the tests read the same bytes the application ships.
   refuses to replace a file any handle has open, this process's own included. A
   `QFile` still open in the scope of the write is what made the steering fail
   there with "Access is denied" while Linux let it through.
+- **A segment between two chassis-fixed points is not drawn.** `groundedPoints()`
+  (in `HardpointConfig.*`, a flag per row because the viewport holds its parts as
+  indices and has no names to look a configuration up by) flags every point whose
+  `PointType` is `ToBody`, and `ViewportWidget::rebuildLinkageVertices()` drops a
+  segment with both ends in it: the edge that closes a wishbone's A runs pivot to
+  pivot, where there is no member. The chain stays `closed` -- that is the
+  topology, and both the solver and `inferHardpointConfig()` read it -- so this
+  is the renderer's alone, and `setHardpoints()` drops the flags with the parts
+  for the same reason. A rocker's axis chain is two chassis points too, and goes
+  the same way on purpose. `MainWindow::syncGroundedPoints()` follows the
+  *configuration* rather than the linkage, because a point's type is edited in
+  the table long after the parts were resolved.
 - A template with **no `mechanism` block** -- one written before the solver
   existed, which is what older projects still hold -- is read with the built-in
   mechanism assumed and `LinkageTemplate::mechanismAssumed` set. Without it the
@@ -550,9 +589,10 @@ placement is pure and testable: `src/model/Wheels.*`.
 
 ## The analysis plots
 
-`src/app/PlotWidget.*` draws one measure of a sweep; `AnalysisPanel` holds as many
-as the Curves menu has ticked, in a grid that reflows with the dock's width and
-scrolls when they do not fit.
+`src/app/PlotWidget.*` draws one measure of one or more axles' sweeps, overlaid;
+`AnalysisPanel` holds exactly one of it. There used to be a plot per ticked
+curve in a scrolling grid; that was a misreading of what Lotus does, which is one
+graph and *visibility* toggles for what is in it (issue 8).
 
 - **Colours come from the palette**, mixed from `Base` and `Text`, the same rule
   as the hardpoint table. The hover readout is `Window` and `WindowText`: a fixed
@@ -564,14 +604,27 @@ scrolls when they do not fit.
   the centreline through a bump filled the plot with the solver's rounding,
   under an axis that read "0.000" at every tick. Readouts go through
   `sweepValueText()`, which never prints "-0.000".
-- Which curves are plotted is `SimulationState::measures`, by key, in menu
-  order. `"measure"` is still written beside `"measures"` -- the first of them --
-  the way `"selected"` sits beside `"selection"`, and an older manifest's one
-  `"measure"` reads back as a list of one.
-- Which wheels they draw is `SimulationState::sides` (`SweepSides`: both, left,
-  right), next to the Curves button. It reaches every plot (`setSides()`) and the
-  readout, which hides the other column and writes the axle-wide rows into the
-  one left showing. Axle-wide measures are one curve whatever it says.
+- Which curve is plotted is `SimulationState::measure`, by key. `"measures"` is
+  still written beside it as a list of one, so the builds with a plot per curve
+  open on the same one; a manifest of theirs reads back its first.
+- **Which axles are drawn is `SimulationState::plotAxles`**, by corner token,
+  one Show checkbox each, a colour each (`PlotWidget::axleColor()`, by the axle's
+  place among *all* axles, so the front keeps its colour with the rear hidden).
+  A manifest without the key shows the one axle it was sweeping, `axle`; the key
+  is always written, so an empty list is not mistaken for that. Empty means
+  every axle. The window sweeps `AnalysisPanel::sweptAxles()` -- the ones shown,
+  less any without a rack in a steer sweep, whose checkbox is greyed out.
+- `axle` is no longer what is plotted: it is what the position drives, the one
+  the viewport moves when "Move all axles" is off, and what the readout shows.
+- Which wheels are drawn is `SimulationState::sides` (`SweepSides`: both, left,
+  right), the Left and Right checkboxes: solid for the left, dashed for the
+  right. It reaches the plot (`setSides()`) and the readout, which hides the
+  other column and writes the axle-wide rows into the one left showing.
+  Axle-wide measures are one curve per axle whatever it says. Neither the last
+  axle nor the last wheel can be unticked: an empty plot reads as a fault.
+- Export CSV writes what is shown, through `sweepsToCsv()`: the axles side by
+  side, prefixed with their labels, and only the wheels ticked. One axle with
+  both wheels is exactly `sweepToCsv()`, which a test holds it to.
 - **Camber** is to the body; **Camber to ground** (`CornerPose::camberToGround`)
   is to the road. They are one number except in a roll sweep, where the road is
   tilted under the car (`z = -y tan(roll)`) and they part by the whole roll

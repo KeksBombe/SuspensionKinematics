@@ -120,6 +120,11 @@ private:
     void showSweep();
     /// The markers, the chassis and the readout where the pose puts them.
     void showPose();
+    /// Tell the viewport which points are chassis-fixed, so that it draws no
+    /// member between two of them. What a point is for is edited in the table
+    /// long after the parts were resolved, so this follows the configuration
+    /// rather than the linkage.
+    void syncGroundedPoints();
 
     /// The names of the selected points, in picking order.
     QStringList selectedPointNames() const;

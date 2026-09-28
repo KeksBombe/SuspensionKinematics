@@ -262,6 +262,7 @@ struct AxleSample {
 /// A whole sweep, ready to plot or to write out.
 struct SweepResult {
     SweepKind kind = SweepKind::Bump;
+    QString axleToken; ///< the corner token of the axle swept, e.g. "F"
     QString axleLabel;
     std::vector<AxleSample> samples;
     QStringList warnings;
@@ -270,6 +271,21 @@ struct SweepResult {
     /// The sample nearest @p input, or nothing when there are none.
     const AxleSample* nearest(double input) const;
 };
+
+/// A closed stretch of a sweep's input, @p low to @p high.
+struct SweepInterval {
+    double low = 0.0;
+    double high = 0.0;
+};
+
+/// How far either way from the design position the mechanism holds together:
+/// the unbroken run of samples around input 0 in which every corner that
+/// assembled at design still assembles. Past it the sweep has no pose to show,
+/// so this is what the travel slider is allowed to reach.
+///
+/// Nothing when the design position itself did not assemble -- there is then
+/// no run to measure, and nothing better to say than the sweep's own range.
+std::optional<SweepInterval> assembledInterval(const SweepResult& result);
 
 /// One thing that can be plotted against the sweep's input.
 ///
@@ -361,5 +377,15 @@ SweepResult runSweep(const AxleSolver& axle, const SweepSpec& spec);
 /// header naming the units. Comma-separated and dot-decimal, because it is read
 /// by other tools more often than by a person.
 QByteArray sweepToCsv(const SweepResult& result);
+
+/// Several axles' sweeps of the same spec as one spreadsheet, their columns
+/// side by side after one input column, each prefixed with its axle's label --
+/// "Front camber_left [deg]" -- so front and rear can be compared row by row.
+///
+/// @p sides leaves out the columns of a wheel that is not wanted; the axle-wide
+/// columns are always there. Sweeps with no samples (a steer sweep of an axle
+/// with no rack) are left out. One sweep with both sides is exactly
+/// @ref sweepToCsv, unprefixed, so a single axle exports the way it always has.
+QByteArray sweepsToCsv(const std::vector<SweepResult>& results, SweepSides sides);
 
 } // namespace suspkin

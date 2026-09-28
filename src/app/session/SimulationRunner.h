@@ -16,7 +16,10 @@ struct MirrorSpec;
 /// What the user is asking the solve for, as plain data. The analysis panel is
 /// a widget, so the runner never sees it: the window reads this off the panel.
 struct SimulationRequest {
+    /// The axle the position drives, and the one the readout shows.
     QString axle;
+    /// The axles on the plot, by corner token: one sweep each.
+    QStringList sweptAxles;
     SweepSpec spec;
     double position = 0.0;
     bool moveAllAxles = false;
@@ -35,15 +38,18 @@ public:
     /// Bind every axle the template names against the table as it stands.
     void bind(const LinkageTemplate& templ, const HardpointTable& table, const MirrorSpec& mirror,
               const QHash<QString, StaticAlignment>& alignment, const QString& steeringNote);
-    /// Run the sweep @p request asks for, or clear it when it wants none.
+    /// Run the sweeps @p request asks for, or clear them when it wants none.
     void runSweep(const SimulationRequest& request);
+    /// A sweep of every axle @p request plots, whether or not it wants them
+    /// drawn -- which is what an export writes.
+    std::vector<SweepResult> sweepsFor(const SimulationRequest& request) const;
     /// Put the car where @p request says, or back at the table's coordinates
     /// when it is not simulating.
     void pose(const SimulationRequest& request);
 
     const Simulation& simulation() const { return m_simulation; }
-    /// The curve on the plot.
-    const SweepResult& sweep() const { return m_sweep; }
+    /// The curves on the plot, one per axle shown.
+    const std::vector<SweepResult>& sweeps() const { return m_sweeps; }
     /// Where the car is standing while simulating; empty the rest of the time.
     const SimulationPose& currentPose() const { return m_pose; }
     /// What the panel says under the plot: the solve's note, then the sweep's
@@ -53,7 +59,7 @@ public:
 private:
     /// Every axle the template names, bound to the table as it stands.
     Simulation m_simulation;
-    SweepResult m_sweep;
+    std::vector<SweepResult> m_sweeps;
     SimulationPose m_pose;
 };
 

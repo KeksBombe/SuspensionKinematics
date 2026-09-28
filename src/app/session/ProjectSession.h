@@ -79,6 +79,8 @@ public:
     /// far, whether to simulate at all. Asked afresh at every step, because
     /// binding the axles can change which axle is being looked at.
     void setRequestSource(std::function<SimulationRequest()> source);
+    /// What the source asks for now; a default request when there is none.
+    SimulationRequest request() const;
 
     /// Everything that is resolved against the table, resolved again: the
     /// parts, the configuration, the bound axles, the sweep, the pose, the
@@ -116,8 +118,6 @@ signals:
     void historyChanged();
 
 private:
-    SimulationRequest request() const;
-
     Project m_project;
     ChassisDocument m_chassis{ *this };
     HardpointDocument m_hardpoints{ *this };

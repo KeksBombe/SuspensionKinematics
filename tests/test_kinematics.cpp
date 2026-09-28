@@ -113,9 +113,9 @@ MechanismTemplate cornerMechanism()
     mechanism.rockerAxis = QStringLiteral("{corner}_Rocker_AxisPoint");
     mechanism.damperInboard = QStringLiteral("{corner}_Damper_I");
     mechanism.damperOutboard = QStringLiteral("{corner}_Damper_O");
-    mechanism.antiRollRocker = QStringLiteral("{corner}_AntiRoll_O");
-    mechanism.antiRollArmOuter = QStringLiteral("{corner}_AntiRoll_I");
-    mechanism.antiRollArmPivot = QStringLiteral("{corner}_AntiRoll_Center");
+    mechanism.antiRollDropLinkOuter = QStringLiteral("{corner}_AntiRoll_O");
+    mechanism.antiRollArmEnd = QStringLiteral("{corner}_AntiRoll_I");
+    mechanism.antiRollArmRoot = QStringLiteral("{corner}_AntiRoll_Center");
     return mechanism;
 }
 
@@ -193,6 +193,75 @@ HardpointTable rearAxle()
     return mirrorHardpoints(corner, {}, MirrorSpec{}).table;
 }
 
+/// The front left corner with a bearing on its anti-roll bar, @p along from the
+/// arm root: the second point that says where the bar's axis runs.
+HardpointTable frontLeftCornerWithBearing(const Vec3& along)
+{
+    HardpointTable table = frontLeftCorner();
+    const Hardpoint* root = table.find(QStringLiteral("F_AntiRoll_Center"));
+    table.points.push_back(make("F_AntiRoll_Bearing", root->coord[0] + along.x,
+                                root->coord[1] + along.y, root->coord[2] + along.z));
+    return table;
+}
+
+MechanismTemplate cornerMechanismWithBearing()
+{
+    MechanismTemplate mechanism = cornerMechanism();
+    mechanism.antiRollBearing = QStringLiteral("{corner}_AntiRoll_Bearing");
+    return mechanism;
+}
+
+/// The corner with no rocker at all, and its anti-roll bar's drop link picked
+/// up at @p pickup on the body @p mount names -- the way a bar is hung straight
+/// off the wheel. The bar sits low and across the car, its arm pointing
+/// forward, so the drop link runs outboard to the pickup.
+MechanismTemplate cornerMechanismWithDropLinkOn(DropLinkMount mount)
+{
+    MechanismTemplate mechanism = cornerMechanism();
+    for (QString* rocker : { &mechanism.pushrodOuter, &mechanism.pushrodInner,
+                             &mechanism.rockerPivot, &mechanism.rockerAxis,
+                             &mechanism.damperInboard, &mechanism.damperOutboard })
+        rocker->clear();
+    mechanism.antiRollMount = mount;
+    return mechanism;
+}
+
+HardpointTable frontLeftCornerWithDropLinkAt(const Vec3& pickup)
+{
+    HardpointTable table = frontLeftCorner();
+    for (Hardpoint& point : table.points) {
+        Vec3 at;
+        if (point.name == QLatin1String("F_AntiRoll_O")) at = pickup;
+        else if (point.name == QLatin1String("F_AntiRoll_I")) at = Vec3(30.0, 300.0, 230.0);
+        else if (point.name == QLatin1String("F_AntiRoll_Center")) at = Vec3(-150.0, 300.0, 230.0);
+        else continue;
+        point.coord[0] = at.x;
+        point.coord[1] = at.y;
+        point.coord[2] = at.z;
+    }
+    return table;
+}
+
+SweepResult rollSweep(const AxleSolver& axle)
+{
+    SweepSpec spec;
+    spec.kind = SweepKind::Roll;
+    spec.from = -2.0;
+    spec.to = 2.0;
+    spec.steps = 21;
+    return runSweep(axle, spec);
+}
+
+SweepResult bumpSweep(const AxleSolver& axle)
+{
+    SweepSpec spec;
+    spec.kind = SweepKind::Bump;
+    spec.from = -30.0;
+    spec.to = 30.0;
+    spec.steps = 25;
+    return runSweep(axle, spec);
+}
+
 CornerSolver bindTo(const HardpointTable& table)
 {
     QString error;
@@ -261,6 +330,7 @@ private slots:
     void anAxleSortsItsTwoSidesByWhereTheyAre();
     void aBumpSweepMovesBothWheelsTheSameWay();
     void aRollSweepMovesThemOppositeWaysAndTwistsTheBar();
+    void theAssembledIntervalStopsWhereTheMechanismJams();
     void theRollCentreIsOnTheCentrelineWhenTheAxleIsSymmetric();
     void theInstantCentreIsWhereTheArmPlanesCross();
     void theRollAxisRunsThroughEveryAxlesRollCentre();
@@ -269,6 +339,7 @@ private slots:
     void camberToGroundPartsFromCamberByTheRollAngle();
     void aSteerSweepChangesToeAndNotRideHeight();
     void theCsvHasOneRowPerStepAndSaysNothingAboutWhatDidNotSolve();
+    void severalAxlesShareOneCsvSideBySide();
     void theShippedTemplateSolvesTheCornerItDescribes();
 
     // ---- Ackermann ------------------------------------------------------
@@ -290,6 +361,13 @@ private slots:
 
     void aCurveIsNotStretchedPastWhatItsUnitCanSay();
     void whichSidesAPlotDrawsRoundTrips();
+
+    // ---- the anti-roll bar ----------------------------------------------
+    void aBearingAcrossTheCarGivesTheAxisBothArmRootsGive();
+    void aBarBentInboardOfItsBearingsStillReadsNoTwistInBump();
+    void aDropLinkNeedNotHangOffARocker();
+    void aDropLinkOnTheRockerNeedsARocker();
+    void aWorkbookWithTheOldAntiRollNamesSolvesUnderTheNewTemplate();
 };
 
 void TestKinematics::rotatingAboutAnAxisKeepsTheDistanceToIt()
@@ -432,7 +510,7 @@ void TestKinematics::instantiationFillsInTheCornerAndTheMirror()
     const MechanismTemplate mirrored =
         instantiateMechanism(cornerMechanism(), QStringLiteral("R"), true, MirrorSpec{});
     QCOMPARE(mirrored.lowerOuter, QStringLiteral("R_LCA_O_M"));
-    QCOMPARE(mirrored.antiRollArmPivot, QStringLiteral("R_AntiRoll_Center_M"));
+    QCOMPARE(mirrored.antiRollArmRoot, QStringLiteral("R_AntiRoll_Center_M"));
 }
 
 void TestKinematics::aTableMissingACornerIsAbsentRatherThanBroken()
@@ -992,6 +1070,42 @@ void TestKinematics::aBumpSweepMovesBothWheelsTheSameWay()
     QVERIFY(std::abs(middle->leftInstallationRatio - middle->rightInstallationRatio) < 1e-6);
 }
 
+void TestKinematics::theAssembledIntervalStopsWhereTheMechanismJams()
+{
+    // Samples out of order, as a sweep from + to - hands them over.
+    const auto sample = [](double input, bool left, bool right) {
+        AxleSample s;
+        s.input = input;
+        s.left.valid = left;
+        s.right.valid = right;
+        return s;
+    };
+    SweepResult result;
+    result.samples = { sample(3.0, true, true),   sample(2.0, true, true),
+                       sample(1.0, true, true),   sample(0.0, true, true),
+                       sample(-1.0, true, true),  sample(-2.0, true, false),
+                       sample(-3.0, true, true),  sample(4.0, false, false) };
+
+    // One side letting go is the end of it, and a sample that happens to
+    // assemble again beyond the gap is on the far side of a jam.
+    std::optional<SweepInterval> interval = assembledInterval(result);
+    QVERIFY(interval.has_value());
+    QCOMPARE(interval->low, -1.0);
+    QCOMPARE(interval->high, 3.0);
+
+    // An axle with one corner is not held to the corner it has not got.
+    for (AxleSample& s : result.samples) s.right.valid = false;
+    interval = assembledInterval(result);
+    QVERIFY(interval.has_value());
+    QCOMPARE(interval->low, -3.0);
+    QCOMPARE(interval->high, 3.0);
+
+    // Nothing to measure from when the design position does not assemble.
+    result.samples = { sample(0.0, false, false), sample(1.0, true, true) };
+    QVERIFY(!assembledInterval(result).has_value());
+    QVERIFY(!assembledInterval(SweepResult{}).has_value());
+}
+
 void TestKinematics::aRollSweepMovesThemOppositeWaysAndTwistsTheBar()
 {
     const AxleSolver axle =
@@ -1348,6 +1462,54 @@ void TestKinematics::theCsvHasOneRowPerStepAndSaysNothingAboutWhatDidNotSolve()
     QVERIFY(!refused.warnings.isEmpty());
     const QList<QByteArray> refusedLines = sweepToCsv(refused).split('\n');
     QVERIFY(refusedLines[1].contains(",,,,"));
+}
+
+void TestKinematics::severalAxlesShareOneCsvSideBySide()
+{
+    const AxleSolver front =
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{});
+    const AxleSolver rear =
+        AxleSolver::build(cornerMechanism(), rearCorner(), rearAxle(), MirrorSpec{});
+
+    SweepSpec spec;
+    spec.kind = SweepKind::Bump;
+    spec.from = -10.0;
+    spec.to = 10.0;
+    spec.steps = 5;
+    const SweepResult frontSweep = runSweep(front, spec);
+    const SweepResult rearSweep = runSweep(rear, spec);
+    QCOMPARE(frontSweep.axleToken, QStringLiteral("F"));
+
+    // One axle with both wheels is the single-axle export, byte for byte.
+    QCOMPARE(sweepsToCsv({ frontSweep }, SweepSides::Both), sweepToCsv(frontSweep));
+
+    // Two are side by side after one input column, each named after its axle.
+    const QList<QByteArray> lines =
+        sweepsToCsv({ frontSweep, rearSweep }, SweepSides::Both).split('\n');
+    QCOMPARE(lines.size(), 7);
+    const QByteArray header = lines.first();
+    QVERIFY(header.startsWith("Wheel travel [mm],Front travel_left [mm]"));
+    QVERIFY(header.contains(",Rear camber_right [deg]"));
+    QVERIFY(header.contains(",Front roll_centre_height [mm]"));
+    QVERIFY(header.contains(",Rear ackermann [%]"));
+    QCOMPARE(header.count("Wheel travel"), 1);
+    const int columns = header.count(',') + 1;
+    QCOMPARE(columns, 1 + 2 * (2 * 13 + 4));
+    for (int row = 1; row <= 5; ++row) QCOMPARE(lines[row].count(',') + 1, columns);
+
+    // A wheel that is not shown has no columns; the axle-wide ones stay.
+    const QByteArray leftOnly =
+        sweepsToCsv({ frontSweep, rearSweep }, SweepSides::Left).split('\n').first();
+    QVERIFY(leftOnly.contains("Rear camber_left [deg]"));
+    QVERIFY(!leftOnly.contains("_right"));
+    QVERIFY(leftOnly.contains("Rear roll_centre_height [mm]"));
+
+    // A sweep that has nothing in it -- a steer sweep of an unsteered axle --
+    // takes no columns, and with nothing at all there is nothing to write.
+    SweepResult refused;
+    refused.axleToken = QStringLiteral("R");
+    QCOMPARE(sweepsToCsv({ frontSweep, refused }, SweepSides::Both), sweepToCsv(frontSweep));
+    QVERIFY(sweepsToCsv({ refused }, SweepSides::Both).isEmpty());
 }
 
 void TestKinematics::theShippedTemplateSolvesTheCornerItDescribes()
@@ -1741,6 +1903,181 @@ void TestKinematics::whichSidesAPlotDrawsRoundTrips()
     QVERIFY(sweepMeasureIsPerSide(SweepMeasure::CamberToGround));
     QCOMPARE(sweepMeasureFromKey(sweepMeasureKey(SweepMeasure::CamberToGround)),
              SweepMeasure::CamberToGround);
+}
+
+void TestKinematics::aBearingAcrossTheCarGivesTheAxisBothArmRootsGive()
+{
+    // The bearing inboard of the arm root, straight across the car: the axis it
+    // gives is the one the two arm roots give, pointing the other way, and the
+    // bar has to read exactly the same either way.
+    const AxleSolver roots =
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{});
+    const HardpointTable table =
+        mirrorHardpoints(frontLeftCornerWithBearing(Vec3(0.0, -100.0, 0.0)), {}, MirrorSpec{})
+            .table;
+    const AxleSolver bearings =
+        AxleSolver::build(cornerMechanismWithBearing(), frontCorner(), table, MirrorSpec{});
+    QVERIFY(bearings.left() && bearings.right());
+    QVERIFY(bearings.left()->antiRollAxisFromBearing());
+    QVERIFY(bearings.right()->antiRollAxisFromBearing());
+    QVERIFY(!roots.left()->antiRollAxisFromBearing());
+
+    const SweepResult fromRoots = rollSweep(roots);
+    const SweepResult fromBearings = rollSweep(bearings);
+    QVERIFY2(fromBearings.warnings.isEmpty(),
+             qPrintable(fromBearings.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(fromBearings.samples.size(), fromRoots.samples.size());
+    for (std::size_t i = 0; i < fromRoots.samples.size(); ++i) {
+        QVERIFY(fromBearings.samples[i].hasAntiRoll);
+        QVERIFY(std::abs(fromBearings.samples[i].antiRollTwist
+                         - fromRoots.samples[i].antiRollTwist)
+                < 1e-9);
+    }
+}
+
+void TestKinematics::aBarBentInboardOfItsBearingsStillReadsNoTwistInBump()
+{
+    // Each side's axis runs forward, down and inboard from its arm root: a bar
+    // whose middle is not on the line between the arms. The two sides' axes are
+    // mirror images, not one line, and it is the bearings alone that say so.
+    const HardpointTable table =
+        mirrorHardpoints(frontLeftCornerWithBearing(Vec3(30.0, -100.0, -20.0)), {}, MirrorSpec{})
+            .table;
+    const AxleSolver axle =
+        AxleSolver::build(cornerMechanismWithBearing(), frontCorner(), table, MirrorSpec{});
+    QVERIFY2(axle.warnings().isEmpty(), qPrintable(axle.warnings().join(QStringLiteral("; "))));
+
+    // Both arms turn together over a bump. Measured about opposite directions
+    // they would read as twisting against each other; this is the check that
+    // the two sides agree which way round their axes point.
+    const SweepResult bump = bumpSweep(axle);
+    QVERIFY2(bump.warnings.isEmpty(), qPrintable(bump.warnings.join(QStringLiteral("; "))));
+    for (const AxleSample& sample : bump.samples) {
+        QVERIFY(sample.hasAntiRoll);
+        QVERIFY(std::abs(sample.antiRollTwist) < 1e-6);
+    }
+
+    // In roll the bar twists, symmetrically, and not by what a straight bar
+    // across the car would: the axis the bearings give is the one used.
+    const SweepResult roll = rollSweep(axle);
+    const SweepResult straight = rollSweep(
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{}));
+    QVERIFY2(roll.warnings.isEmpty(), qPrintable(roll.warnings.join(QStringLiteral("; "))));
+    const AxleSample* one = roll.nearest(2.0);
+    const AxleSample* other = roll.nearest(-2.0);
+    QVERIFY(one && other);
+    QVERIFY(std::abs(one->antiRollTwist) > 1e-3);
+    QVERIFY(std::abs(one->antiRollTwist + other->antiRollTwist) < 1e-6);
+    QVERIFY(std::abs(one->antiRollTwist - straight.nearest(2.0)->antiRollTwist) > 1e-3);
+}
+
+void TestKinematics::aDropLinkNeedNotHangOffARocker()
+{
+    // Where the drop link picks up on each body, and what else on that body it
+    // has to stay a fixed distance from.
+    struct Case {
+        DropLinkMount mount;
+        Vec3 pickup;
+        Vec3 (*carrier)(const CornerPose&);
+    };
+    const Case cases[] = {
+        { DropLinkMount::Upright, Vec3(30.0, 545.0, 200.0),
+          [](const CornerPose& pose) { return pose.wheelCenter; } },
+        { DropLinkMount::UpperArm, Vec3(30.0, 480.0, 290.0),
+          [](const CornerPose& pose) { return pose.upperOuter; } },
+        { DropLinkMount::LowerArm, Vec3(30.0, 480.0, 115.0),
+          [](const CornerPose& pose) { return pose.lowerOuter; } },
+    };
+
+    for (const Case& test : cases) {
+        const MechanismTemplate mechanism = cornerMechanismWithDropLinkOn(test.mount);
+        QVERIFY(!mechanism.hasRocker());
+        QVERIFY(mechanism.hasAntiRoll());
+
+        const HardpointTable table = frontLeftCornerWithDropLinkAt(test.pickup);
+        QString error;
+        const std::optional<CornerSolver> solver = CornerSolver::bind(
+            instantiateMechanism(mechanism, QStringLiteral("F"), false, MirrorSpec{}), table,
+            &error);
+        QVERIFY2(solver, qPrintable(error));
+
+        const CornerPose& design = solver->designPose();
+        const CornerPose bump = solver->poseAtWheelTravel(25.0);
+        const CornerPose droop = solver->poseAtWheelTravel(-25.0);
+        QVERIFY(bump.valid && droop.valid);
+        QVERIFY(bump.hasAntiRoll);
+        QVERIFY(!bump.hasDamper);
+
+        // The arm turns one way in bump and the other in droop.
+        QVERIFY(std::abs(bump.antiRollArmAngle) > 1e-3);
+        QVERIFY(bump.antiRollArmAngle * droop.antiRollArmAngle < 0.0);
+
+        const double link = distance(design.antiRollDropLinkOuter, design.antiRollArmEnd);
+        const double reach = distance(design.antiRollDropLinkOuter, test.carrier(design));
+        for (const CornerPose* pose : { &bump, &droop }) {
+            // The drop link is a link, and its upper end rides the body it is on.
+            QVERIFY(std::abs(distance(pose->antiRollDropLinkOuter, pose->antiRollArmEnd) - link)
+                    < 1e-6);
+            QVERIFY(std::abs(distance(pose->antiRollDropLinkOuter, test.carrier(*pose)) - reach)
+                    < 1e-6);
+        }
+    }
+
+    // And across an axle it is still a bar: nothing in bump, twist in roll.
+    const AxleSolver axle = AxleSolver::build(
+        cornerMechanismWithDropLinkOn(DropLinkMount::Upright), frontCorner(),
+        mirrorHardpoints(frontLeftCornerWithDropLinkAt(Vec3(30.0, 545.0, 200.0)), {},
+                         MirrorSpec{})
+            .table,
+        MirrorSpec{});
+    for (const AxleSample& sample : bumpSweep(axle).samples) {
+        QVERIFY(sample.hasAntiRoll);
+        QVERIFY(std::abs(sample.antiRollTwist) < 1e-6);
+    }
+    QVERIFY(std::abs(rollSweep(axle).nearest(2.0)->antiRollTwist) > 1e-3);
+}
+
+void TestKinematics::aDropLinkOnTheRockerNeedsARocker()
+{
+    // The same corner with the mount left at the rocker it does not have: there
+    // is nothing for the drop link to ride, so there is no bar -- and the rest
+    // of the corner still solves.
+    const MechanismTemplate mechanism = cornerMechanismWithDropLinkOn(DropLinkMount::Rocker);
+    QVERIFY(!mechanism.hasAntiRoll());
+
+    QString error;
+    const std::optional<CornerSolver> solver = CornerSolver::bind(
+        instantiateMechanism(mechanism, QStringLiteral("F"), false, MirrorSpec{}),
+        frontLeftCornerWithDropLinkAt(Vec3(30.0, 545.0, 200.0)), &error);
+    QVERIFY2(solver, qPrintable(error));
+    QVERIFY(!solver->designPose().hasAntiRoll);
+}
+
+void TestKinematics::aWorkbookWithTheOldAntiRollNamesSolvesUnderTheNewTemplate()
+{
+    // The shipped template names the bar's points {corner}_ARB_*, and this
+    // workbook still says F_AntiRoll_*. It is read through the former names, and
+    // the bar is the same bar the old names always described.
+    const LinkageTemplate templ = builtinLinkageTemplate();
+    QVERIFY(templ.mechanism.antiRollArmRoot != cornerMechanism().antiRollArmRoot);
+
+    const AxleSolver shipped =
+        AxleSolver::build(templ.mechanism, templ.corners.front(), frontAxle(), MirrorSpec{});
+    QVERIFY2(shipped.warnings().isEmpty(),
+             qPrintable(shipped.warnings().join(QStringLiteral("; "))));
+    QCOMPARE(shipped.left()->mechanism().antiRollArmRoot, QStringLiteral("F_AntiRoll_Center"));
+    QCOMPARE(shipped.right()->mechanism().antiRollArmRoot,
+             mirroredName(QStringLiteral("F_AntiRoll_Center"), MirrorSpec{}));
+
+    const SweepResult under = rollSweep(shipped);
+    const SweepResult asWritten = rollSweep(
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{}));
+    QCOMPARE(under.samples.size(), asWritten.samples.size());
+    for (std::size_t i = 0; i < under.samples.size(); ++i) {
+        QVERIFY(under.samples[i].hasAntiRoll);
+        QVERIFY(std::abs(under.samples[i].antiRollTwist - asWritten.samples[i].antiRollTwist)
+                < 1e-9);
+    }
 }
 
 QTEST_MAIN(TestKinematics)

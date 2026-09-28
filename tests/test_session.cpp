@@ -91,6 +91,7 @@ SimulationRequest bumpAt(double position)
 {
     SimulationRequest request;
     request.axle = QStringLiteral("F");
+    request.sweptAxles = { QStringLiteral("F") };
     request.position = position;
     request.simulating = true;
     return request;
@@ -299,12 +300,13 @@ void TestSession::theSweepIsSkippedWhenNotWantedButThePoseIsNot()
     request.sweepWanted = false;
     runner.runSweep(request);
     runner.pose(request);
-    QVERIFY(runner.sweep().isEmpty());
+    QVERIFY(runner.sweeps().empty());
     QVERIFY(!runner.currentPose().isEmpty());
 
     request.sweepWanted = true;
     runner.runSweep(request);
-    QVERIFY(!runner.sweep().isEmpty());
+    QCOMPARE(runner.sweeps().size(), std::size_t(1));
+    QVERIFY(!runner.sweeps().front().isEmpty());
 
     // Not simulating is the table's own coordinates, which is no pose at all.
     request.simulating = false;
@@ -340,7 +342,7 @@ void TestSession::theCascadeAnnouncesTheAxlesBeforeTheSweep()
     QCOMPARE(steps, QStringList({ QStringLiteral("parts"), QStringLiteral("axles"),
                                   QStringLiteral("sweep"), QStringLiteral("pose"),
                                   QStringLiteral("wheels"), QStringLiteral("resolved") }));
-    QVERIFY(!session.simulation().sweep().isEmpty());
+    QCOMPARE(session.simulation().sweeps().size(), std::size_t(1));
     QVERIFY(!session.simulation().currentPose().isEmpty());
 }
 

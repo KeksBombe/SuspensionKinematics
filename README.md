@@ -266,8 +266,25 @@ clearance off its surface, which is worth doing when the geometry is the chassis
 on its own. The targets are kept in the project, so reopening the dialog starts
 where you left it.
 
-The rocker, pushrod inner end, damper and anti-roll bar are not generated. They
-are packaging, not a consequence of vehicle targets; place them with Add Point.
+The **pushrod, rocker, damper and anti-roll bar** are generated too, from a few
+placement inputs per axle:
+
+- the pushrod pickup, on the wishbone the template's `pushrod.mount` names — how
+  far along it from the ball joint, and how far above its plane;
+- the rocker pivot's position (its axis runs along the car) and its arm to the
+  pushrod, which the pushrod meets square;
+- the damper arm's angle from the pushrod's, the damper's length, and the
+  **installation ratio** — the one real target here. The damper's arm on the
+  rocker is sized so that ratio comes out exactly at design, and the damper is
+  laid square to its arm so that bump closes it;
+- the anti-roll bar by its four points (see *The anti-roll bar* under Parts):
+  the drop link's pickup on the rocker, or on the body the template's
+  `antiRollBar.mount` names, the drop link's length, the bar's arm, and the
+  bearing's inset.
+
+Each group has its own switch per axle. Untick it to keep a rocker you placed by
+hand exactly where it is. A bar that hangs off the rocker is not generated
+without one, and the dialog says so.
 
 ### The configuration table
 
@@ -390,6 +407,16 @@ each part is built a second time with every name put through **your** mirror rul
 (Hardpoints ▸ Mirror), so whatever convention your workbook uses is the one used
 here, and `{side}` in a label becomes `left` or `right`.
 
+A segment whose **two ends are both fixed to the chassis** is not drawn. The edge
+that closes a wishbone's A runs from one inboard pivot to the other, and there is
+no member there: both ends are bolted to the frame. So the arm is drawn as the two
+legs it is, while the chain stays closed — that is the topology, and it is what
+the solver and the configuration table are both built on. It follows what each
+point is set to in the hardpoint table — **To body** — rather than which part it belongs to, so a rocker
+axis and a pair of anti-roll bar pivots are answered the same way, and a point
+nobody has typed a type for yet is not taken for chassis. The markers themselves
+are untouched: still drawn, still labelled, still selected and dragged.
+
 `"optional": true` on a part or a chain means *say nothing when these points are
 absent* — an anti-roll bar, a rocker axis point. A corner or a side with not one
 of its points in the table is skipped silently, so a workbook holding one axle,
@@ -418,16 +445,63 @@ rows that named it along.
 > joint. If yours is mounted on the upright instead, delete the `pushRodPickup`
 > part and add `{corner}_PushRod_O` to the upright's first chain.
 
+### The anti-roll bar
+
+The bar is four points per corner, named for one side and mirrored like every
+other point. Name them this way in CAD:
+
+| Point | What it is | Needed |
+|---|---|---|
+| `{corner}_ARB_DropLink_O` | the drop link's upper end, on the body the mount names (the rocker, as shipped) | yes |
+| `{corner}_ARB_ArmEnd` | the drop link's lower end, on the bar's arm | yes |
+| `{corner}_ARB_ArmRoot` | where the arm meets the bar: a point **on the bar's axis of rotation** | yes |
+| `{corner}_ARB_Bearing` | a second point on that axis, fixed to the chassis — the centre of the bar's bearing | no |
+
+**Where the drop link picks up** is `mechanism.antiRollBar.mount` in the
+template: `rocker` (the default), `upperArm`, `lowerArm` or `upright`, the same
+words the pushrod's mount uses. Only `rocker` needs a rocker; a bar hung straight
+off the wheel solves without one.
+
+**The bar's axis** is the line through `ArmRoot` and `Bearing` on each side when
+the bearing is named, so a bar that is bent inboard of its bearings is modelled
+the way it is built. Without a bearing the bar is taken to be straight from the
+left `ArmRoot` to the right one, which needs both sides of the axle; one side on
+its own is assumed to run along y.
+
+**Anti-roll bar twist** in the analysis dock is the left arm's rotation about
+its axis minus the right arm's, so it is zero in pure bump — both arms turn
+together and the bar only turns in its bearings — and grows with roll.
+
+Workbooks measured before these names keep working. The template's
+`mechanism.formerNames` says what each point used to be called, and a table that
+has only the old name is read through it, point by point, so the CAD can be
+renamed at any pace:
+
+| Now | Before |
+|---|---|
+| `{corner}_ARB_DropLink_O` | `{corner}_AntiRoll_O` |
+| `{corner}_ARB_ArmEnd` | `{corner}_AntiRoll_I` |
+| `{corner}_ARB_ArmRoot` | `{corner}_AntiRoll_Center` |
+
+A project made before this keeps its own `linkage/template.json`, which still
+names the old points and still reads. To move a project over to the new names,
+use **Linkage ▸ Reset to Built-in Template** — which replaces that file, so any
+parts you added to it by hand have to be added again.
+
 ## Analysis
 
 The analysis dock (`Ctrl+K`) puts an axle through **bump**, **roll** or
 **steer** and plots what it does: camber (to the body, and to the ground), toe,
 caster, kingpin inclination, scrub radius, trail, track and wheelbase change,
 damper travel and installation ratio, the roll centre, the anti-roll bar's twist
-and Ackermann. **Curves** picks as many plots as you want. Beside it, **Both
-sides / Left only / Right only** says which wheels they draw: on a symmetric car
-the two are mirror images — the left wheel at +10 mm of rack is the right wheel
-at −10 — so one of them is often all there is to read.
+and Ackermann. **Curve** picks the one plot. Beside it, **Show** says what is
+drawn in it, the way Lotus does it: tick **Front** and **Rear** to overlay both
+axles in one colour each, **Left** and **Right** for the wheels, solid and dashed.
+Any combination works. On a symmetric car the two sides are mirror images — the
+left wheel at +10 mm of rack is the right wheel at −10 — so one of them is often
+all there is to read. **Axle** is the one the position slider drives and the
+table under the plot reads out. **Export CSV** writes what is shown: every axle
+ticked, side by side, and only the wheels ticked.
 
 ### Static camber and toe
 

@@ -121,6 +121,21 @@ BodyCatalog bodyCatalog(const LinkageTemplate& templ)
 
 QString partBodyName(const PartTemplate& part) { return genericLabel(part); }
 
+std::vector<bool> groundedPoints(const HardpointTable& table, const HardpointConfigMap& config)
+{
+    std::vector<bool> grounded(table.size(), false);
+    if (config.isEmpty()) return grounded;
+
+    for (std::size_t row = 0; row < table.points.size(); ++row) {
+        const auto entry = config.constFind(table.points[row].name);
+        // A point nobody has typed yet is not claimed to be anything, least of
+        // all ground.
+        if (entry == config.constEnd()) continue;
+        grounded[row] = entry->type == PointType::ToBody;
+    }
+    return grounded;
+}
+
 int renameBody(HardpointConfigMap& config, const QString& from, const QString& to)
 {
     if (from.isEmpty() || from == to) return 0;
@@ -325,7 +340,7 @@ HardpointConfigMap inferHardpointConfig(const HardpointTable& table, const Linka
     for (const CornerSpec& corner : corners) {
         for (int side = 0; side < 2; ++side) {
             const MechanismTemplate mechanism =
-                instantiateMechanism(templ.mechanism, corner.token, side == 1, mirror);
+                instantiateMechanism(templ.mechanism, corner.token, side == 1, mirror, table);
 
             grounded(mechanism.lowerFront);
             grounded(mechanism.lowerRear);
@@ -335,7 +350,8 @@ HardpointConfigMap inferHardpointConfig(const HardpointTable& table, const Linka
             grounded(mechanism.rockerPivot);
             grounded(mechanism.rockerAxis);
             grounded(mechanism.damperInboard);
-            grounded(mechanism.antiRollArmPivot);
+            grounded(mechanism.antiRollArmRoot);
+            grounded(mechanism.antiRollBearing);
 
             // Each of these is paired with the far end of its own member, which
             // is what says which of the two bodies at the joint is which.
@@ -344,8 +360,8 @@ HardpointConfigMap inferHardpointConfig(const HardpointTable& table, const Linka
             solved(mechanism.tieRodOutboard, mechanism.tieRodInboard);
             solved(mechanism.pushrodInner, mechanism.pushrodOuter);
             solved(mechanism.damperOutboard, mechanism.damperInboard);
-            solved(mechanism.antiRollRocker, mechanism.antiRollArmOuter);
-            solved(mechanism.antiRollArmOuter, mechanism.antiRollRocker);
+            solved(mechanism.antiRollDropLinkOuter, mechanism.antiRollArmEnd);
+            solved(mechanism.antiRollArmEnd, mechanism.antiRollDropLinkOuter);
 
             // The pushrod's outer end is the one place where what the template
             // draws and what the mechanism means come apart: a "pickup" member

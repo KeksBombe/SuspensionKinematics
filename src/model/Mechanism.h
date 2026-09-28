@@ -3,6 +3,7 @@
 #include "model/Hardpoint.h"
 #include "model/HardpointMirror.h"
 
+#include <QMap>
 #include <QString>
 #include <QStringList>
 
@@ -19,6 +20,24 @@ enum class PushrodMount { UpperArm, LowerArm, Upright };
 QString pushrodMountToString(PushrodMount mount);
 PushrodMount pushrodMountFromString(const QString& text,
                                     PushrodMount fallback = PushrodMount::UpperArm);
+
+/// Which body the anti-roll bar's drop link picks up on.
+///
+/// A rocker pickup is what a pushrod car usually does, and what the built-in
+/// template assumes. The others are the ways a bar is hung straight off the
+/// wheel -- a drop link to the upright, or to either wishbone -- and they need
+/// no rocker at all.
+enum class DropLinkMount { Rocker, UpperArm, LowerArm, Upright };
+
+QString dropLinkMountToString(DropLinkMount mount);
+DropLinkMount dropLinkMountFromString(const QString& text,
+                                      DropLinkMount fallback = DropLinkMount::Rocker);
+
+/// Point names a template used to use, keyed by the name it uses now -- both
+/// still carrying {corner}. A table that holds the old name and not the new one
+/// is read through the old one, which is how a workbook measured before a
+/// rename keeps working without anybody editing it.
+using FormerNames = QMap<QString, QString>;
 
 /// Which hardpoint plays which role in one corner, by name.
 ///
@@ -86,13 +105,28 @@ struct MechanismTemplate {
     QString damperInboard;
     QString damperOutboard;
 
-    /// The anti-roll bar, all three optional. @ref antiRollRocker is the point
-    /// on the rocker the drop link hangs off, @ref antiRollArmOuter is the drop
-    /// link's other end on the bar's arm, and @ref antiRollArmPivot is where
-    /// that arm meets the bar itself.
-    QString antiRollRocker;
-    QString antiRollArmOuter;
-    QString antiRollArmPivot;
+    /// The anti-roll bar, all of it optional.
+    ///
+    /// @ref antiRollDropLinkOuter is the drop link's upper end, on the body
+    /// @ref antiRollMount names. @ref antiRollArmEnd is its lower end, on the
+    /// bar's arm, and @ref antiRollArmRoot is where that arm meets the bar --
+    /// a point on the bar's axis of rotation.
+    ///
+    /// @ref antiRollBearing is a second point on that axis, rigid with the
+    /// chassis: the bar's bearing. With it named, the axis is the line through
+    /// the arm root and the bearing, and each side has its own. Without it the
+    /// bar is taken to be straight between the two arm roots, which needs both
+    /// sides of the axle -- and one side on its own falls back to the y axis.
+    DropLinkMount antiRollMount = DropLinkMount::Rocker;
+    QString antiRollDropLinkOuter;
+    QString antiRollArmEnd;
+    QString antiRollArmRoot;
+    QString antiRollBearing;
+
+    /// Names the points above used to have, for a table that still uses them.
+    /// Not a role: what it maps is names, and a template's parts are read
+    /// through it too.
+    FormerNames formerNames;
 
     /// Nothing to solve without a lower wishbone and an upright to hang off it.
     bool isEmpty() const;
@@ -114,6 +148,21 @@ struct MechanismTemplate {
 /// does. That is deliberate: a half-mirrored table should solve the half it has.
 MechanismTemplate instantiateMechanism(const MechanismTemplate& templ, const QString& cornerToken,
                                        bool mirrored, const MirrorSpec& mirror);
+
+/// The same, with each name looked up in @p table: a name the table does not
+/// hold, whose @ref MechanismTemplate::formerNames entry it does, comes back as
+/// that former name. Everything else is exactly what the overload above gives.
+MechanismTemplate instantiateMechanism(const MechanismTemplate& templ, const QString& cornerToken,
+                                       bool mirrored, const MirrorSpec& mirror,
+                                       const HardpointTable& table);
+
+/// One point name instantiated the way instantiateMechanism() does it: {corner}
+/// filled in, mirrored for the far side, and read through its former name when
+/// @p table has only that. Empty for an empty pattern, or one the mirror rule
+/// does not apply to.
+QString resolvePointName(const QString& pattern, const QString& cornerToken, bool mirrored,
+                         const MirrorSpec& mirror, const FormerNames& formerNames,
+                         const HardpointTable& table);
 
 /// How much of @p mechanism @p table actually holds: the names it is missing,
 /// and whether the ones it needs are all there.

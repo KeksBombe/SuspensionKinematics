@@ -28,6 +28,10 @@ constexpr int kPlanDelayMs = 120;
 constexpr int kFront = 0;
 constexpr int kRear = 1;
 
+/// What a number in the axle columns is measured in. Short, because it is
+/// written once per row of the table below.
+enum Unit { Mm, Deg, Ratio };
+
 AxlePosition positionOf(int column) { return column == kFront ? AxlePosition::Front : AxlePosition::Rear; }
 
 QString bulleted(const QStringList& lines)
@@ -222,80 +226,138 @@ QWidget* GenerateDialog::buildTargets()
         double AxleDesign::*member;
         double minimum, maximum;
         int decimals;
-        bool degrees;
+        Unit unit;
         const char* tip;
     };
     const AxleSpec axle[] = {
-        { "Wheel", "Track", &AxleDesign::track, 100, 5000, 1, false,
+        { "Wheel", "Track", &AxleDesign::track, 100, 5000, 1, Mm,
           "Between the centres of the two contact patches." },
-        { nullptr, "Static camber", &AxleDesign::camber, -15, 15, 2, true,
+        { nullptr, "Static camber", &AxleDesign::camber, -15, 15, 2, Deg,
           "Negative leans the top of the wheel inboard." },
-        { nullptr, "Static toe", &AxleDesign::toe, -10, 10, 3, true,
+        { nullptr, "Static toe", &AxleDesign::toe, -10, 10, 3, Deg,
           "Positive points the front of the wheel inboard. Stated in the table by the point on "
           "the wheel's axis, which is the only way a hardpoint table can state it." },
-        { "Steering axis", "Caster", &AxleDesign::caster, -45, 45, 2, true,
+        { "Steering axis", "Caster", &AxleDesign::caster, -45, 45, 2, Deg,
           "Positive leans the top of the steering axis rearward." },
-        { nullptr, "Kingpin inclination", &AxleDesign::kingpinInclination, -45, 45, 2, true,
+        { nullptr, "Kingpin inclination", &AxleDesign::kingpinInclination, -45, 45, 2, Deg,
           "Positive leans the top of the steering axis inboard." },
-        { nullptr, "Scrub radius", &AxleDesign::scrubRadius, -300, 300, 1, false,
+        { nullptr, "Scrub radius", &AxleDesign::scrubRadius, -300, 300, 1, Mm,
           "At the ground. Positive puts the tyre outboard of the steering axis." },
-        { nullptr, "Mechanical trail", &AxleDesign::mechanicalTrail, -300, 300, 1, false,
+        { nullptr, "Mechanical trail", &AxleDesign::mechanicalTrail, -300, 300, 1, Mm,
           "Positive puts the contact patch behind the steering axis." },
         { "Instant centres", "Roll centre height", &AxleDesign::rollCentreHeight, -500, 1000, 1,
-          false, "The roll centre this axle's front-view instant centre is placed to give." },
-        { nullptr, "Front-view swing arm", &AxleDesign::frontViewSwingArm, 1, 1e7, 0, false,
+          Mm, "The roll centre this axle's front-view instant centre is placed to give." },
+        { nullptr, "Front-view swing arm", &AxleDesign::frontViewSwingArm, 1, 1e7, 0, Mm,
           "How far inboard of the contact patch the front-view instant centre is." },
-        { nullptr, "Anti-dive / anti-lift", &AxleDesign::antiPercent, -200, 300, 1, false,
+        { nullptr, "Anti-dive / anti-lift", &AxleDesign::antiPercent, -200, 300, 1, Mm,
           "Under braking: anti-dive on the front axle, anti-lift on the rear." },
-        { nullptr, "Side-view swing arm", &AxleDesign::sideViewSwingArm, 1, 1e7, 0, false,
+        { nullptr, "Side-view swing arm", &AxleDesign::sideViewSwingArm, 1, 1e7, 0, Mm,
           "How far from the contact patch the side-view instant centre is, toward the other "
           "axle." },
         { "Wishbones", "Upper ball joint above centre", &AxleDesign::upperJointHeight, -500, 500,
-          1, false, "On the steering axis, this far above the wheel centre." },
+          1, Mm, "On the steering axis, this far above the wheel centre." },
         { nullptr, "Lower ball joint below centre", &AxleDesign::lowerJointDrop, -500, 500, 1,
-          false, "On the steering axis, this far below the wheel centre. Also the radius the "
+          Mm, "On the steering axis, this far below the wheel centre. Also the radius the "
                  "outer tie rod end is put on." },
-        { nullptr, "Upper pivot line", &AxleDesign::upperPivotY, 0, 3000, 1, false,
+        { nullptr, "Upper pivot line", &AxleDesign::upperPivotY, 0, 3000, 1, Mm,
           "The upper chassis pivots' distance from the car's centreline, where there is no "
           "chassis to put them against." },
-        { nullptr, "Lower pivot line", &AxleDesign::lowerPivotY, 0, 3000, 1, false,
+        { nullptr, "Lower pivot line", &AxleDesign::lowerPivotY, 0, 3000, 1, Mm,
           "The lower chassis pivots' distance from the car's centreline." },
-        { nullptr, "Upper leg, forward sweep", &AxleDesign::upperForwardAngle, -79, 79, 1, true,
+        { nullptr, "Upper leg, forward sweep", &AxleDesign::upperForwardAngle, -79, 79, 1, Deg,
           "In top view, the angle the leg makes with a line straight across the car." },
-        { nullptr, "Upper leg, rearward sweep", &AxleDesign::upperRearwardAngle, -79, 79, 1, true, "" },
-        { nullptr, "Lower leg, forward sweep", &AxleDesign::lowerForwardAngle, -79, 79, 1, true, "" },
-        { nullptr, "Lower leg, rearward sweep", &AxleDesign::lowerRearwardAngle, -79, 79, 1, true, "" },
-        { "Steering", "Steering arm", &AxleDesign::steeringArm, -500, 500, 1, false,
+        { nullptr, "Upper leg, rearward sweep", &AxleDesign::upperRearwardAngle, -79, 79, 1, Deg, "" },
+        { nullptr, "Lower leg, forward sweep", &AxleDesign::lowerForwardAngle, -79, 79, 1, Deg, "" },
+        { nullptr, "Lower leg, rearward sweep", &AxleDesign::lowerRearwardAngle, -79, 79, 1, Deg, "" },
+        { "Steering", "Steering arm", &AxleDesign::steeringArm, -500, 500, 1, Mm,
           "From the wheel centre to the outer tie rod end, along the car. Positive puts the tie "
           "rod behind the wheel centre." },
-        { nullptr, "Ackermann offset", &AxleDesign::ackermann, -200, 200, 1, false,
+        { nullptr, "Ackermann offset", &AxleDesign::ackermann, -200, 200, 1, Mm,
           "How far inboard of the steering axis the outer tie rod end sits." },
         { nullptr, "Inner tie rod end, x offset", &AxleDesign::tieRodInboardOffsetX, -500, 500, 1,
-          false, "How far ahead of the outer end the inner end is put. It moves nothing in front "
+          Mm, "How far ahead of the outer end the inner end is put. It moves nothing in front "
                  "view, so it leaves the bump steer alone." },
+        { "Pushrod and rocker", "Pushrod pickup, along the arm", &AxleDesign::pushrodPickupInboard,
+          -500, 1000, 1, Mm,
+          "From the ball joint of the wishbone the linkage template mounts the pushrod on, toward "
+          "that wishbone's chassis pivots. A pushrod on the upright is placed by the lower "
+          "wishbone's numbers." },
+        { nullptr, "Pushrod pickup, above the arm", &AxleDesign::pushrodPickupHeight, -500, 500, 1,
+          Mm, "Off the wishbone's plane; negative is below it." },
+        { nullptr, "Rocker pivot, from centreline", &AxleDesign::rockerPivotY, 0, 3000, 1,
+          Mm, "" },
+        { nullptr, "Rocker pivot, height", &AxleDesign::rockerPivotZ, -500, 3000, 1,
+          Mm, "Above the ground." },
+        { nullptr, "Rocker pivot, ahead of the pickup", &AxleDesign::rockerPivotOffsetX, -1000,
+          1000, 1, Mm, "The rocker's axis runs along the car." },
+        { nullptr, "Rocker arm to the pushrod", &AxleDesign::rockerPushrodArm, 1, 1000, 1,
+          Mm, "The pushrod meets this arm square at design." },
+        { nullptr, "Damper arm, turned from the pushrod's", &AxleDesign::rockerDamperAngle, -180,
+          180, 1, Deg, "On the rocker, from the pushrod's arm to the damper's; positive "
+                                 "turns inboard." },
+        { nullptr, "Installation ratio", &AxleDesign::installationRatio, 0.05, 5, 3, Ratio,
+          "Damper compression per unit of bump at design. The damper's arm on the rocker is sized "
+          "so that this is met exactly." },
+        { nullptr, "Damper length", &AxleDesign::damperLength, 1, 2000, 1, Mm,
+          "Eye to eye at design. The damper is laid square to its arm, the way bump closes it." },
+        { "Anti-roll bar", "Drop link arm on the rocker", &AxleDesign::antiRollRockerArm, 1, 1000,
+          1, Mm, "When the template hangs the drop link off the rocker." },
+        { nullptr, "Drop link arm, turned from the pushrod's", &AxleDesign::antiRollRockerAngle,
+          -180, 180, 1, Deg, "On the rocker; positive turns inboard." },
+        { nullptr, "Drop link pickup, along the arm", &AxleDesign::antiRollPickupInboard, -500,
+          1000, 1, Mm,
+          "When the template hangs the drop link off a wishbone or the upright: from that "
+          "wishbone's ball joint toward its pivots." },
+        { nullptr, "Drop link length", &AxleDesign::dropLinkLength, 1, 1000, 1, Mm,
+          "" },
+        { nullptr, "Bar arm length", &AxleDesign::antiRollArmLength, -1000, 1000, 1,
+          Mm, "From the bar forward to the drop link; negative runs it rearward." },
+        { nullptr, "Bearing inboard of the arm", &AxleDesign::antiRollBearingInset, 1, 2000, 1,
+          Mm, "The bar's axis runs across the car, through its arm root and this "
+                             "bearing." },
+    };
+
+    // A switch opens some groups: whether the group is generated at all.
+    struct GroupSwitch {
+        const char* heading;
+        const char* label;
+        bool AxleDesign::*member;
+        const char* tip;
+    };
+    const GroupSwitch switches[] = {
+        { "Steering", "Driven by the steering rack", &AxleDesign::steered,
+          "Written into the template's corner, so that an axle generated without a rack is not "
+          "steered by one." },
+        { "Pushrod and rocker", "Generate the pushrod, rocker and damper",
+          &AxleDesign::generateRocker,
+          "Untick to keep a rocker placed by hand where it is: none of its points are touched." },
+        { "Anti-roll bar", "Generate the anti-roll bar", &AxleDesign::generateAntiRollBar,
+          "Its four points, by the definition and the drop link mount in the linkage template." },
     };
 
     for (const AxleSpec& spec : axle) {
         if (spec.heading) {
             addHeading(grid, &row, tr(spec.heading));
-            if (QLatin1String(spec.heading) == QLatin1String("Steering")) {
-                grid->addWidget(new QLabel(tr("Driven by the steering rack"), host), row, 0);
+            for (const GroupSwitch& group : switches) {
+                if (QLatin1String(group.heading) != QLatin1String(spec.heading)) continue;
+                grid->addWidget(new QLabel(tr(group.label), host), row, 0);
+                AxleFlag flag{ group.member, { nullptr, nullptr } };
                 for (int column = 0; column < 2; ++column) {
-                    m_steered[column] = new QCheckBox(host);
-                    m_steered[column]->setToolTip(
-                        tr("Written into the template's corner, so that an axle generated without "
-                           "a rack is not steered by one."));
-                    connect(m_steered[column], &QCheckBox::toggled, this,
+                    flag.box[column] = new QCheckBox(host);
+                    flag.box[column]->setToolTip(tr(group.tip));
+                    connect(flag.box[column], &QCheckBox::toggled, this,
                             &GenerateDialog::schedulePlan);
-                    grid->addWidget(m_steered[column], row, 1 + column, Qt::AlignCenter);
+                    grid->addWidget(flag.box[column], row, 1 + column, Qt::AlignCenter);
                 }
+                m_axleFlags.push_back(flag);
                 ++row;
             }
         }
         AxleNumber field{ spec.member, { nullptr, nullptr } };
         for (int column = 0; column < 2; ++column) {
             field.spin[column] = number(spec.minimum, spec.maximum, spec.decimals,
-                                        spec.degrees ? deg : mm, tr(spec.tip));
+                                        spec.unit == Deg ? deg : (spec.unit == Mm ? mm : QString()),
+                                        tr(spec.tip));
             grid->addWidget(field.spin[column], row, 1 + column);
         }
         auto* label = new QLabel(tr(spec.label), host);
@@ -375,7 +437,7 @@ void GenerateDialog::load(const DesignParameters& parameters)
     for (int column = 0; column < 2; ++column) {
         const AxleDesign& axle = parameters.axle(positionOf(column));
         for (const AxleNumber& field : m_axleNumbers) field.spin[column]->setValue(axle.*field.member);
-        m_steered[column]->setChecked(axle.steered);
+        for (const AxleFlag& flag : m_axleFlags) flag.box[column]->setChecked(axle.*flag.member);
         m_advised[column]->setCurrentIndex(m_advised[column]->findData(int(axle.advisedPivot)));
         const int corner = m_corner[column]->findData(axle.corner);
         m_corner[column]->setCurrentIndex(corner >= 0 ? corner : std::min(column, m_corner[column]->count() - 1));
@@ -398,7 +460,7 @@ DesignParameters GenerateDialog::parameters() const
         for (const AxleNumber& field : m_axleNumbers) axle.*field.member = field.spin[column]->value();
         axle.generate = m_generate[column]->isChecked();
         if (m_corner[column]->currentIndex() >= 0) axle.corner = m_corner[column]->currentData().toString();
-        axle.steered = m_steered[column]->isChecked();
+        for (const AxleFlag& flag : m_axleFlags) axle.*flag.member = flag.box[column]->isChecked();
         axle.advisedPivot = static_cast<DesignPivot>(m_advised[column]->currentData().toInt());
     }
     return parameters;

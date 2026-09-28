@@ -12,8 +12,16 @@ void SimulationRunner::bind(const LinkageTemplate& templ, const HardpointTable& 
 
 void SimulationRunner::runSweep(const SimulationRequest& request)
 {
-    const AxleSolver* axle = m_simulation.axleFor(request.axle);
-    m_sweep = (request.sweepWanted && axle) ? suspkin::runSweep(*axle, request.spec) : SweepResult{};
+    m_sweeps = request.sweepWanted ? sweepsFor(request) : std::vector<SweepResult>{};
+}
+
+std::vector<SweepResult> SimulationRunner::sweepsFor(const SimulationRequest& request) const
+{
+    std::vector<SweepResult> sweeps;
+    for (const QString& token : request.sweptAxles)
+        if (const AxleSolver* axle = m_simulation.axleFor(token))
+            sweeps.push_back(suspkin::runSweep(*axle, request.spec));
+    return sweeps;
 }
 
 void SimulationRunner::pose(const SimulationRequest& request)
@@ -30,7 +38,9 @@ QStringList SimulationRunner::status() const
     if (!m_simulation.note().isEmpty()) lines << m_simulation.note();
     // runSweep already carries the axle's own warnings, so they are not added
     // here a second time.
-    lines += m_sweep.warnings;
+    for (const SweepResult& sweep : m_sweeps)
+        for (const QString& warning : sweep.warnings)
+            if (!lines.contains(warning)) lines << warning;
     return lines;
 }
 

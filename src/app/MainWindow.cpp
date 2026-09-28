@@ -148,6 +148,9 @@ void MainWindow::buildHardpointDock()
     // refused anything that could not mean something.
     connect(model, &HardpointModel::configChanged, this, [this](int row) {
         m_session->hardpoints().captureConfig();
+        // A point that has just become -- or stopped being -- a chassis pivot
+        // changes what is drawn through it.
+        syncGroundedPoints();
         markDirty();
         const HardpointTable& table = hardpoints()->table();
         if (row >= 0 && row < static_cast<int>(table.points.size()))
@@ -245,7 +248,11 @@ void MainWindow::buildAnalysisDock()
         m_session->resolvePose();
         markDirty();
     });
-    connect(m_analysisPanel, &AnalysisPanel::measuresChanged, this, [this] { markDirty(); });
+    connect(m_analysisPanel, &AnalysisPanel::measureChanged, this, [this] { markDirty(); });
+    connect(m_analysisPanel, &AnalysisPanel::plotAxlesChanged, this, [this] {
+        m_session->runSweep();
+        markDirty();
+    });
     connect(m_analysisPanel, &AnalysisPanel::sidesChanged, this, [this] { markDirty(); });
     // How fast the animation runs and whether the parameters window is open
     // change nothing about the curve, but they are still the user's arrangement
@@ -255,7 +262,7 @@ void MainWindow::buildAnalysisDock()
     // The sweep is skipped while the dock is shut, so opening it is what asks
     // for one. Reopening a project restores the dock, and this catches that too.
     connect(m_analysisDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
-        if (visible && m_session->simulation().sweep().isEmpty()) m_session->runSweep();
+        if (visible && m_session->simulation().sweeps().empty()) m_session->runSweep();
     });
 }
 
@@ -279,6 +286,9 @@ void MainWindow::connectSession()
     // The status line shows the part count, and Undo and Redo say what they
     // would do: both follow.
     connect(m_session, &ProjectSession::resolved, this, &MainWindow::updateChrome);
+    // The configuration is refilled after the parts are resolved, and it is
+    // what says which of their segments run from the car to itself.
+    connect(m_session, &ProjectSession::resolved, this, &MainWindow::syncGroundedPoints);
     connect(m_session, &ProjectSession::historyChanged, this, &MainWindow::updateChrome);
 }
 
@@ -286,6 +296,7 @@ SimulationRequest MainWindow::simulationRequest() const
 {
     SimulationRequest request;
     request.axle = m_analysisPanel->axle();
+    request.sweptAxles = m_analysisPanel->sweptAxles();
     request.spec = m_analysisPanel->spec();
     request.position = m_analysisPanel->position();
     request.moveAllAxles = m_analysisPanel->movesAllAxles();
@@ -315,8 +326,13 @@ void MainWindow::showAxles()
 void MainWindow::showSweep()
 {
     const SimulationRunner& runner = m_session->simulation();
-    m_analysisPanel->setResult(runner.sweep());
+    m_analysisPanel->setResults(runner.sweeps());
     m_analysisPanel->setStatus(runner.status().join(QStringLiteral("\n")));
+}
+
+void MainWindow::syncGroundedPoints()
+{
+    m_viewport->setGroundedPoints(groundedPoints(hardpoints()->table(), hardpoints()->config()));
 }
 
 void MainWindow::showPose()

@@ -84,6 +84,21 @@ public:
     void clearLinkage();
     bool hasLinkage() const { return !m_linkage.isEmpty(); }
 
+    /// Which markers are bolted to the chassis, one flag per hardpoint, from
+    /// groundedPoints(). A segment with both ends in that set is left undrawn:
+    /// nothing joins two points that are both fixed to the car, and the closing
+    /// edge of a wishbone's A between its two pivots is a line across the frame
+    /// rather than a member. The points themselves are untouched -- they are
+    /// still drawn, still labelled and still picked.
+    ///
+    /// Flags for a table that is not the one on screen are ignored rather than
+    /// half-applied, as positions are, and setHardpoints() drops them for the
+    /// same reason it drops the parts.
+    void setGroundedPoints(const std::vector<bool>& grounded);
+    /// How many segments the linkage actually draws, which is what the parts
+    /// ask for less the ones the rule above takes out.
+    int drawnSegmentCount() const { return static_cast<int>(m_linkVertices.size()) / 2; }
+
     void setHardpointLabelsVisible(bool visible);
     bool hardpointLabelsVisible() const { return m_labelsVisible; }
 
@@ -272,6 +287,9 @@ private:
     Aabb m_wheelBounds;
 
     Linkage m_linkage;
+    /// One flag per hardpoint; empty when nobody has said, which draws
+    /// everything the parts name.
+    std::vector<bool> m_grounded;
     std::vector<QVector3D> m_linkVertices;
     std::vector<LinkRange> m_linkRanges;
     GpuLines m_gpuLines;

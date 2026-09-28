@@ -26,18 +26,6 @@ constexpr KindName kKindNames[] = {
 const QString kCornerToken = QStringLiteral("{corner}");
 const QString kSideToken = QStringLiteral("{side}");
 
-/// A point name with its corner filled in, and then, for the far side, put
-/// through the mirror rule. An empty return means the rule does not apply to
-/// this name, which is the caller's signal that there is no far side for it.
-QString instantiate(const QString& pattern, const QString& corner, bool mirrored,
-                    const MirrorSpec& mirror)
-{
-    QString name = pattern;
-    name.replace(kCornerToken, corner);
-    if (!mirrored) return name;
-    return mirroredName(name, mirror);
-}
-
 } // namespace
 
 QString partKindToString(PartKind kind)
@@ -89,7 +77,7 @@ struct Instance {
 
 Instance instantiatePart(const PartTemplate& source, const HardpointTable& table,
                          const CornerSpec& corner, bool mirrored, const MirrorSpec& mirror,
-                         const QString& sideLabel)
+                         const FormerNames& formerNames, const QString& sideLabel)
 {
     // A part that spells its points out is drawn through exactly those names:
     // no corner to substitute, no far side to mirror onto.
@@ -118,7 +106,9 @@ Instance instantiatePart(const PartTemplate& source, const HardpointTable& table
         for (const QString& pattern : chain.points) {
             ++instance.wanted;
             const QString name =
-                literal ? pattern : instantiate(pattern, corner.token, mirrored, mirror);
+                literal ? pattern
+                        : resolvePointName(pattern, corner.token, mirrored, mirror, formerNames,
+                                           table);
             const int index = name.isEmpty() ? -1 : table.indexOf(name);
             if (index < 0) {
                 complete = false;
@@ -172,9 +162,9 @@ Linkage buildLinkage(const LinkageTemplate& templ, const HardpointTable& table,
             int found = 0;
             for (const PartTemplate& source : templ.parts) {
                 if (!source.perCorner) continue; // drawn once, below
-                instances.push_back(
-                    instantiatePart(source, table, corner, mirrored, mirror,
-                                    mirrored ? templ.mirroredSideLabel : templ.baseSideLabel));
+                instances.push_back(instantiatePart(
+                    source, table, corner, mirrored, mirror, templ.mechanism.formerNames,
+                    mirrored ? templ.mirroredSideLabel : templ.baseSideLabel));
                 found += instances.back().found;
             }
 
@@ -194,7 +184,8 @@ Linkage buildLinkage(const LinkageTemplate& templ, const HardpointTable& table,
     // has lost it, and says so.
     for (const PartTemplate& source : templ.parts) {
         if (source.perCorner) continue;
-        report(instantiatePart(source, table, CornerSpec{}, false, mirror, QString()));
+        report(instantiatePart(source, table, CornerSpec{}, false, mirror, FormerNames{},
+                               QString()));
     }
 
     return linkage;

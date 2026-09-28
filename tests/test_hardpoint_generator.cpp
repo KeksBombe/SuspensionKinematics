@@ -107,6 +107,14 @@ private slots:
     void regeneratingSaysWhatItWillOverwrite();
     void theSteeringIsWrittenOnEveryAxleItGenerates();
     void theParametersRoundTripThroughTheManifest();
+
+    void thePushrodPicksUpOnTheArmTheTemplateMountsItOn();
+    void thePushrodMeetsItsRockerArmSquare();
+    void theDamperArmIsSizedForTheInstallationRatio();
+    void theAntiRollBarIsBuiltByItsDefinition();
+    void aDropLinkOnTheWheelNeedsNoRocker();
+    void aGroupNotAskedForIsNotGenerated();
+    void regeneratingMovesTheBarUnderTheNamesTheTableHas();
 };
 
 void TestHardpointGenerator::theWheelSitsWhereTheCarPutsIt()
@@ -576,9 +584,10 @@ void TestHardpointGenerator::aGeneratedCarSweepsWithoutAWorkbook()
     const DesignPlan plan =
         planDesign(splayedPivots(), templ, mirror, HardpointTable{}, HardpointTable{});
     QVERIFY2(plan.ok(), qPrintable(plan.error));
-    // Eleven roles, both axles, both sides.
-    QCOMPARE(int(plan.table.size()), 11 * 2 * 2);
-    QCOMPARE(plan.count(DesignChange::Kind::Added), 44);
+    // Every role -- the rocker group and the bar included -- both axles, both
+    // sides.
+    QCOMPARE(int(plan.table.size()), int(kDesignRoleCount) * 2 * 2);
+    QCOMPARE(plan.count(DesignChange::Kind::Added), int(kDesignRoleCount) * 2 * 2);
     QCOMPARE(plan.handEditedCount(), 0);
     // One sentence of advice per axle, naming the pivot in the project's own
     // vocabulary.
@@ -622,6 +631,25 @@ void TestHardpointGenerator::aGeneratedCarSweepsWithoutAWorkbook()
         // themselves. The solver used to do the latter and read 26.8 here.
         QVERIFY2(std::abs(design->rollCenterHeight - 30.0) < 1e-6,
                  qPrintable(QStringLiteral("%1: %2").arg(corner.token).arg(design->rollCenterHeight)));
+
+        // The pushrod, rocker, damper and bar are there and connected: the
+        // damper moves at the installation ratio asked for -- read off the
+        // sweep's own neighbouring samples, so to a sweep step's accuracy --
+        // and the bar does nothing in bump.
+        QVERIFY(design->left.hasDamper && design->right.hasDamper);
+        QVERIFY2(std::abs(design->leftInstallationRatio - 0.6) < 1e-2,
+                 qPrintable(QString::number(design->leftInstallationRatio)));
+        QVERIFY(std::abs(design->leftInstallationRatio - design->rightInstallationRatio) < 1e-9);
+        QVERIFY(bump.samples.front().left.damperTravel > 0.0); // droop opens it
+        QVERIFY(bump.samples.back().left.damperTravel < 0.0);  // bump closes it
+        for (const AxleSample& sample : bump.samples) {
+            QVERIFY(sample.hasAntiRoll);
+            QVERIFY(std::abs(sample.antiRollTwist) < 1e-6);
+        }
+        // And twists in roll, which is what it is for.
+        const SweepResult roll = runSweep(axle, settings.specFor(SweepKind::Roll));
+        QVERIFY(!roll.isEmpty());
+        QVERIFY(std::abs(roll.samples.back().antiRollTwist) > 1e-3);
     }
 }
 
@@ -650,7 +678,7 @@ void TestHardpointGenerator::regeneratingSaysWhatItWillOverwrite()
 
     // Only the front, both sides, and nothing new.
     QCOMPARE(second.count(DesignChange::Kind::Added), 0);
-    QCOMPARE(int(second.changes.size()), 22);
+    QCOMPARE(int(second.changes.size()), int(kDesignRoleCount) * 2);
     int handEdited = 0;
     for (const DesignChange& change : second.changes) {
         QVERIFY(change.name.startsWith(QStringLiteral("F_")));
@@ -719,6 +747,10 @@ void TestHardpointGenerator::theParametersRoundTripThroughTheManifest()
     p.rear.generate = false;
     p.rear.corner = QStringLiteral("H");
     p.rear.steered = true;
+    p.front.generateRocker = false;
+    p.rear.generateAntiRollBar = false;
+    p.front.installationRatio = 0.85;
+    p.rear.antiRollBearingInset = 45.0;
 
     QCOMPARE(designParametersFromJson(designParametersToJson(p)), p);
     // A key a later release adds, or an older manifest lacks, reads as its
@@ -740,6 +772,216 @@ void TestHardpointGenerator::theParametersRoundTripThroughTheManifest()
     QVERIFY2(reopened.has_value(), qPrintable(error));
     QVERIFY(reopened->design().has_value());
     QCOMPARE(*reopened->design(), p);
+}
+
+namespace {
+
+/// @p corner bound to the solver under the built-in template's names, which is
+/// how a generated corner is read back everywhere else.
+std::optional<CornerSolver> solveGenerated(const GeneratedCorner& corner, QString* error)
+{
+    MechanismTemplate mechanism = instantiateMechanism(builtinLinkageTemplate().mechanism,
+                                                       QStringLiteral("F"), false, MirrorSpec{});
+    return CornerSolver::bind(mechanism, bindGeneratedCorner(corner, mechanism), error);
+}
+
+/// Damper compression per unit of bump at design, from the solver: what the
+/// analysis dock calls the installation ratio.
+double installationRatioOf(const CornerSolver& solver)
+{
+    const double h = 0.01;
+    const CornerPose bump = solver.poseAtWheelTravel(h);
+    const CornerPose droop = solver.poseAtWheelTravel(-h);
+    return -(bump.damperTravel - droop.damperTravel) / (2.0 * h);
+}
+
+} // namespace
+
+void TestHardpointGenerator::thePushrodPicksUpOnTheArmTheTemplateMountsItOn()
+{
+    DesignParameters p = car2025();
+    p.front.pushrodPickupInboard = 45.0;
+    p.front.pushrodPickupHeight = -18.0;
+
+    // On the upper arm: that far along it toward its pivots, and that far
+    // below its plane.
+    const GeneratedCorner upper = generateCorner(p, AxlePosition::Front);
+    QVERIFY2(upper.ok, qPrintable(upper.error));
+    QVERIFY(upper.has(DesignRole::PushrodOuter));
+    const Vec3 joint = upper.at(DesignRole::UpperOuter);
+    const Vec3 pickup = upper.at(DesignRole::PushrodOuter);
+    Vec3 normal = upper.upperNormal.normalized();
+    if (normal.z < 0.0) normal = normal * -1.0;
+    QVERIFY(near(dot(pickup - joint, normal), -18.0));
+    const Vec3 pivots =
+        (upper.at(DesignRole::UpperFront) + upper.at(DesignRole::UpperRear)) * 0.5;
+    QVERIFY(near(dot(pickup - joint, (pivots - joint).normalized()), 45.0));
+
+    // On the lower arm when the template says so, by the lower arm's numbers.
+    const GeneratedCorner lower =
+        generateCorner(p, AxlePosition::Front, nullptr,
+                       DesignMounts{ PushrodMount::LowerArm, DropLinkMount::Rocker });
+    QVERIFY2(lower.ok, qPrintable(lower.error));
+    QVERIFY(lower.at(DesignRole::PushrodOuter).z < upper.at(DesignRole::PushrodOuter).z - 100.0);
+    QVERIFY(near(distance(lower.at(DesignRole::PushrodOuter), lower.at(DesignRole::LowerOuter)),
+                 std::hypot(45.0, 18.0)));
+}
+
+void TestHardpointGenerator::thePushrodMeetsItsRockerArmSquare()
+{
+    for (const AxlePosition axle : { AxlePosition::Front, AxlePosition::Rear }) {
+        const GeneratedCorner corner = generateCorner(car2025(), axle);
+        QVERIFY2(corner.ok, qPrintable(corner.error));
+        const Vec3 pivot = corner.at(DesignRole::RockerPivot);
+        const Vec3 end = corner.at(DesignRole::PushrodInner);
+        const Vec3 rod = corner.at(DesignRole::PushrodOuter) - end;
+
+        QVERIFY(near(distance(pivot, end), car2025().axle(axle).rockerPushrodArm));
+        QVERIFY(near(dot((end - pivot).normalized(), rod.normalized()), 0.0));
+        // The pivot where it was asked for, and its axis along the car.
+        QVERIFY(near(pivot.y, 150.0));
+        QVERIFY(near(pivot.z, 500.0));
+        const Vec3 axis = corner.at(DesignRole::RockerAxis) - pivot;
+        QVERIFY(near(axis.y, 0.0) && near(axis.z, 0.0) && axis.x > 0.0);
+    }
+}
+
+void TestHardpointGenerator::theDamperArmIsSizedForTheInstallationRatio()
+{
+    for (const double target : { 0.45, 0.6, 1.0 }) {
+        DesignParameters p = car2025();
+        p.front.installationRatio = target;
+        const GeneratedCorner corner = generateCorner(p, AxlePosition::Front);
+        QVERIFY2(corner.ok, qPrintable(corner.error));
+        // A ratio of one on the default rocker wants an arm long enough to put
+        // the damper's mount past the centreline, which is said; the ratio is
+        // met regardless.
+        QVERIFY(corner.has(DesignRole::DamperInboard));
+
+        // Met at design, by the solver's own reading of the generated corner.
+        QString error;
+        const std::optional<CornerSolver> solver = solveGenerated(corner, &error);
+        QVERIFY2(solver, qPrintable(error));
+        QVERIFY2(std::abs(installationRatioOf(*solver) - target) < 1e-5,
+                 qPrintable(QString::number(installationRatioOf(*solver))));
+
+        // Square to its arm, the length asked for, and the arm is what the
+        // ratio sized it to.
+        const Vec3 pivot = corner.at(DesignRole::RockerPivot);
+        const Vec3 eye = corner.at(DesignRole::DamperOutboard);
+        const Vec3 damper = corner.at(DesignRole::DamperInboard) - eye;
+        QVERIFY(near(dot((eye - pivot).normalized(), damper.normalized()), 0.0));
+        QVERIFY(near(damper.length(), 200.0));
+        QVERIFY(near(distance(pivot, eye), corner.damperArm));
+        QVERIFY(near(corner.damperArm * std::abs(corner.rockerRate), target));
+    }
+}
+
+void TestHardpointGenerator::theAntiRollBarIsBuiltByItsDefinition()
+{
+    const DesignParameters p = car2025();
+    const GeneratedCorner corner = generateCorner(p, AxlePosition::Front);
+    QVERIFY2(corner.ok, qPrintable(corner.error));
+
+    const Vec3 pickup = corner.at(DesignRole::AntiRollDropLinkOuter);
+    const Vec3 end = corner.at(DesignRole::AntiRollArmEnd);
+    const Vec3 root = corner.at(DesignRole::AntiRollArmRoot);
+    const Vec3 bearing = corner.at(DesignRole::AntiRollBearing);
+    const Vec3 pivot = corner.at(DesignRole::RockerPivot);
+
+    // The pickup on the rocker, at its arm, and the drop link square to it.
+    QVERIFY(near(distance(pivot, pickup), p.front.antiRollRockerArm));
+    QVERIFY(near(distance(pickup, end), p.front.dropLinkLength));
+    QVERIFY(near(dot((pickup - pivot).normalized(), (end - pickup).normalized()), 0.0));
+    // The arm forward from the bar, square to the drop link; the bar's axis
+    // across the car, through a bearing inboard of the root.
+    QVERIFY(near(end.x - root.x, p.front.antiRollArmLength));
+    QVERIFY(near(dot(end - root, end - pickup), 0.0));
+    QVERIFY(near(root.y - bearing.y, p.front.antiRollBearingInset));
+    QVERIFY(near(root.x, bearing.x) && near(root.z, bearing.z));
+}
+
+void TestHardpointGenerator::aDropLinkOnTheWheelNeedsNoRocker()
+{
+    DesignParameters p = car2025();
+    p.front.generateRocker = false;
+    const GeneratedCorner corner =
+        generateCorner(p, AxlePosition::Front, nullptr,
+                       DesignMounts{ PushrodMount::UpperArm, DropLinkMount::LowerArm });
+    QVERIFY2(corner.ok, qPrintable(corner.error));
+    QVERIFY(!corner.has(DesignRole::RockerPivot));
+    QVERIFY(corner.has(DesignRole::AntiRollArmRoot));
+
+    // On the lower arm, that far along it, and the drop link straight up from
+    // there.
+    const Vec3 pickup = corner.at(DesignRole::AntiRollDropLinkOuter);
+    QVERIFY(near(distance(pickup, corner.at(DesignRole::LowerOuter)),
+                 p.front.antiRollPickupInboard));
+    const Vec3 link = corner.at(DesignRole::AntiRollArmEnd) - pickup;
+    QVERIFY(near(link.x, 0.0) && near(link.y, 0.0) && near(link.z, p.front.dropLinkLength));
+}
+
+void TestHardpointGenerator::aGroupNotAskedForIsNotGenerated()
+{
+    DesignParameters p = car2025();
+    p.front.generateRocker = false;
+    const GeneratedCorner corner = generateCorner(p, AxlePosition::Front);
+    QVERIFY2(corner.ok, qPrintable(corner.error));
+    for (const DesignRole role : { DesignRole::PushrodOuter, DesignRole::PushrodInner,
+                                   DesignRole::RockerPivot, DesignRole::RockerAxis,
+                                   DesignRole::DamperOutboard, DesignRole::DamperInboard })
+        QVERIFY(!corner.has(role));
+    // The bar hangs off the rocker that was not generated: said, and left out.
+    QVERIFY(!corner.has(DesignRole::AntiRollArmRoot));
+    QCOMPARE(corner.warnings.size(), 1);
+
+    // And nothing that was not placed is written.
+    const MechanismTemplate names = instantiateMechanism(builtinLinkageTemplate().mechanism,
+                                                         QStringLiteral("F"), false, MirrorSpec{});
+    const HardpointTable table = bindGeneratedCorner(corner, names);
+    QCOMPARE(int(table.size()), 11);
+    QVERIFY(!table.find(QStringLiteral("F_Rocker_Center")));
+
+    // Without the bar either, there is nothing to say about it.
+    p.front.generateAntiRollBar = false;
+    QVERIFY(generateCorner(p, AxlePosition::Front).warnings.isEmpty());
+}
+
+void TestHardpointGenerator::regeneratingMovesTheBarUnderTheNamesTheTableHas()
+{
+    // A workbook measured before the bar's points were renamed. Regenerating
+    // moves its F_AntiRoll_* points; it does not add a second bar beside them.
+    const LinkageTemplate templ = builtinLinkageTemplate();
+    DesignParameters p = car2025();
+    p.rear.generate = false;
+    const DesignPlan first = planDesign(p, templ, MirrorSpec{}, HardpointTable{}, HardpointTable{});
+    QVERIFY2(first.ok(), qPrintable(first.error));
+
+    HardpointTable older = first.table;
+    const std::pair<const char*, const char*> renamed[] = {
+        { "F_ARB_DropLink_O", "F_AntiRoll_O" },
+        { "F_ARB_ArmEnd", "F_AntiRoll_I" },
+        { "F_ARB_ArmRoot", "F_AntiRoll_Center" },
+    };
+    for (Hardpoint& point : older.points) {
+        for (const auto& [now, before] : renamed) {
+            if (point.name == QLatin1String(now)) point.name = QLatin1String(before);
+            if (point.mirrorOf == QLatin1String(now)) point.mirrorOf = QLatin1String(before);
+            if (point.name == mirroredName(QLatin1String(now), MirrorSpec{}))
+                point.name = mirroredName(QLatin1String(before), MirrorSpec{});
+        }
+    }
+
+    p.front.antiRollArmLength = 95.0;
+    const DesignPlan second = planDesign(p, templ, MirrorSpec{}, older, older);
+    QVERIFY2(second.ok(), qPrintable(second.error));
+    QCOMPARE(second.count(DesignChange::Kind::Added), 0);
+    QCOMPARE(second.table.size(), older.size());
+    QVERIFY(!second.table.find(QStringLiteral("F_ARB_ArmRoot")));
+    const Hardpoint* root = second.table.find(QStringLiteral("F_AntiRoll_Center"));
+    const Hardpoint* end = second.table.find(QStringLiteral("F_AntiRoll_I"));
+    QVERIFY(root && end);
+    QVERIFY(near(end->coord[0] - root->coord[0], 95.0));
 }
 
 QTEST_APPLESS_MAIN(TestHardpointGenerator)

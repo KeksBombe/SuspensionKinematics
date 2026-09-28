@@ -57,8 +57,8 @@ public:
         simulation.kind = panel->kind();
         simulation.sweep = panel->settings();
         simulation.position = panel->position();
-        for (const SweepMeasure measure : panel->measures())
-            simulation.measures << sweepMeasureKey(measure);
+        simulation.measure = sweepMeasureKey(panel->measure());
+        simulation.plotAxles = panel->plotAxles();
         simulation.sides = panel->sides();
         simulation.animating = panel->animating();
         simulation.animationSeconds = panel->animationSeconds();
@@ -75,8 +75,11 @@ public:
         panel->setSettings(simulation.sweep);
         panel->setKind(simulation.kind);
         if (!simulation.axle.isEmpty()) panel->setAxle(simulation.axle);
-        const QList<SweepMeasure> measures = knownMeasures(simulation.measures);
-        if (!measures.isEmpty()) panel->setMeasures(measures);
+        panel->setPlotAxles(simulation.plotAxles);
+        // A curve this build does not know -- one a later release added --
+        // leaves the plot where it is rather than reading as the fallback.
+        const SweepMeasure measure = sweepMeasureFromKey(simulation.measure);
+        if (sweepMeasureKey(measure) == simulation.measure) panel->setMeasure(measure);
         panel->setSides(simulation.sides);
         panel->setPosition(simulation.position);
         panel->setMovesAllAxles(simulation.allAxles);
@@ -92,36 +95,30 @@ public:
 private:
     void exportSweepCsv()
     {
-        const Project& project = m_context.project();
-        const AxleSolver* axle =
-            m_context.session().simulation().simulation().axleFor(m_context.analysisPanel()->axle());
-        if (!axle) {
-            QMessageBox::information(m_context.window(), tr("Export Sweep"),
-                                     tr("There is no axle to sweep yet. Import hardpoints, and "
-                                        "check that the linkage template names the mechanism."));
+        // What is on screen is what is written: the axles shown, the wheels shown.
+        const SimulationRunner& runner = m_context.session().simulation();
+        const std::vector<SweepResult> results = runner.sweepsFor(m_context.session().request());
+        const QByteArray csv = sweepsToCsv(results, m_context.analysisPanel()->sides());
+        if (csv.isEmpty()) {
+            QMessageBox::information(
+                m_context.window(), tr("Export Sweep"),
+                runner.simulation().isEmpty()
+                    ? tr("There is no axle to sweep yet. Import hardpoints, and check that the "
+                         "linkage template names the mechanism.")
+                    : tr("None of the axles shown can be put through this sweep. Tick one under "
+                         "Show that can."));
             return;
         }
 
-        const SweepSpec spec = m_context.analysisPanel()->spec();
-        const SweepResult result = runSweep(*axle, spec);
-
-        const QString suggested = QDir(project.rootPath())
-                                      .filePath(QStringLiteral("%1-%2-%3.csv")
-                                                    .arg(project.name().isEmpty()
-                                                             ? QStringLiteral("sweep")
-                                                             : project.name(),
-                                                         axle->label().isEmpty()
-                                                             ? axle->cornerToken()
-                                                             : axle->label(),
-                                                         sweepKindToString(spec.kind)));
         const QString path =
-            QFileDialog::getSaveFileName(m_context.window(), tr("Export Sweep as CSV"), suggested,
+            QFileDialog::getSaveFileName(m_context.window(), tr("Export Sweep as CSV"),
+                                         suggestedCsvPath(results),
                                          tr("CSV files (*.csv);;All files (*)"));
         if (path.isEmpty()) return;
 
         QSaveFile file(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
-            || file.write(sweepToCsv(result)) < 0 || !file.commit()) {
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(csv) < 0
+            || !file.commit()) {
             QMessageBox::warning(m_context.window(), tr("Export Sweep"),
                                  tr("Could not write %1: %2")
                                      .arg(QDir::toNativeSeparators(path), file.errorString()));
@@ -130,17 +127,19 @@ private:
         m_context.showStatus(tr("Sweep written to %1").arg(QDir::toNativeSeparators(path)), 5000);
     }
 
-    /// The curves @p keys name that this build knows. One a later release added
-    /// is left out rather than read as the fallback, which would put a plot on
-    /// screen that nobody asked for.
-    static QList<SweepMeasure> knownMeasures(const QStringList& keys)
+    /// Project, axles and kind of sweep, in the project's own directory.
+    QString suggestedCsvPath(const std::vector<SweepResult>& results) const
     {
-        QList<SweepMeasure> measures;
-        for (const QString& key : keys) {
-            const SweepMeasure measure = sweepMeasureFromKey(key);
-            if (sweepMeasureKey(measure) == key) measures << measure;
-        }
-        return measures;
+        const Project& project = m_context.project();
+        QStringList axles;
+        for (const SweepResult& result : results)
+            if (!result.isEmpty())
+                axles << (result.axleLabel.isEmpty() ? result.axleToken : result.axleLabel);
+        return QDir(project.rootPath())
+            .filePath(QStringLiteral("%1-%2-%3.csv")
+                          .arg(project.name().isEmpty() ? QStringLiteral("sweep") : project.name(),
+                               axles.join(QLatin1Char('-')),
+                               sweepKindToString(m_context.analysisPanel()->kind())));
     }
 
     AppContext& m_context;
