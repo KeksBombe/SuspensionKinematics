@@ -341,6 +341,10 @@ qt_add_executable(suspkin
     src/app/Ribbon.cpp
     src/app/PanelAction.h
     src/app/PanelAction.cpp
+    # A dock's float and close buttons in the same icons and colours, where the
+    # platform's own are grey on grey on a dark Windows 11.
+    src/app/DockTitleButtons.h
+    src/app/DockTitleButtons.cpp
     src/render/GpuMesh.h
     src/render/GpuMesh.cpp
     src/render/GpuPoints.h
@@ -391,13 +395,13 @@ qt_add_resources(suspkin "shaders"
 # list and the table in src/app/Icons.cpp are the only two places an icon is
 # named, and test_icons -- which embeds this same list -- checks they agree.
 set(SUSPKIN_ICON_NAMES
-    adjustments-horizontal angle arrow-back-up arrow-forward-up braces chart-line
+    adjustments-horizontal angle app-window arrow-back-up arrow-forward-up braces chart-line
     chevron-down chevron-up cloud-download cube device-floppy edit file-export file-import
     file-spreadsheet file-type-csv file-x flip-horizontal focus-centered
     folder-open folder-plus folder-search forms history info-circle info-square-rounded
     layout-dashboard license line list-details logout refresh restore row-insert-bottom
     row-remove sphere steering-wheel table table-export table-minus table-plus
-    tag template trash triangles vector wand wheel)
+    tag template trash triangles vector wand wheel x)
 set(SUSPKIN_ICONS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons")
 set(SUSPKIN_ICONS "")
 foreach(_icon IN LISTS SUSPKIN_ICON_NAMES)

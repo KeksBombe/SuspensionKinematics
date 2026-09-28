@@ -784,6 +784,12 @@ layer they register into and `src/app/features/` is where they come from:
   palette's colour into the SVG before rendering, per mode, and caches by
   `QPalette::cacheKey()`, so light and dark need nothing from the caller. Qt6::Svg
   is linked by the **application only**; `suspkin_core` stays Core + Gui.
+- **A dock's float and close buttons are ours too** (`themeDockTitleButtons()`,
+  `src/app/DockTitleButtons.*`): the platform's are grey on grey on a dark
+  Windows 11. A proxy style is set on the two buttons alone -- never on the dock
+  and never a `setTitleBarWidget()` -- so the title bar, dragging, re-docking and
+  double-clicking stay Qt's own. It picks the icon by the button's Qt object
+  name, because QDockWidget puts the style's standard icon back on every float.
 - A checkable action sets `setIconVisibleInMenu(false)`: a menu marks it with its
   tick, and the icon is for the ribbon. A checked button that is disabled draws
   its highlight at half strength -- still saying the setting is on, without

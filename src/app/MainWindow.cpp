@@ -1,6 +1,7 @@
 #include "app/MainWindow.h"
 
 #include "app/AnalysisPanel.h"
+#include "app/DockTitleButtons.h"
 #include "app/HardpointModel.h"
 #include "app/HardpointPanel.h"
 #include "app/PointEditController.h"
@@ -44,6 +45,7 @@ MainWindow::MainWindow(Project project, QWidget* parent)
     // The docks before the actions: the panel toggles are actions on them.
     buildHardpointDock();
     buildAnalysisDock();
+    for (QDockWidget* dock : { m_hardpointDock, m_analysisDock }) themeDockTitleButtons(dock);
     // After both docks: what the session resolves is drawn on them.
     connectSession();
     // After the dock, because moving a point in the viewport goes through the
