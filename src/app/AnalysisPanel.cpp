@@ -100,6 +100,12 @@ void AnalysisPanel::buildUi()
     m_positionBox->setDecimals(2);
     m_positionBox->setSingleStep(1.0);
     m_positionUnit = new QLabel(QStringLiteral("mm"), this);
+    const QString positionTip =
+        tr("Where the suspension stands in the sweep: wheel travel in a bump sweep (positive is "
+           "bump, the wheel moving up), body roll in a roll sweep (positive lifts the left side), "
+           "rack travel in a steer sweep (positive moves the rack to the left, +Y).");
+    m_positionSlider->setToolTip(positionTip);
+    m_positionBox->setToolTip(positionTip);
     controls->addWidget(new QLabel(tr("Position"), this), 1, 0);
     controls->addWidget(m_positionSlider, 1, 1, 1, 2);
     controls->addWidget(m_positionBox, 1, 3);

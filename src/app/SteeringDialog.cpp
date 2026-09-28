@@ -58,6 +58,9 @@ SteeringDialog::SteeringDialog(const LinkageTemplate& templ, const MirrorSpec& m
         const int index = box->findData(corner.steeringRack);
         box->setCurrentIndex(index >= 0 ? index : 0);
         box->setEnabled(!rackRole.isEmpty());
+        box->setToolTip(tr("Pick where this axle's steering rack is attached: the inner tie rod "
+                           "end, which the rack moves across the car (Y). No steering rack "
+                           "leaves the tie rods fixed to the chassis, as on a rear axle."));
         connect(box, &QComboBox::currentIndexChanged, this, [this] { refreshPreview(); });
 
         form->addRow(corner.label.isEmpty() ? corner.token : corner.label, box);

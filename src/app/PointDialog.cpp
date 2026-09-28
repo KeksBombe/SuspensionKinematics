@@ -47,6 +47,8 @@ PointDialog::PointDialog(const HardpointTable& table, const Hardpoint& seed, con
     auto* form = new QFormLayout();
     m_name = new QLineEdit(freePointName(table, seed.name), this);
     m_name->selectAll();
+    m_name->setToolTip(tr("The point's name, which is how the workbook and the linkage template "
+                          "refer to it. It must be unique and must not end in _x, _y or _z."));
     form->addRow(tr("Name"), m_name);
 
     const char* axes[3] = { "X", "Y", "Z" };
@@ -57,6 +59,9 @@ PointDialog::PointDialog(const HardpointTable& table, const Hardpoint& seed, con
         spin->setDecimals(kDecimals);
         spin->setSuffix(tr(" mm"));
         spin->setValue(seed.coord[axis]);
+        spin->setToolTip(tr("%1 coordinate in the car's frame (ISO 8855: X forward, Y left, Z "
+                            "up). Arithmetic such as 120 - 0.5 is allowed.")
+                             .arg(QLatin1String(axes[axis])));
         m_coord[axis] = spin;
         form->addRow(QLatin1String(axes[axis]), spin);
     }

@@ -63,7 +63,8 @@ SweepParametersDialog::SweepParametersDialog(QWidget* parent) : QDialog(parent)
     auto* bumpBox = new QVBoxLayout(m_bumpGroup);
     auto* bumpForm = new QFormLayout;
     m_bumpTravel = addNumber(bumpForm, tr("Bump travel (mm)"), 0.0, 1000.0, 2, 1.0,
-                             tr("How far the wheel is taken upward from the design position."));
+                             tr("How far the wheel is taken upward (+Z, toward the body) from "
+                                "the design position."));
     m_reboundTravel =
         addNumber(bumpForm, tr("Rebound travel (mm)"), 0.0, 1000.0, 2, 1.0,
                   tr("How far the wheel is taken downward. Written positive: the sweep runs "
@@ -79,7 +80,9 @@ SweepParametersDialog::SweepParametersDialog(QWidget* parent) : QDialog(parent)
     auto* rollBox = new QVBoxLayout(m_rollGroup);
     auto* rollForm = new QFormLayout;
     m_rollAngle = addNumber(rollForm, tr("Roll angle (deg)"), 0.0, 45.0, 3, 0.25,
-                            tr("Degrees the body is rolled either side of level."));
+                            tr("Degrees the body is rolled either side of level. Positive roll "
+                               "is right-handed about the forward X axis, which lifts the left "
+                               "side of the body."));
     m_rollIncrement = addNumber(rollForm, tr("Increment (deg)"), 0.001, 10.0, 3, 0.05,
                                 tr("Degrees of body roll between solved positions."));
     rollBox->addLayout(rollForm);
@@ -91,7 +94,8 @@ SweepParametersDialog::SweepParametersDialog(QWidget* parent) : QDialog(parent)
     auto* steerBox = new QVBoxLayout(m_steerGroup);
     auto* steerForm = new QFormLayout;
     m_steerTravel = addNumber(steerForm, tr("Steer travel (mm)"), 0.0, 500.0, 2, 1.0,
-                              tr("Rack movement either side of centre."));
+                              tr("Rack movement either side of centre. Positive moves the rack "
+                                 "to the left (+Y)."));
     m_steerIncrement = addNumber(steerForm, tr("Increment (mm)"), 0.01, 100.0, 3, 0.5,
                                  tr("Millimetres of rack between solved positions."));
     steerBox->addLayout(steerForm);
@@ -103,8 +107,9 @@ SweepParametersDialog::SweepParametersDialog(QWidget* parent) : QDialog(parent)
     auto* commonForm = new QFormLayout(commonGroup);
     m_rack = addNumber(commonForm, tr("Rack held (mm)"), -500.0, 500.0, 2, 1.0,
                        tr("Rack position held through a bump or roll sweep, so bump steer can "
-                          "be looked at on a wheel that is already turned. The steer sweep "
-                          "moves the rack itself and ignores this."));
+                          "be looked at on a wheel that is already turned. Positive moves the "
+                          "rack to the left (+Y). The steer sweep moves the rack itself and "
+                          "ignores this."));
     m_seconds = addNumber(commonForm, tr("Animation (s/cycle)"), 0.2, 60.0, 1, 0.5,
                           tr("How long one there-and-back run of the travel takes."));
     m_allAxles = new QCheckBox(tr("Move all axles"), this);
@@ -154,7 +159,9 @@ QDoubleSpinBox* SweepParametersDialog::addNumber(QFormLayout* form, const QStrin
     box->setSingleStep(step);
     box->setToolTip(tip);
     box->setAlignment(Qt::AlignRight);
-    form->addRow(label, box);
+    auto* caption = new QLabel(label, this);
+    caption->setToolTip(tip);
+    form->addRow(caption, box);
     return box;
 }
 
