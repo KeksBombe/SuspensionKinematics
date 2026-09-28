@@ -3,6 +3,7 @@
 #include "app/AnalysisPanel.h"
 #include "app/HardpointModel.h"
 #include "app/HardpointPanel.h"
+#include "app/DockDragEnd.h"
 #include "app/PointEditController.h"
 #include "app/RecentProjects.h"
 #include "app/Ribbon.h"
@@ -56,6 +57,9 @@ MainWindow::MainWindow(Project project, QWidget* parent)
     finishCommands(this, m_commands);
 
     connect(m_viewport, &ViewportWidget::viewChanged, this, [this] { markDirty(); });
+    // Where the native frame is the window manager's -- Windows -- letting go
+    // of a floating panel over a dock area has to be what docks it.
+    for (QDockWidget* dock : { m_hardpointDock, m_analysisDock }) endNativeDockDragOnRelease(dock);
 
     // Closing the window is the usual way out, but not the only one: --screenshot
     // and a session manager both end the run without one. A pending debounced

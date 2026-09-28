@@ -795,6 +795,15 @@ layer they register into and `src/app/features/` is where they come from:
   the window, so what answers "is it in front" is `visibleRegion()`, not
   `isVisible()`. `Ctrl+H` and `Ctrl+K` live on these actions alone: two actions
   sharing a shortcut fire neither.
+- **Letting go of a floating panel is what docks it.** On Windows a floating
+  dock has a native frame, and QDockWidget ends a drag on it only at the next
+  non-client move that reaches the dock -- the move loop swallows the button-up,
+  and the release Qt synthesises after it is ignored everywhere but macOS. If
+  the pointer leaves the title bar first, or the window is moved before, the
+  panel never docks. `endNativeDockDragOnRelease()` (`src/app/DockDragEnd.*`)
+  ends it on that release. `QT_QPA_PLATFORM=offscreen` frames floating docks
+  natively too, which is how `test_dock_redock` takes the Windows path on Linux;
+  X11 and Wayland never do, which is why this never showed there.
 - **The ribbon's own state is project state**, in `WindowState`: which tab (by
   **key**, not index, so a tab added later cannot move an older project) and
   whether it is collapsed. Restored under `loading()`, every change ends in
