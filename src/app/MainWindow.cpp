@@ -1,10 +1,10 @@
 #include "app/MainWindow.h"
 
 #include "app/AnalysisPanel.h"
+#include "app/DockDragEnd.h"
 #include "app/DockTitleButtons.h"
 #include "app/HardpointModel.h"
 #include "app/HardpointPanel.h"
-#include "app/DockDragEnd.h"
 #include "app/PointEditController.h"
 #include "app/RecentProjects.h"
 #include "app/Ribbon.h"
