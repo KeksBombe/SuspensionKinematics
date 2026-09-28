@@ -155,6 +155,18 @@ target_include_directories(test_panel_action PRIVATE ../src)
 add_test(NAME panel_action COMMAND test_panel_action)
 set_tests_properties(panel_action PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
 
+# Putting a floating panel back: a drag on its native title bar, ended by the
+# release Qt synthesises on Windows, and a double-click. Offscreen gives
+# floating docks a native frame, as Windows does, so this is the path a Windows
+# title bar takes -- which on Linux itself never happens.
+qt_add_executable(test_dock_redock
+    test_dock_redock.cpp
+    ../src/app/DockDragEnd.cpp)
+target_link_libraries(test_dock_redock PRIVATE Qt6::Widgets Qt6::Test)
+target_include_directories(test_dock_redock PRIVATE ../src)
+add_test(NAME dock_redock COMMAND test_dock_redock)
+set_tests_properties(dock_redock PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+
 # The commands are application code, but a QAction needs a palette and an
 # icon, not a window -- so what each command says about itself and the one place
 # that decides which of them can be used are both checkable offscreen. The docks

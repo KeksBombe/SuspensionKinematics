@@ -147,6 +147,9 @@ private:
     /// viewport, then place them.
     bool openWheels();
 
+    /// Save the project whenever a panel is floated, docked or moved to another
+    /// area, so a layout the user put back is the one the project reopens with.
+    void markDirtyWhenDocksMove();
     void collectViewState();
     void applyViewState();
 

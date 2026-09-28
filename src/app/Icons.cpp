@@ -29,6 +29,7 @@ struct IconEntry {
 constexpr IconEntry kIcons[] = {
     { Icon::AdjustmentsHorizontal, "adjustments-horizontal" },
     { Icon::Angle, "angle" },
+    { Icon::AppWindow, "app-window" },
     { Icon::ArrowBackUp, "arrow-back-up" },
     { Icon::ArrowForwardUp, "arrow-forward-up" },
     { Icon::Braces, "braces" },
@@ -75,6 +76,7 @@ constexpr IconEntry kIcons[] = {
     { Icon::Vector, "vector" },
     { Icon::Wand, "wand" },
     { Icon::Wheel, "wheel" },
+    { Icon::X, "x" },
 };
 
 const char* fileFor(Icon icon)

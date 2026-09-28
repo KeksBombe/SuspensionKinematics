@@ -17,6 +17,7 @@ namespace suspkin {
 enum class Icon {
     AdjustmentsHorizontal,
     Angle,
+    AppWindow,
     ArrowBackUp,
     ArrowForwardUp,
     Braces,
@@ -63,6 +64,7 @@ enum class Icon {
     Vector,
     Wand,
     Wheel,
+    X,
 
     Count ///< not an icon: how many there are, so a test can walk them all
 };

@@ -784,6 +784,12 @@ layer they register into and `src/app/features/` is where they come from:
   palette's colour into the SVG before rendering, per mode, and caches by
   `QPalette::cacheKey()`, so light and dark need nothing from the caller. Qt6::Svg
   is linked by the **application only**; `suspkin_core` stays Core + Gui.
+- **A dock's float and close buttons are ours too** (`themeDockTitleButtons()`,
+  `src/app/DockTitleButtons.*`): the platform's are grey on grey on a dark
+  Windows 11. A proxy style is set on the two buttons alone -- never on the dock
+  and never a `setTitleBarWidget()` -- so the title bar, dragging, re-docking and
+  double-clicking stay Qt's own. It picks the icon by the button's Qt object
+  name, because QDockWidget puts the style's standard icon back on every float.
 - A checkable action sets `setIconVisibleInMenu(false)`: a menu marks it with its
   tick, and the icon is for the ribbon. A checked button that is disabled draws
   its highlight at half strength -- still saying the setting is on, without
@@ -795,6 +801,15 @@ layer they register into and `src/app/features/` is where they come from:
   the window, so what answers "is it in front" is `visibleRegion()`, not
   `isVisible()`. `Ctrl+H` and `Ctrl+K` live on these actions alone: two actions
   sharing a shortcut fire neither.
+- **Letting go of a floating panel is what docks it.** On Windows a floating
+  dock has a native frame, and QDockWidget ends a drag on it only at the next
+  non-client move that reaches the dock -- the move loop swallows the button-up,
+  and the release Qt synthesises after it is ignored everywhere but macOS. If
+  the pointer leaves the title bar first, or the window is moved before, the
+  panel never docks. `endNativeDockDragOnRelease()` (`src/app/DockDragEnd.*`)
+  ends it on that release. `QT_QPA_PLATFORM=offscreen` frames floating docks
+  natively too, which is how `test_dock_redock` takes the Windows path on Linux;
+  X11 and Wayland never do, which is why this never showed there.
 - **The ribbon's own state is project state**, in `WindowState`: which tab (by
   **key**, not index, so a tab added later cannot move an older project) and
   whether it is collapsed. Restored under `loading()`, every change ends in
