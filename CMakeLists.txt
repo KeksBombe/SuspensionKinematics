@@ -244,14 +244,34 @@ qt_add_executable(suspkin
     src/app/framework/FeatureRegistry.cpp
     src/app/framework/RibbonPages.h
     src/app/framework/RibbonPages.cpp
-    src/app/framework/WindowActions.h
-    src/app/framework/WindowActions.cpp
+    src/app/framework/WindowChrome.h
+    src/app/framework/WindowChrome.cpp
+    # The live state a project is unfolded into, with no widget in it: the
+    # chassis, the points and their workbook, the template and its parts, the
+    # solve and the wheels, and the cascade that resolves them all again.
+    src/app/session/SessionMessage.h
+    src/app/session/ProjectSession.h
+    src/app/session/ProjectSession.cpp
+    src/app/session/ChassisDocument.h
+    src/app/session/ChassisDocument.cpp
+    src/app/session/HardpointDocument.h
+    src/app/session/HardpointDocument.cpp
+    src/app/session/LinkageDocument.h
+    src/app/session/LinkageDocument.cpp
+    src/app/session/SimulationRunner.h
+    src/app/session/SimulationRunner.cpp
+    src/app/session/WheelsDocument.h
+    src/app/session/WheelsDocument.cpp
     src/app/features/ProjectFeature.cpp
     src/app/features/GeometryFeature.cpp
     src/app/features/WheelsFeature.cpp
     src/app/features/EditFeature.cpp
+    src/app/features/SharedCommands.h
+    src/app/features/HardpointWorkbookFeature.cpp
     src/app/features/HardpointsFeature.cpp
+    src/app/features/GenerateFeature.cpp
     src/app/features/LinkageFeature.cpp
+    src/app/features/MechanismFeature.cpp
     src/app/features/AnalysisFeature.cpp
     src/app/features/ViewFeature.cpp
     src/app/features/PanelsFeature.cpp
@@ -273,9 +293,12 @@ qt_add_executable(suspkin
     # generator's targets and preview, and a part through the selection.
     src/app/PointDialog.h
     src/app/PointDialog.cpp
-    # Moving a point without the table: the field X, Y and Z open over the
-    # viewport, and the coordinate editor that does arithmetic -- the same one
+    # Moving a point without the table: the arrows on a selected marker and the
+    # field X, Y and Z open over the viewport, both written through the table's
+    # own model, and the coordinate editor that does arithmetic -- the same one
     # the table and the new-point dialog use.
+    src/app/PointEditController.h
+    src/app/PointEditController.cpp
     src/app/CoordinateEntry.h
     src/app/CoordinateEntry.cpp
     src/app/ExpressionSpinBox.h
@@ -309,6 +332,10 @@ qt_add_executable(suspkin
     src/app/SweepParametersDialog.cpp
     src/app/AppController.h
     src/app/AppController.cpp
+    # Letting go of a floating panel's native title bar over a dock area docks
+    # it -- on Windows, Qt would otherwise wait for another move.
+    src/app/DockDragEnd.h
+    src/app/DockDragEnd.cpp
     # How commands are reached: an icon per command, drawn in the palette's
     # colours, the ribbon that lays them out in tabs, and the action that opens
     # or brings forward a panel rather than blindly toggling it.
@@ -318,6 +345,10 @@ qt_add_executable(suspkin
     src/app/Ribbon.cpp
     src/app/PanelAction.h
     src/app/PanelAction.cpp
+    # A dock's float and close buttons in the same icons and colours, where the
+    # platform's own are grey on grey on a dark Windows 11.
+    src/app/DockTitleButtons.h
+    src/app/DockTitleButtons.cpp
     src/render/GpuMesh.h
     src/render/GpuMesh.cpp
     src/render/GpuPoints.h
@@ -368,13 +399,13 @@ qt_add_resources(suspkin "shaders"
 # list and the table in src/app/Icons.cpp are the only two places an icon is
 # named, and test_icons -- which embeds this same list -- checks they agree.
 set(SUSPKIN_ICON_NAMES
-    adjustments-horizontal angle arrow-back-up arrow-forward-up braces chart-line
+    adjustments-horizontal angle app-window arrow-back-up arrow-forward-up braces chart-line
     chevron-down chevron-up cloud-download cube device-floppy edit file-export file-import
     file-spreadsheet file-type-csv file-x flip-horizontal focus-centered
     folder-open folder-plus folder-search forms history info-circle info-square-rounded
     layout-dashboard license line list-details logout refresh restore row-insert-bottom
     row-remove sphere steering-wheel table table-export table-minus table-plus
-    tag template trash triangles vector wand wheel)
+    tag template trash triangles vector wand wheel x)
 set(SUSPKIN_ICONS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons")
 set(SUSPKIN_ICONS "")
 foreach(_icon IN LISTS SUSPKIN_ICON_NAMES)

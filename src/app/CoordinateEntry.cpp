@@ -48,6 +48,9 @@ CoordinateEntry::CoordinateEntry(QWidget* parent) : QFrame(parent)
 
     m_caption = new QLabel(this);
     m_edit = new QLineEdit(this);
+    m_edit->setToolTip(tr("The new coordinate, in mm. Arithmetic works on what is there, e.g. "
+                          "type - 0.5 after the value. Enter applies it; Escape or a click "
+                          "elsewhere leaves the point where it is."));
     m_result = new QLabel(this);
 
     auto* layout = new QVBoxLayout(this);

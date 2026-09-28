@@ -45,6 +45,9 @@ StaticAnglesDialog::StaticAnglesDialog(const std::vector<StaticAnglesAxle>& axle
 
         row.stated = new QCheckBox(tr("Set the angles here"), this);
         row.stated->setChecked(axle.stated.has_value());
+        row.stated->setToolTip(tr("Tick to set this axle's static camber and toe here. They then "
+                                  "take precedence over what the hardpoints imply: the wheel-axis "
+                                  "point, or else the contact patch."));
         grid->addWidget(row.stated, 0, 0, 1, 4);
 
         row.camber = new QDoubleSpinBox(this);
@@ -52,14 +55,17 @@ StaticAnglesDialog::StaticAnglesDialog(const std::vector<StaticAnglesAxle>& axle
         row.camber->setDecimals(3);
         row.camber->setSingleStep(0.1);
         row.camber->setSuffix(tr(" deg"));
-        row.camber->setToolTip(tr("Negative leans the top of the wheel in."));
+        row.camber->setToolTip(tr("Static camber: the lean of the wheel in front view, relative "
+                                  "to vertical. Negative leans the top of the wheel inboard, "
+                                  "toward the centreline."));
         row.toe = new QDoubleSpinBox(this);
         row.toe->setRange(-10.0, 10.0);
         row.toe->setDecimals(3);
         row.toe->setSingleStep(0.05);
         row.toe->setSuffix(tr(" deg"));
-        row.toe->setToolTip(tr("Positive is toe-in: the front of the wheel points at the "
-                               "centreline."));
+        row.toe->setToolTip(tr("Static toe: the angle of the wheel in top view, relative to the "
+                               "car's X axis. Positive is toe-in: the front of the wheel points "
+                               "toward the centreline."));
         const StaticAlignment shown = axle.stated.value_or(axle.fromHardpoints);
         row.camber->setValue(shown.camber);
         row.toe->setValue(shown.toe);

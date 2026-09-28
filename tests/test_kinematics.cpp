@@ -6,6 +6,7 @@
 
 #include <QTest>
 
+#include <algorithm>
 #include <cmath>
 
 using namespace suspkin;
@@ -272,6 +273,19 @@ CornerSolver bindTo(const HardpointTable& table)
     return *solver;
 }
 
+/// @p table without the pushrod, the rocker, the damper and the bar: a plain
+/// double wishbone and its tie rod.
+HardpointTable withoutRockerGroup(HardpointTable table)
+{
+    const QStringList group = { QStringLiteral("PushRod"), QStringLiteral("Rocker"),
+                                QStringLiteral("Damper"), QStringLiteral("AntiRoll") };
+    std::erase_if(table.points, [&](const Hardpoint& point) {
+        return std::any_of(group.begin(), group.end(),
+                           [&](const QString& part) { return point.name.contains(part); });
+    });
+    return table;
+}
+
 /// The corner as every other test here has it: no axle line, so the wheel's
 /// attitude is inferred from the patch under it.
 CornerSolver bindFront() { return bindTo(frontLeftCorner()); }
@@ -306,6 +320,8 @@ private slots:
     void aShorterUpperArmGainsNegativeCamberInBump();
     void steeringTheRackTurnsTheWheel();
     void theRockerAndDamperFollowTheWheel();
+    void theWheelsKinematicsDoNotDependOnTheRockerGroup();
+    void anAxleWithoutARockerSaysWhichMeasuresItHasNot();
     void travelBeyondTheMechanismIsRefusedNotFaked();
 
     // ---- the wheel's own axis -------------------------------------------
@@ -730,6 +746,72 @@ void TestKinematics::theRockerAndDamperFollowTheWheel()
     QVERIFY(bump.hasAntiRoll);
     QVERIFY(std::abs(bump.antiRollArmAngle) > 1e-4);
     QVERIFY(bump.antiRollArmAngle * droop.antiRollArmAngle < 0.0);
+}
+
+void TestKinematics::theWheelsKinematicsDoNotDependOnTheRockerGroup()
+{
+    // A corner is one degree of freedom -- the lower wishbone's angle -- held by
+    // the two wishbones and the tie rod. The pushrod only drives the rocker off
+    // it, so taking the whole rocker group away must not move the wheel at all.
+    const HardpointTable full = frontLeftCorner();
+    const HardpointTable bare = withoutRockerGroup(full);
+    QVERIFY(bare.points.size() < full.points.size());
+    const CornerSolver with = bindTo(full);
+    const CornerSolver without = bindTo(bare);
+    QVERIFY(with.hasRocker());
+    QVERIFY(!without.hasRocker());
+    QVERIFY(!without.hasDamper());
+    QVERIFY(!without.hasAntiRoll());
+
+    for (double travel = -30.0; travel <= 30.0; travel += 5.0) {
+        for (double rack : { -10.0, 0.0, 10.0 }) {
+            const CornerPose a = with.poseAtWheelTravel(travel, rack);
+            const CornerPose b = without.poseAtWheelTravel(travel, rack);
+            QVERIFY(a.valid);
+            QVERIFY(b.valid);
+            QVERIFY(!b.hasDamper);
+            QCOMPARE(b.camber, a.camber);
+            QCOMPARE(b.toe, a.toe);
+            QCOMPARE(b.caster, a.caster);
+            QCOMPARE(b.kingpinInclination, a.kingpinInclination);
+            QCOMPARE(b.scrubRadius, a.scrubRadius);
+            QCOMPARE(b.mechanicalTrail, a.mechanicalTrail);
+            QCOMPARE(b.halfTrackChange, a.halfTrackChange);
+            QCOMPARE(b.wheelbaseChange, a.wheelbaseChange);
+            QCOMPARE(b.wheelCenter.x, a.wheelCenter.x);
+            QCOMPARE(b.wheelCenter.y, a.wheelCenter.y);
+            QCOMPARE(b.wheelCenter.z, a.wheelCenter.z);
+        }
+    }
+}
+
+void TestKinematics::anAxleWithoutARockerSaysWhichMeasuresItHasNot()
+{
+    const HardpointTable bare =
+        mirrorHardpoints(withoutRockerGroup(frontLeftCorner()), {}, MirrorSpec{}).table;
+    const AxleSolver axle =
+        AxleSolver::build(cornerMechanism(), frontCorner(), bare, MirrorSpec{}, true);
+    QVERIFY(axle.hasBothSides());
+    const QString warnings = axle.warnings().join(QLatin1Char('\n'));
+    QVERIFY2(warnings.contains(QStringLiteral("pushrod and rocker")), qPrintable(warnings));
+    QVERIFY2(warnings.contains(QStringLiteral("anti-roll bar")), qPrintable(warnings));
+
+    const SweepResult sweep = bumpSweep(axle);
+    QVERIFY(!sweep.isEmpty());
+    QVERIFY(sweepMeasureAvailable(sweep, SweepMeasure::Camber));
+    QVERIFY(sweepMeasureAvailable(sweep, SweepMeasure::Toe));
+    QVERIFY(!sweepMeasureAvailable(sweep, SweepMeasure::DamperTravel));
+    QVERIFY(!sweepMeasureAvailable(sweep, SweepMeasure::InstallationRatio));
+    QVERIFY(!sweepMeasureAvailable(sweep, SweepMeasure::AntiRollTwist));
+    QVERIFY(!sweepMeasureRequirement(SweepMeasure::DamperTravel).isEmpty());
+    QVERIFY(sweepMeasureRequirement(SweepMeasure::Camber).isEmpty());
+
+    // The full corner has every group, and nothing to say about it.
+    const AxleSolver full =
+        AxleSolver::build(cornerMechanism(), frontCorner(), frontAxle(), MirrorSpec{}, true);
+    for (const QString& warning : full.warnings())
+        QVERIFY2(!warning.contains(QStringLiteral("not available")), qPrintable(warning));
+    QVERIFY(sweepMeasureAvailable(bumpSweep(full), SweepMeasure::DamperTravel));
 }
 
 void TestKinematics::travelBeyondTheMechanismIsRefusedNotFaked()

@@ -42,6 +42,9 @@ MirrorDialog::MirrorDialog(const HardpointTable& table, const QList<int>& select
     m_axis->addItem(tr("X - front / rear"), int(MirrorAxis::X));
     m_axis->addItem(tr("Z - up / down"), int(MirrorAxis::Z));
     m_axis->setCurrentIndex(m_axis->findData(int(spec.axis)));
+    m_axis->setToolTip(tr("The plane the points are mirrored across: Y negates the Y coordinate, "
+                          "which copies a point to the other side of the car (ISO 8855: X "
+                          "forward, Y left, Z up)."));
 
     m_allRows = new QRadioButton(tr("All %1 hardpoints").arg(table.size()), this);
     m_selectedRow = new QRadioButton(this);
@@ -60,12 +63,22 @@ MirrorDialog::MirrorDialog(const HardpointTable& table, const QList<int>& select
     // the user was looking at, and a whole table mirrored by accident is a lot
     // of rows to read through before noticing.
     auto* scopeGroup = new QButtonGroup(this);
+    m_allRows->setToolTip(tr("Mirror every point in the table."));
+    m_selectedRow->setToolTip(tr("Mirror only the points selected in the table or the "
+                                 "viewport."));
     scopeGroup->addButton(m_allRows);
     scopeGroup->addButton(m_selectedRow);
 
     m_suffix = new QRadioButton(tr("Add a suffix"), this);
     m_prefix = new QRadioButton(tr("Add a prefix"), this);
     m_replace = new QRadioButton(tr("Replace text in the name"), this);
+    m_suffix->setToolTip(tr("Name each mirrored point after its source with this text "
+                            "appended, e.g. F_LCA_O becomes F_LCA_O_R."));
+    m_prefix->setToolTip(tr("Name each mirrored point after its source with this text put in "
+                            "front, e.g. F_LCA_O becomes R_F_LCA_O."));
+    m_replace->setToolTip(tr("Name each mirrored point by replacing text in its source's name, "
+                             "e.g. L_ with R_. A point whose name does not contain the text is "
+                             "not mirrored."));
     auto* namingGroup = new QButtonGroup(this);
     namingGroup->addButton(m_suffix);
     namingGroup->addButton(m_prefix);
@@ -84,11 +97,23 @@ MirrorDialog::MirrorDialog(const HardpointTable& table, const QList<int>& select
     m_replaceWith->setPlaceholderText(tr("R_"));
     m_caseSensitive = new QCheckBox(tr("Match case"), this);
     m_caseSensitive->setChecked(spec.caseSensitive);
+    m_affix->setToolTip(tr("The text added to each name, as a suffix or a prefix."));
+    m_find->setToolTip(tr("The text to look for in each source name."));
+    m_replaceWith->setToolTip(tr("The text put in its place in the mirrored name."));
+    m_caseSensitive->setToolTip(tr("Tick to find the text only with the same upper and lower "
+                                   "case."));
 
     m_updateExisting = new QCheckBox(tr("Update points that already exist under the new name"), this);
     m_updateExisting->setChecked(spec.updateExisting);
     m_skipMirrored = new QCheckBox(tr("Skip points that are themselves mirrors"), this);
     m_skipMirrored->setChecked(spec.skipMirrored);
+    m_updateExisting->setToolTip(tr("When a point with the mirrored name already exists, move "
+                                    "it to the new mirror position. Untick to leave existing "
+                                    "points exactly as they are, so hand edits survive a second "
+                                    "mirror."));
+    m_skipMirrored->setToolTip(tr("Leave out points that were themselves made by mirroring, so "
+                                  "mirroring everything twice does not produce mirrors of "
+                                  "mirrors."));
 
     m_preview = new QTextBrowser(this);
     m_preview->setMinimumHeight(180);

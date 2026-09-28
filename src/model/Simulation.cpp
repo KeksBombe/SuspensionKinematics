@@ -13,6 +13,15 @@ bool cornersAssembled(const AxleSolver& axle, const AxleSample& sample)
     return (!axle.left() || sample.left.valid) && (!axle.right() || sample.right.valid);
 }
 
+/// The turn that takes a wheel model drawn upright and square to the car --
+/// its spin axis along y, pointing outboard -- onto @p corner's design spin
+/// axis: the static camber and toe, however the corner came by them.
+QQuaternion designWheelAttitude(const CornerSolver& corner)
+{
+    const Vec3 outboard(0.0, corner.side(), 0.0);
+    return QQuaternion::rotationTo(outboard.toVector(), corner.designPose().spinAxis.toVector());
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -63,6 +72,29 @@ WheelRotations SimulationPose::wheelRotations() const
 // ---------------------------------------------------------------------------
 // Simulation
 // ---------------------------------------------------------------------------
+
+WheelRotations Simulation::designWheelAttitudes() const
+{
+    WheelRotations attitudes;
+    for (const AxleSolver& axle : m_axles)
+        for (const std::optional<CornerSolver>* corner : { &axle.left(), &axle.right() }) {
+            if (!*corner) continue;
+            attitudes.insert((*corner)->designPose().wheelCenterName,
+                             designWheelAttitude(**corner));
+        }
+    return attitudes;
+}
+
+QSet<QString> Simulation::solvedPoints() const
+{
+    QSet<QString> names;
+    for (const AxleSolver& axle : m_axles)
+        for (const std::optional<CornerSolver>* corner : { &axle.left(), &axle.right() }) {
+            if (!*corner) continue;
+            for (const PosedPoint& point : (*corner)->designPose().points) names.insert(point.name);
+        }
+    return names;
+}
 
 Simulation Simulation::build(const LinkageTemplate& templ, const HardpointTable& table,
                              const MirrorSpec& mirror,

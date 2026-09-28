@@ -224,6 +224,14 @@ public:
     /// keeps it: this does nothing there.
     void setAntiRollAxis(const Vec3& direction);
 
+    /// Whether the pushrod and rocker are bound, and the damper and the bar
+    /// with them. Without a rocker the corner still solves -- the wheel's own
+    /// kinematics are the wishbones and the tie rod -- and only the measures
+    /// read off those bodies are missing.
+    bool hasRocker() const { return m_hasRocker; }
+    bool hasDamper() const { return m_hasDamper; }
+    bool hasAntiRoll() const { return m_hasAntiRoll; }
+
     /// Whether the bar's axis came from a bearing point in the table, rather
     /// than from a guess or from the far side's arm root.
     bool antiRollAxisFromBearing() const { return m_antiRollAxisFromBearing; }

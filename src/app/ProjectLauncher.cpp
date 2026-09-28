@@ -50,6 +50,8 @@ public:
 
         m_location = new QLineEdit(RecentProjects::lastBrowseDirectory(), this);
         auto* browse = new QPushButton(tr("Browse..."), this);
+        m_name->setToolTip(tr("The project's name, which is also the name of its folder."));
+        m_location->setToolTip(tr("The folder the project's own folder is created in."));
 
         auto* locationRow = new QWidget(this);
         auto* locationLayout = new QHBoxLayout(locationRow);

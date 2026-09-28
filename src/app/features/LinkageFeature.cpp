@@ -1,23 +1,31 @@
+#include "app/HardpointModel.h"
+#include "app/PartDialogs.h"
 #include "app/framework/AppContext.h"
 #include "app/framework/CommandRegistry.h"
 #include "app/framework/Feature.h"
 #include "app/framework/FeatureRegistry.h"
-#include "app/framework/WindowActions.h"
+#include "app/session/ProjectSession.h"
 #include "io/LinkageTemplate.h"
+#include "model/HardpointConfig.h"
 #include "model/Linkage.h"
-#include "model/Simulation.h"
+#include "project/Project.h"
 #include "render/ViewportWidget.h"
 
 #include <QCoreApplication>
+#include <QDesktopServices>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QKeySequence>
+#include <QMainWindow>
+#include <QMessageBox>
+#include <QUrl>
 
 namespace suspkin {
 namespace {
 
 QString tr(const char* text) { return QCoreApplication::translate("LinkageFeature", text); }
 
-/// What is drawn between the hardpoints, and what the solver makes of it: the
-/// template's parts, the steering rack, and the static angles.
+/// What is drawn between the hardpoints: the template, and the parts it draws.
 class LinkageFeature : public Feature {
 public:
     explicit LinkageFeature(AppContext& context) : m_context(context) {}
@@ -27,17 +35,171 @@ public:
     void registerCommands(CommandRegistry& commands) override
     {
         registerPartCommands(commands);
-        registerMechanismCommands(commands);
         registerTemplateCommands(commands);
     }
 
+    void collectViewState(ViewState& view) const override
+    {
+        view.linksVisible = m_context.viewport()->linkageVisible();
+    }
+
+    void applyViewState(const ViewState& view) override
+    {
+        m_showParts->setChecked(view.linksVisible);
+        m_context.viewport()->setLinkageVisible(view.linksVisible);
+    }
+
 private:
+    /// A part drawn through the selected points, written into the template.
+    void newPartFromSelection()
+    {
+        const QList<int> rows = m_context.viewport()->selectedHardpoints();
+        LinkageDocument& linkage = m_context.session().linkage();
+        if (rows.size() < 2 || linkage.linkageTemplate().isEmpty()) return;
+
+        // In the order they were picked: that is the order the chain is drawn in.
+        const HardpointTable& table = m_context.hardpoints()->table();
+        QStringList names;
+        for (const int row : rows) names << table.points[static_cast<std::size_t>(row)].name;
+
+        NewPartDialog dialog(linkage.linkageTemplate(), names, m_context.window());
+        if (dialog.exec() != QDialog::Accepted) return;
+        const PartTemplate part = dialog.part();
+
+        SessionMessage problem;
+        const bool written = linkage.patch(
+            [&part](const QByteArray& bytes, QString* error) {
+                return addTemplatePart(bytes, part, error);
+            },
+            tr("The part could not be added."), &problem);
+        m_context.showProblem(problem);
+        if (written) m_context.showStatus(tr("Added the part \"%1\"").arg(part.label), 5000);
+    }
+
+    void editPartsDialog()
+    {
+        LinkageDocument& linkage = m_context.session().linkage();
+        if (linkage.linkageTemplate().isEmpty()) return;
+        const LinkageTemplate before = linkage.linkageTemplate();
+
+        EditPartsDialog dialog(before, m_context.window());
+        if (dialog.exec() != QDialog::Accepted) return;
+        const QHash<QString, QString> relabelled = dialog.relabelled();
+        const QStringList removed = dialog.removed();
+        if (relabelled.isEmpty() && removed.isEmpty()) return;
+
+        SessionMessage problem;
+        const bool written = linkage.patch(
+            [&](const QByteArray& bytes, QString* error) {
+                QByteArray out = bytes;
+                for (const QString& id : removed) {
+                    out = removeTemplatePart(out, id, error);
+                    if (out.isEmpty()) return out;
+                }
+                for (auto it = relabelled.constBegin(); it != relabelled.constEnd(); ++it) {
+                    out = setTemplatePartLabel(out, it.key(), it.value(), error);
+                    if (out.isEmpty()) return out;
+                }
+                return out;
+            },
+            tr("The parts could not be changed."), &problem);
+        m_context.showProblem(problem);
+        if (!written) return;
+
+        moveRelabelledBodies(before, relabelled);
+        m_context.showStatus(tr("Parts updated in the linkage template"), 5000);
+    }
+
+    /// A part's label is also the name of the body the configuration table's
+    /// Part columns offer. A relabelled part takes the rows that named it along,
+    /// rather than leaving them all pointing at a body that is no longer there.
+    void moveRelabelledBodies(const LinkageTemplate& before,
+                              const QHash<QString, QString>& relabelled)
+    {
+        ProjectSession& session = m_context.session();
+        HardpointConfigMap config = m_context.hardpoints()->config();
+        const BodyCatalog catalog = bodyCatalog(session.linkage().linkageTemplate());
+        int moved = 0;
+        for (auto it = relabelled.constBegin(); it != relabelled.constEnd(); ++it) {
+            for (const PartTemplate& part : before.parts) {
+                if (part.id != it.key()) continue;
+                PartTemplate renamed = part;
+                renamed.label = it.value();
+                const QString from = partBodyName(part);
+                const QString to = partBodyName(renamed);
+                if (from == to || catalog.contains(from)) continue;
+                moved += renameBody(config, from, to);
+                // True of every step, which all describe this part: an undo must
+                // not put back rows naming a body the template no longer has.
+                session.history().renameBody(from, to);
+            }
+        }
+        if (moved > 0) {
+            m_context.hardpoints()->setConfig(config);
+            session.hardpoints().captureConfig();
+        }
+    }
+
+    void importLinkageTemplateDialog()
+    {
+        const QString path = QFileDialog::getOpenFileName(
+            m_context.window(), tr("Import Linkage Template"), m_context.project().rootPath(),
+            linkageTemplateFileFilter());
+        if (path.isEmpty()) return;
+
+        LinkageDocument& linkage = m_context.session().linkage();
+        SessionMessage problem;
+        const std::optional<QStringList> warnings = linkage.import(path, &problem);
+        if (!warnings) {
+            m_context.showProblem(problem);
+            return;
+        }
+
+        m_context.showStatus(tr("%1 part(s) from %2")
+                                 .arg(linkage.parts().parts.size())
+                                 .arg(QFileInfo(path).fileName()),
+                             6000);
+
+        const QStringList notes = *warnings + linkage.parts().warnings;
+        if (!notes.isEmpty()) {
+            QMessageBox::information(m_context.window(), tr("Imported with warnings"),
+                                     notes.join(QStringLiteral("\n")));
+        }
+    }
+
+    void resetLinkageTemplate()
+    {
+        const QMessageBox::StandardButton answer = QMessageBox::question(
+            m_context.window(), tr("Reset the linkage template"),
+            tr("Replace this project's linkage template with the one the application ships?\n\n"
+               "Any changes made to the project's copy are lost."),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (answer != QMessageBox::Yes) return;
+
+        LinkageDocument& linkage = m_context.session().linkage();
+        SessionMessage problem;
+        if (!linkage.installBuiltin(&problem) || !linkage.load(&problem)) {
+            m_context.showProblem(problem);
+            return;
+        }
+        m_context.showStatus(
+            tr("Linkage template reset - %1 part(s)").arg(linkage.parts().parts.size()), 6000);
+    }
+
+    /// Open the project's template in whatever edits JSON on this machine.
+    void revealTemplateFile()
+    {
+        const Project& project = m_context.project();
+        const QString path = project.absolutePath(project.linkageTemplate().relativePath);
+        if (path.isEmpty() || !QFileInfo::exists(path)) return;
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    }
+
     void registerPartCommands(CommandRegistry& commands)
     {
-        auto& actions = *m_context.windowActions();
         const QString page = QStringLiteral("linkage");
 
-        commands.add({
+        m_showParts = commands.add({
             .id = QStringLiteral("linkage.showParts"),
             .text = tr("Show &Parts"),
             .icon = Icon::Vector,
@@ -50,7 +212,7 @@ private:
             .ribbon = { { page, tr("Show"), RibbonButton::Large, nullptr, 10 },
                         { QStringLiteral("view"), tr("Show"), RibbonButton::Small, nullptr, 60 } },
             .onToggled = [this](bool on) { m_context.viewport()->setLinkageVisible(on); },
-            .enabledWhen = [this] { return !m_context.linkage().isEmpty(); },
+            .enabledWhen = [this] { return !m_context.session().linkage().parts().isEmpty(); },
         });
 
         commands.add({
@@ -61,7 +223,7 @@ private:
             .statusTip =
                 tr("Draw a part through the selected points, in the order they were picked."),
             .ribbon = { { page, tr("Parts"), RibbonButton::Small, nullptr, 20 } },
-            .run = [&actions] { actions.newPartFromSelection(); },
+            .run = [this] { newPartFromSelection(); },
             .enabledWhen = [this] {
                 return templateLoaded() && m_context.viewport()->selectedHardpoints().size() >= 2;
             },
@@ -73,52 +235,13 @@ private:
             .icon = Icon::Edit,
             .statusTip = tr("Rename or delete the parts the template draws."),
             .ribbon = { { page, tr("Parts"), RibbonButton::Small, nullptr, 30 } },
-            .run = [&actions] { actions.editPartsDialog(); },
+            .run = [this] { editPartsDialog(); },
             .enabledWhen = [this] { return templateLoaded(); },
-        });
-    }
-
-    /// What the car is made of, as far as the solver is concerned.
-    void registerMechanismCommands(CommandRegistry& commands)
-    {
-        auto& actions = *m_context.windowActions();
-        const QString page = QStringLiteral("linkage");
-
-        commands.add({
-            .id = QStringLiteral("linkage.steering"),
-            .text = tr("Steering &Rack..."),
-            .icon = Icon::SteeringWheel,
-            .iconText = tr("Steering\nRack"),
-            .statusTip = tr("Say where the steering rack is attached: which axle has one, and "
-                            "which points it moves. An axle without a rack is not offered a "
-                            "steer sweep."),
-            .ribbon = { { page, tr("Steering"), RibbonButton::Large, nullptr, 40 } },
-            .run = [&actions] { actions.steeringDialog(); },
-            .enabledWhen = [this] {
-                // A template with no corners has no axle to ask about, and one
-                // that failed to load has nothing to write into.
-                return templateLoaded() && !m_context.linkageTemplate().corners.empty();
-            },
-        });
-
-        commands.add({
-            .id = QStringLiteral("linkage.staticAngles"),
-            .text = tr("Static &Camber and Toe..."),
-            .icon = Icon::Angle,
-            .iconText = tr("Camber\nand Toe"),
-            .statusTip = tr("Set each axle's static camber and toe as numbers, the way Lotus's "
-                            "Set Static Angles does. The wheel axis and the contact patch are "
-                            "computed from them."),
-            .ribbon = { { page, tr("Alignment"), RibbonButton::Large, nullptr, 50 } },
-            .run = [&actions] { actions.staticAnglesDialog(); },
-            // Angles are set on a wheel, so there has to be an axle that solves.
-            .enabledWhen = [this] { return !m_context.simulation().isEmpty(); },
         });
     }
 
     void registerTemplateCommands(CommandRegistry& commands)
     {
-        auto& actions = *m_context.windowActions();
         const QString page = QStringLiteral("linkage");
         const QString group = tr("Template");
 
@@ -129,7 +252,7 @@ private:
             .statusTip =
                 tr("Replace the rule that says which hardpoints are joined by which part."),
             .ribbon = { { page, group, RibbonButton::Small, nullptr, 60 } },
-            .run = [&actions] { actions.importLinkageTemplateDialog(); },
+            .run = [this] { importLinkageTemplateDialog(); },
         });
 
         commands.add({
@@ -139,7 +262,7 @@ private:
             .iconText = tr("Reset Template"),
             .statusTip = tr("Replace the project's template with the one the application ships."),
             .ribbon = { { page, group, RibbonButton::Small, nullptr, 70 } },
-            .run = [&actions] { actions.resetLinkageTemplate(); },
+            .run = [this] { resetLinkageTemplate(); },
         });
 
         commands.add({
@@ -149,13 +272,17 @@ private:
             .statusTip =
                 tr("Open the project's template in whatever edits JSON on this machine."),
             .ribbon = { { page, group, RibbonButton::Small, nullptr, 80 } },
-            .run = [&actions] { actions.revealTemplateFile(); },
+            .run = [this] { revealTemplateFile(); },
         });
     }
 
-    bool templateLoaded() const { return !m_context.linkageTemplate().isEmpty(); }
+    bool templateLoaded() const
+    {
+        return !m_context.session().linkage().linkageTemplate().isEmpty();
+    }
 
     AppContext& m_context;
+    QAction* m_showParts = nullptr;
 };
 
 } // namespace

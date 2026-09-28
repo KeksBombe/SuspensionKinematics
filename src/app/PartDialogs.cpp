@@ -62,6 +62,8 @@ NewPartDialog::NewPartDialog(const LinkageTemplate& templ, const QStringList& po
     auto* form = new QFormLayout();
     m_label = new QLineEdit(tr("New part"), this);
     m_label->selectAll();
+    m_label->setToolTip(tr("The part's name, shown in Edit Parts and used as a body name in the "
+                           "hardpoint table's Part columns."));
     form->addRow(tr("Label"), m_label);
 
     m_kind = new QComboBox(this);
@@ -76,6 +78,8 @@ NewPartDialog::NewPartDialog(const LinkageTemplate& templ, const QStringList& po
     m_points->addItems(points);
     m_points->setDragDropMode(QAbstractItemView::InternalMove);
     m_points->setCurrentRow(0);
+    m_points->setToolTip(tr("The points the part is drawn through, in order. Drag a point, or "
+                            "use Up and Down, to change the order."));
     order->addWidget(m_points, 1);
     auto* buttons = new QVBoxLayout();
     auto* up = new QPushButton(tr("Up"), this);
@@ -87,6 +91,8 @@ NewPartDialog::NewPartDialog(const LinkageTemplate& templ, const QStringList& po
     layout->addLayout(order, 1);
 
     m_closed = new QCheckBox(tr("Close the chain, last point back to the first"), this);
+    m_closed->setToolTip(tr("Tick to draw a closed outline, such as a wishbone's triangle, by "
+                            "joining the last point back to the first."));
     layout->addWidget(m_closed);
 
     m_id = new QLabel(this);

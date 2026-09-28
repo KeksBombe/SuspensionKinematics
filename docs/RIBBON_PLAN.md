@@ -483,3 +483,11 @@ All of these names were confirmed to exist at the pinned tag.
   `info-square-rounded` for About Qt, both of which had been menu entries
   needing no icon. A checked button that is disabled -- Check on Startup on a
   local build -- now draws its highlight at half strength.
+- **2026-09-19** **The command migration this plan started is finished.**
+  `docs/SESSION_LAYER_PLAN.md` gave the state the command bodies read a home of
+  its own, `src/app/session/`, and the last twenty-four bodies moved into their
+  features. `WindowActions` is deleted, as its own header said it would be once
+  it was empty. Three features were split off on the way so no file grew past
+  about 400 lines -- the workbook, Generate from Design, and the mechanism
+  (steering rack and static angles) -- and the ribbon is laid out exactly as
+  before, because `RibbonSlot::order` places the buttons, not the files.

@@ -445,7 +445,7 @@ GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
                              QString* error) -> Vec3 {
         const double span = s * outer.y - pivotY;
         if (span <= 0.0) {
-            *error = tr("The %1 line is %2 mm from the centreline, which is outboard of its ball "
+            *error = tr("The %1 is set %2 mm from the centreline, which is outboard of its ball "
                         "joint.")
                          .arg(designRoleLabel(role), number(pivotY));
             return outer;
@@ -459,7 +459,8 @@ GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
         // geometry -- which is what an imported upright or wheel looks like.
         if (chassis->distanceTo(outer) < p.chassisClearance) {
             out.warnings << tr("The %1 ball joint is inside the imported geometry, so the %2 was "
-                               "put on its line instead. Is the upright part of that model?")
+                               "put at its distance from the centreline instead. Is the upright "
+                               "part of that model?")
                                 .arg(role == DesignRole::UpperFront || role == DesignRole::UpperRear
                                          ? tr("upper")
                                          : tr("lower"),
@@ -470,8 +471,8 @@ GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
         if (!hit) {
             // Said rather than covered up: the Python tool invented y = 200
             // here, which is why its output could not be trusted unattended.
-            out.warnings << tr("The %1's leg never meets the imported geometry, so it was put on "
-                               "its line instead.")
+            out.warnings << tr("The %1's leg never meets the imported geometry, so it was put at "
+                               "its distance from the centreline instead.")
                                 .arg(which);
             return onLine;
         }
@@ -520,8 +521,9 @@ GeneratedCorner generateCorner(const DesignParameters& p, AxlePosition axle,
         drop = std::sqrt(std::max(0.0, a.lowerJointDrop * a.lowerJointDrop
                                            - a.steeringArm * a.steeringArm));
     } else {
-        out.warnings << tr("The steering arm is longer than the %1 mm the lower ball joint "
-                           "leaves, so the tie rod end was put at wheel-centre height.")
+        out.warnings << tr("The outer tie rod end is set further behind the wheel centre than "
+                           "the lower ball joint's %1 mm depth, so it was put at wheel-centre "
+                           "height.")
                             .arg(number(a.lowerJointDrop));
     }
     Vec3 tieOuter = onAxis(wc.z - drop);

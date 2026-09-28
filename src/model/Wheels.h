@@ -119,9 +119,10 @@ std::vector<WheelPlacement> resolveWheels(const WheelSpec& spec, const Hardpoint
                                           QStringList* warnings = nullptr);
 
 /// Turn each placement by the rotation @p rotations gives for the hardpoint it
-/// is centred on. A placement nobody named is left as it was, which is the
-/// design position -- a corner the solver could not reach should stand still,
-/// not snap to somebody else's angle.
+/// is centred on, on top of whatever turn it already has -- so the design
+/// attitude goes on first and the upright's motion from design after it. A
+/// placement nobody named is left as it was -- a corner the solver could not
+/// reach should stand still, not snap to somebody else's angle.
 void orientWheels(std::vector<WheelPlacement>& placements, const WheelRotations& rotations);
 
 /// Model to world for one placement: the model's anchor -- the centre of

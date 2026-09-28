@@ -239,6 +239,7 @@ HardpointPanel::HardpointPanel(HardpointModel* model, QWidget* parent)
     m_filter = new QLineEdit(this);
     m_filter->setClearButtonEnabled(true);
     m_filter->setPlaceholderText(tr("Filter, e.g. F_UCA"));
+    m_filter->setToolTip(tr("Show only the points whose name contains this text, in any case."));
 
     m_proxy = new QSortFilterProxyModel(this);
     m_proxy->setSourceModel(m_model);

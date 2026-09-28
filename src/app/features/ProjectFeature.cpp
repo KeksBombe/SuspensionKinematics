@@ -1,12 +1,16 @@
+#include "app/ProjectLauncher.h"
 #include "app/framework/AppContext.h"
 #include "app/framework/CommandRegistry.h"
 #include "app/framework/Feature.h"
 #include "app/framework/FeatureRegistry.h"
-#include "app/framework/WindowActions.h"
+#include "project/Project.h"
 
 #include <QCoreApplication>
+#include <QDesktopServices>
+#include <QFileInfo>
 #include <QKeySequence>
-#include <QWidget>
+#include <QMainWindow>
+#include <QUrl>
 
 namespace suspkin {
 namespace {
@@ -25,21 +29,19 @@ public:
 
     void registerCommands(CommandRegistry& commands) override
     {
-        auto& actions = *m_context.windowActions();
-
         commands.add({ .id = QStringLiteral("project.new"),
                        .text = tr("&New Project..."),
                        .icon = Icon::FolderPlus,
                        .shortcut = QKeySequence::New,
                        .statusTip = tr("Start a new project in a folder of its own."),
-                       .run = [&actions] { actions.newProject(); } });
+                       .run = [this] { newProject(); } });
 
         commands.add({ .id = QStringLiteral("project.open"),
                        .text = tr("&Open Project..."),
                        .icon = Icon::FolderOpen,
                        .shortcut = QKeySequence(QStringLiteral("Ctrl+Shift+O")),
                        .statusTip = tr("Open another project. This one is saved first."),
-                       .run = [&actions] { actions.openProject(); } });
+                       .run = [this] { openProject(); } });
 
         commands.add({ .id = QStringLiteral("project.save"),
                        .text = tr("&Save Project"),
@@ -53,13 +55,13 @@ public:
                        .text = tr("&Project List..."),
                        .icon = Icon::ListDetails,
                        .statusTip = tr("Go back to the list of projects."),
-                       .run = [&actions] { actions.showProjectList(); } });
+                       .run = [this] { showProjectList(); } });
 
         commands.add({ .id = QStringLiteral("project.reveal"),
                        .text = tr("Show Project &Folder"),
                        .icon = Icon::FolderSearch,
                        .statusTip = tr("Open the project's folder in the file manager."),
-                       .run = [&actions] { actions.revealProjectFolder(); } });
+                       .run = [this] { revealProjectFolder(); } });
 
         commands.add({ .id = QStringLiteral("project.quit"),
                        .text = tr("&Quit"),
@@ -69,6 +71,37 @@ public:
     }
 
 private:
+    void newProject()
+    {
+        const QString path = ProjectLauncher::runNewProjectDialog(m_context.window());
+        if (path.isEmpty()) return;
+        m_context.saveProject();
+        m_context.requestProject(path);
+    }
+
+    void openProject()
+    {
+        const QString path = ProjectLauncher::runOpenProjectDialog(m_context.window());
+        if (path.isEmpty()) return;
+        if (QFileInfo(path).absoluteFilePath()
+            == QFileInfo(m_context.project().manifestPath()).absoluteFilePath()) {
+            return; // already open
+        }
+        m_context.saveProject();
+        m_context.requestProject(path);
+    }
+
+    void showProjectList()
+    {
+        m_context.saveProject();
+        m_context.requestProjectList();
+    }
+
+    void revealProjectFolder()
+    {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(m_context.project().rootPath()));
+    }
+
     /// The project saves itself; this is the user asking for it now, so it says
     /// that it happened.
     void saveNow()

@@ -38,6 +38,8 @@ WheelDialog::WheelDialog(const HardpointTable& table, const WheelSpec& spec,
         auto* combo = new QComboBox(cornerBox);
         combo->addItem(tr("- not used -"), QString::fromLatin1(kNoPoint));
         for (const Hardpoint& point : m_table.points) combo->addItem(point.name, point.name);
+        combo->setToolTip(tr("The hardpoint at the centre of this wheel. The models are placed "
+                             "there, and follow it when it moves."));
         m_corners[static_cast<std::size_t>(corner)] = combo;
         cornerForm->addRow(wheelCornerLabel(corner), combo);
         connect(combo, &QComboBox::currentIndexChanged, this, [this] { refreshSummary(); });
@@ -130,6 +132,7 @@ QLineEdit* WheelDialog::buildModelRow(QFormLayout* form, const QString& label, c
     auto* edit = new QLineEdit(path, row);
     edit->setClearButtonEnabled(true);
     edit->setPlaceholderText(tr("no model"));
+    edit->setToolTip(tr("The STEP or STL file of the model. It is copied into the project."));
     rowLayout->addWidget(edit, 1);
 
     auto* browse = new QPushButton(tr("Browse..."), row);

@@ -1,26 +1,23 @@
 #pragma once
 
+#include <QByteArray>
+#include <QList>
+#include <QMainWindow>
 #include <QString>
 
-#include <vector>
-
 class QDockWidget;
-class QWidget;
 
 namespace suspkin {
 
 class AnalysisPanel;
-class EditHistory;
 class HardpointModel;
+class ProjectSession;
 class Ribbon;
-class Simulation;
 class ViewportWidget;
 class Project;
-class WindowActions;
 struct EditState;
-struct Linkage;
-struct LinkageTemplate;
-struct WheelPlacement;
+struct HardpointTable;
+struct SessionMessage;
 
 /// What the window offers a feature.
 ///
@@ -35,11 +32,7 @@ public:
     virtual ~AppContext();
 
     /// What to parent a dialog to.
-    virtual QWidget* window() = 0;
-
-    /// The command bodies that have not moved into a feature yet. Shrinking:
-    /// see WindowActions.
-    virtual WindowActions* windowActions() = 0;
+    virtual QMainWindow* window() = 0;
 
     // --- the project, which owns all state ---------------------------------
     virtual Project& project() = 0;
@@ -47,11 +40,26 @@ public:
     virtual void markDirty() = 0;
     /// Write the project out now, rather than when the timer says.
     virtual bool saveProject() = 0;
+    /// Everything the project is unfolded into: the chassis, the points and
+    /// their workbook, the template and its parts, the solve, the wheels, and
+    /// the undo history of the points.
+    virtual ProjectSession& session() = 0;
+    /// Leave this project for the one whose manifest is @p manifestPath. The
+    /// caller has saved; the window is finished with once this returns.
+    virtual void requestProject(const QString& manifestPath) = 0;
+    /// Leave this project for the list of projects.
+    virtual void requestProjectList() = 0;
 
     // --- what is on screen --------------------------------------------------
     virtual ViewportWidget* viewport() = 0;
     virtual HardpointModel* hardpoints() = 0;
     virtual void showStatus(const QString& text, int milliseconds) = 0;
+    /// Put what the session had to say in front of the user. Nothing, when it
+    /// had nothing to say.
+    virtual void showProblem(const SessionMessage& problem) = 0;
+    /// Select @p rows in the viewport and the table together, @p current the
+    /// one editing acts on.
+    virtual void selectPoints(const QList<int>& rows, int current) = 0;
 
     // --- the window's own furniture -----------------------------------------
     // Docks and the ribbon are the window rather than any one feature, so they
@@ -60,17 +68,12 @@ public:
     virtual QDockWidget* analysisDock() = 0;
     virtual AnalysisPanel* analysisPanel() = 0;
     virtual Ribbon* ribbon() = 0;
-
-    // --- what has been resolved against the table ---------------------------
-    virtual const LinkageTemplate& linkageTemplate() const = 0;
-    virtual const Linkage& linkage() const = 0;
-    virtual const Simulation& simulation() const = 0;
-    virtual const std::vector<WheelPlacement>& wheelPlacements() const = 0;
-    /// The project's workbook was read whole, so the table can be written back
-    /// through it.
-    virtual bool workbookWritable() const = 0;
+    /// Where the docks sit in a project that has never been laid out.
+    virtual QByteArray defaultDockState() const = 0;
 
     // --- saying that something changed --------------------------------------
+    /// Put @p table in the model, and resolve everything against it again.
+    virtual void setHardpointTable(const HardpointTable& table, bool refit) = 0;
     /// Everything that is resolved against the table, resolved again: the
     /// markers, the parts, the solve, the wheels.
     virtual void syncTableToViewport(bool refit) = 0;
@@ -79,10 +82,7 @@ public:
     virtual void refreshCommands() = 0;
 
     // --- undo and redo ------------------------------------------------------
-    /// Every state the user's editing of the points has passed through. The
-    /// window records into it -- the edits are its own -- and a feature steps
-    /// through it.
-    virtual EditHistory& editHistory() = 0;
+    // The history itself is the session's.
     /// Put the project back in @p to, coming from @p from: the points, what
     /// they are for, and everything resolved against them. What the step
     /// between the two touched is selected, so the user sees what came back.

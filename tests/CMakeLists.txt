@@ -76,6 +76,25 @@ target_link_libraries(test_hardpoint_model PRIVATE suspkin_core Qt6::Test)
 target_include_directories(test_hardpoint_model PRIVATE ../src)
 add_test(NAME hardpoint_model COMMAND test_hardpoint_model)
 
+# The session layer: the live state a project is unfolded into, with no widget
+# in it. The model is compiled in beside it because a document owns one. The
+# wait cursor is QtGui's, so the platform is offscreen like the icons'.
+qt_add_executable(test_session
+    test_session.cpp
+    ../src/app/session/ProjectSession.cpp
+    ../src/app/session/ChassisDocument.cpp
+    ../src/app/session/HardpointDocument.cpp
+    ../src/app/session/LinkageDocument.cpp
+    ../src/app/session/SimulationRunner.cpp
+    ../src/app/session/WheelsDocument.cpp
+    ../src/app/HardpointModel.cpp)
+target_link_libraries(test_session PRIVATE suspkin_core Qt6::Test)
+target_include_directories(test_session PRIVATE ../src)
+target_compile_definitions(test_session PRIVATE
+    SUSPKIN_TEST_DATA_DIR="${SUSPKIN_TEST_DATA_DIR}")
+add_test(NAME session COMMAND test_session)
+set_tests_properties(session PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+
 # The icons are application code too, but they need a palette and QtSvg, not a
 # window. The test embeds the same SUSPKIN_ICONS list the application does,
 # which is what ties that list to the table in Icons.cpp. Offscreen, so it never
@@ -135,6 +154,18 @@ target_link_libraries(test_panel_action PRIVATE Qt6::Widgets Qt6::Test)
 target_include_directories(test_panel_action PRIVATE ../src)
 add_test(NAME panel_action COMMAND test_panel_action)
 set_tests_properties(panel_action PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+
+# Putting a floating panel back: a drag on its native title bar, ended by the
+# release Qt synthesises on Windows, and a double-click. Offscreen gives
+# floating docks a native frame, as Windows does, so this is the path a Windows
+# title bar takes -- which on Linux itself never happens.
+qt_add_executable(test_dock_redock
+    test_dock_redock.cpp
+    ../src/app/DockDragEnd.cpp)
+target_link_libraries(test_dock_redock PRIVATE Qt6::Widgets Qt6::Test)
+target_include_directories(test_dock_redock PRIVATE ../src)
+add_test(NAME dock_redock COMMAND test_dock_redock)
+set_tests_properties(dock_redock PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
 
 # The commands are application code, but a QAction needs a palette and an
 # icon, not a window -- so what each command says about itself and the one place

@@ -132,6 +132,7 @@ private slots:
     void aPoseIsLaidOverTheTableWithoutChangingIt();
     void aRolledBodyMovesTheChassisPickupsTooNotOnlyWhatTheSolveMoved();
     void wheelRotationsAreKeyedByTheNameOfTheirWheelCentre();
+    void anUprightWheelModelIsTurnedToTheStaticCamberAndToe();
 };
 
 // ---------------------------------------------------------------------------
@@ -358,8 +359,8 @@ void TestSimulation::wheelRotationsAreKeyedByTheNameOfTheirWheelCentre()
 {
     const Simulation simulation = wholeCarSimulation();
 
-    // Nothing being simulated leaves every wheel model at the attitude its CAD
-    // file drew it in.
+    // Nothing being simulated turns no upright, which leaves every wheel model
+    // at its design attitude.
     QVERIFY(SimulationPose{}.wheelRotations().isEmpty());
 
     const SimulationPose pose =
@@ -371,6 +372,39 @@ void TestSimulation::wheelRotationsAreKeyedByTheNameOfTheirWheelCentre()
     // The upright turned, so the wheel bolted to it is not left pointing the
     // way its CAD file drew it.
     QVERIFY(!rotations.value(QStringLiteral("F_WheelCenter")).isIdentity());
+}
+
+void TestSimulation::anUprightWheelModelIsTurnedToTheStaticCamberAndToe()
+{
+    // The model's own axis, along y and outboard, is turned onto the design
+    // spin axis, so the model shows the camber and toe the measures read off
+    // it. Both sides, the far one from its own outboard direction.
+    const struct {
+        const char* name;
+        float side;
+    } wheels[] = { { "F_WheelCenter", 1.0f }, { "F_WheelCenter_M", -1.0f } };
+    const auto expectAngles = [&](const WheelRotations& attitudes, double camber, double toe) {
+        for (const auto& wheel : wheels) {
+            const QVector3D axis = attitudes.value(QLatin1String(wheel.name))
+                                       .rotatedVector(QVector3D(0, wheel.side, 0));
+            const double shownCamber = -qRadiansToDegrees(std::asin(axis.z()));
+            const double shownToe =
+                qRadiansToDegrees(std::atan2(axis.x(), wheel.side * axis.y()));
+            QVERIFY2(qAbs(shownCamber - camber) < 1e-4, wheel.name);
+            QVERIFY2(qAbs(shownToe - toe) < 1e-4, wheel.name);
+        }
+    };
+
+    // A patch straight under the wheel centre is an upright wheel, so a model
+    // drawn upright stays upright.
+    const WheelRotations plain = wholeCarSimulation().designWheelAttitudes();
+    QCOMPARE(plain.size(), 4);
+    expectAngles(plain, 0.0, 0.0);
+
+    QHash<QString, StaticAlignment> alignment;
+    alignment.insert(QStringLiteral("F"), StaticAlignment{ -1.5, 0.25 });
+    expectAngles(buildFor(wholeCar(), twoAxleTemplate(), alignment).designWheelAttitudes(), -1.5,
+                 0.25);
 }
 
 QTEST_MAIN(TestSimulation)

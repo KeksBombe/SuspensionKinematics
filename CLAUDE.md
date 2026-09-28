@@ -104,13 +104,18 @@ the project is part of that feature, not a follow-up.
 
 The mechanics are already in place, so this costs almost nothing:
 
-- `MainWindow::markDirty()` starts a debounced timer (`kAutoSaveDelayMs`) that
-  calls `saveProject()`. Call it from anything that changes state.
-- View state is gathered in `MainWindow::collectViewState()` and restored in
-  `applyViewState()`; add new fields to `ViewState` in `src/project/Project.h` and
-  to both of those.
-- `MainWindow::m_loading` is set while a project is being opened, so restoring a
-  saved value does not read back as a change the user made.
+- `markDirty()` -- `AppContext`'s, the window's, the session's; one timer --
+  starts a debounced timer (`kAutoSaveDelayMs`, in `ProjectSession`) whose
+  `saveDue()` the window answers with `saveProject()`. Call it from anything that
+  changes state.
+- View state belongs to the feature it describes: each one fills in its share in
+  `Feature::collectViewState()` and puts it back in `applyViewState()`. Add new
+  fields to `ViewState` in `src/project/Project.h` and to the feature's two hooks.
+  The window only walks the features, and they are asked in no particular order,
+  so no feature's share may wait on another's.
+- `ProjectSession::loading()` is set while a project is being opened, and
+  `markDirty()` does nothing under it, so restoring a saved value does not read
+  back as a change the user made.
 - Saving also happens in `closeEvent()` and on `aboutToQuit`, so a run that ends
   without a window close (`--screenshot`, a session manager) still persists.
 
@@ -151,8 +156,8 @@ any project, and they have to outlive every project the user opens.
 
 This three-way split is the part most likely to be broken by a careless change:
 
-- `MainWindow::m_baseline` is the table **exactly as the workbook holds it**, read
-  from the project's own copy on open.
+- `HardpointDocument::baseline()` is the table **exactly as the workbook holds
+  it**, read from the project's own copy on open.
 - The live table is `HardpointModel::table()` — the baseline with the user's work
   applied.
 - `diffHardpoints(baseline, current)` produces `HardpointEdits` (`changed`,
@@ -248,10 +253,11 @@ hardpoint dock is the one place all of that is edited.
 - **Every add, delete and rename ends in `syncTableToViewport()`** (the half of
   `setHardpointTable()` after the model): parts are indices into the table, so
   skipping it draws them between the wrong points.
-- **`captureHardpointConfig()` comes before that sync, not after.** Resolving the
-  linkage again refills the model's configuration from the *project's* copy
-  (`refreshHardpointConfig()`), so a rename or delete not yet folded into the
-  project is silently undone by the refresh.
+- **`HardpointDocument::captureConfig()` comes before that sync, not after.**
+  Resolving the linkage again refills the model's configuration from the
+  *project's* copy (`HardpointDocument::refreshConfig()`), so a rename or delete
+  not yet folded into the project is silently undone by the refresh.
+  `test_session` has a case for it.
 - The selection is a list, in picking order: Ctrl+click in the viewport,
   Ctrl/Shift in the table (`ExtendedSelection`). `ViewState::selection` persists
   it next to `selectedHardpoint`, and an older manifest's single `selected` reads
@@ -263,7 +269,7 @@ hardpoint dock is the one place all of that is edited.
 
 A selected marker gets three arrows, and X, Y and Z open a field on one
 coordinate. Both are only ways of reaching `HardpointModel::setData()` on a
-coordinate column -- `MainWindow::moveHardpointCoordinate()` is the one seam --
+coordinate column -- `PointEditController` (`src/app/`) is the one seam --
 so a dragged point and a typed point produce the same `coordinateChanged()` and
 the same edits file. Nothing new is persisted: the selection was already project
 state and a drag is not.
@@ -287,8 +293,9 @@ state and a drag is not.
 - The hub belongs to the marker under it (`kHubClearancePx`), or a selected
   point could never be clicked again: all three arms start there.
 - **Editing is off while the mechanism is posed** (`setPointEditingEnabled()`,
-  from `applySimulation()`): the markers are then where the solver put them, so
-  a drag would write a design coordinate read off a simulated position.
+  from `MainWindow::showPose()`): the markers are then where the solver put
+  them, so a drag would write a design coordinate read off a simulated
+  position.
 - `evaluateExpression()` (`src/model/Expression.*`, core, tested) is what makes
   "type -0.5 on the end of what is there" work. It is in the field the keys
   open, in the table's coordinate cells and in the Add Point dialog, through
@@ -305,10 +312,10 @@ delete taking both, Generate writing angles -- are what an inverse misses, and a
 state cannot be put back the wrong way round. Names and configuration are
 implicitly shared between states, so a step costs one copy of the rows.
 
-- **Every edit of the points ends in `MainWindow::recordEdit(label)`**, after the
-  project holds it. The model's `coordinateChanged`, `configChanged` and
-  `pointRenamed` handlers are three of them -- which is why the table cell, the
-  arrows and the X/Y/Z field need nothing of their own -- and Add, Delete,
+- **Every edit of the points ends in `ProjectSession::recordEdit(label)`**,
+  after the project holds it. The model's `coordinateChanged`, `configChanged`
+  and `pointRenamed` handlers are three of them -- which is why the table cell,
+  the arrows and the X/Y/Z field need nothing of their own -- and Add, Delete,
   Mirror, Generate and Static Camber and Toe call it directly. A new command
   that changes anything in `EditState` has to call it too, or the next undo of
   anything puts its change back.
@@ -318,13 +325,14 @@ implicitly shared between states, so a step costs one copy of the rows.
   dialog that sets them has to record. The design targets and the mirror rule are
   *not* in the state, because both are saved even when the dialog changes no
   point.
-- `restartEditHistory()` is for points that came from somewhere new: a project
-  opened (at the end of `openProjectContents()`, after inference has filled the
-  configuration in), a workbook imported, a table made from nothing
-  (`adoptNewWorkbook()`), the hardpoints removed. Those copy or delete files,
+- `ProjectSession::restartHistory()` is for points that came from somewhere new: a
+  project opened (at the end of `MainWindow::openProjectContents()`, after
+  inference has filled the configuration in), a workbook imported, a table made
+  from nothing (`adoptNewWorkbook()` in `SharedCommands.h`), the hardpoints
+  removed. Those copy or delete files,
   which no step can put back.
-- `applyEditState()` is the one way a state goes in, and it keeps the ordering
-  rule from "adding, deleting, renaming": `captureHardpointConfig()` before
+- `MainWindow::restoreEditState()` is the one way a state goes in, and it keeps
+  the ordering rule from "adding, deleting, renaming": `captureConfig()` before
   `syncTableToViewport()`, or the refill from the project's copy takes the step
   back again. Anything that changes how a table is taken in has to change here
   as well.
@@ -337,10 +345,10 @@ implicitly shared between states, so a step costs one copy of the rows.
   wheel names *in* the state looks simpler and is wrong: the wheel dialog changes
   them without a step, and the next undo would take its choice back.
 - The commands are `src/app/features/EditFeature.cpp`, reaching the history
-  through `AppContext::editHistory()` and `restoreEditState()`. Not
-  `WindowActions`, which only shrinks. Their names follow the history through
-  `CommandSpec::textWhen` -- "Undo Move F_UCA_IF" in the tooltip -- while
-  `iconText` keeps the ribbon label, and the button its width, the same.
+  through `AppContext::session().history()` and `restoreEditState()`. Their
+  names follow the history through `CommandSpec::textWhen` -- "Undo Move
+  F_UCA_IF" in the tooltip -- while `iconText` keeps the ribbon label, and the
+  button its width, the same.
 - A step selects the points it touched (`touchedPoints()`), so the user sees
   what came back; one that touched nothing still there keeps the selection.
 - Delete Point no longer asks first. It did only because there was no undo.
@@ -423,8 +431,10 @@ as `:/templates/...` so the tests read the same bytes the application ships.
   viewport holds its markers in, so `moveHardpoint()` keeps the parts attached
   without re-resolving.
 - Because they are indices, `ViewportWidget::setHardpoints()` drops the linkage;
-  whoever sets the points sets the parts again. That is `rebuildLinkage()`, and
-  it is called from `setHardpointTable()` for exactly that reason.
+  whoever sets the points sets the parts again. That is
+  `ProjectSession::resolveFromTable()`, and `syncTableToViewport()` calls it
+  straight after `setHardpoints()` for exactly that reason -- the points first,
+  the parts after, never the other way round.
 - A template is written once per corner (`{corner}`) and for one side. The far
   side comes from the project's own `MirrorSpec` via `mirroredName()`, so a
   template never encodes a naming convention for left and right.
@@ -443,7 +453,7 @@ as `:/templates/...` so the tests read the same bytes the application ships.
   has. A relabelled part renames its body in the configuration too
   (`renameBody()`), or every row naming it would turn red.
 - A project without a template gets the built-in one written in on open
-  (`installBuiltinLinkageTemplate()`), so it becomes an ordinary project file the
+  (`LinkageDocument::installBuiltin()`), so it becomes an ordinary project file the
   user can edit. A template that fails to parse is *not* repaired by overwriting.
 - **A point can be renamed without breaking a workbook.** `mechanism.formerNames`
   maps a name the template uses now to the one it used before, both with
@@ -497,10 +507,10 @@ as `:/templates/...` so the tests read the same bytes the application ships.
   `writeHardpointsXlsx()` splices a workbook: the file is the user's, and notes,
   parts and keys a later release adds have to come out the other side. A project
   whose template predates the role and is recognisably the built-in one gets the
-  answer written in on open (`MainWindow::adoptTemplateSteering()`); one that is
-  somebody's own is left alone and said so about in the status line. The dialog
-  asks it the way the car is described -- where is the rack attached -- not in
-  terms of what the solver does with the answer.
+  answer written in on open (`LinkageDocument::adoptTemplateSteering()`); one
+  that is somebody's own is left alone and said so about in the status line.
+  The dialog asks it the way the car is described -- where is the rack attached
+  -- not in terms of what the solver does with the answer.
 - **A project file that is about to be replaced is read through
   `Project::readFile()`**, which has closed it again by the time it returns.
   `writeFile()` replaces a file by renaming a temporary over it, and Windows
@@ -535,14 +545,22 @@ placement is pure and testable: `src/model/Wheels.*`.
 
 - The `WheelSpec` the project stores names *hardpoints*, not coordinates, so a
   wheel centre that gets edited in the table takes its wheel with it
-  (`rebuildWheels()` is called from the coordinate-edit path for that reason).
+  (`ProjectSession::placeWheels()` ends every pose, and the coordinate-edit path
+  poses the car again, for that reason).
 - **A wheel is bolted to its upright, so it turns with it.** `WheelPlacement`
   carries a rotation as well as a centre: `SimulationPose::wheelRotations()`
   reads `CornerPose::uprightMotion` out of the current poses, keyed by
   `CornerPose::wheelCenterName`, and `orientWheels()` puts it on the placements.
-  Identity when nothing is being simulated, which is the model as its CAD file
-  drew it. Without this the models slide about the car on steering lock without
-  ever pointing anywhere -- which is what they used to do.
+  Without this the models slide about the car on steering lock without ever
+  pointing anywhere -- which is what they used to do.
+- **Under that turn is the static camber and toe.** A wheel model is assumed to
+  be drawn upright and square to the car, its axis along Y, with no camber of
+  its own. `Simulation::designWheelAttitudes()` turns that axis onto each
+  corner's design spin axis -- stated angles, the wheel axis point or the patch,
+  whichever the solver bound -- and `WheelsDocument::place()` applies it first,
+  whether or not anything is being simulated, so the models lean the way the
+  measures say they do. `orientWheels()` composes onto what a placement already
+  has, which is what lets the two go on one after the other.
 - The mirror comes *before* the rotation in `wheelTransform()`. The rotation is
   a real one, measured on that corner of the car; mirroring it would steer the
   far wheel the wrong way.
@@ -729,10 +747,16 @@ layer they register into and `src/app/features/` is where they come from:
 - `CommandRegistry::all()` is what arms the shortcuts, filled in as commands are
   built. It used to be written out by hand, which is a list that quietly loses a
   command the day somebody adds one and forgets.
-- **`WindowActions` is the migration seam, and it only ever shrinks.** Command
-  bodies that have not moved into their feature yet are reached through it.
-  Moving one into its feature deletes a line from that header; when it is empty,
-  delete the file.
+- **Every command body is in its feature.** `WindowActions`, the seam the bodies
+  waited behind while they moved, is gone; a new command's body goes in the
+  feature that registers it, and the window does not get a method for it. What
+  one feature needs from another -- importing a chassis or a workbook, making a
+  workbook for points that have none -- is declared in
+  `features/SharedCommands.h` and defined in the feature that owns it.
+- **A feature file stays under about 400 lines.** One that would grow past it is
+  split into two features in two files, as the workbook, generate and mechanism
+  features were split off: a feature registers itself and `RibbonSlot::order`
+  places its buttons, so splitting a file moves nothing on screen.
 
 - **There is no menu bar.** `setMenuWidget(m_ribbon)` makes the ribbon the whole
   of the window's chrome; the tabs say what the menus said, Help among them.
@@ -742,7 +766,8 @@ layer they register into and `src/app/features/` is where they come from:
   `QMainWindow::menuBar()`**: on a
   window whose menu widget is not a `QMenuBar` it makes one and installs it
   through `setMenuWidget()`, which `deleteLater()`s the ribbon.
-- **Every command action is added to the window** (`finishCommands()` ends in
+- **Every command action is added to the window** (`finishCommands()`, in
+  `framework/WindowChrome.*` with the File menu and the ribbon, ends in
   `addActions()`). A shortcut is live only while a widget the action is on is
   visible, and a button on a tab that is not showing is not visible -- without
   this, `Ctrl+I` would die whenever another tab was selected.
@@ -759,6 +784,12 @@ layer they register into and `src/app/features/` is where they come from:
   palette's colour into the SVG before rendering, per mode, and caches by
   `QPalette::cacheKey()`, so light and dark need nothing from the caller. Qt6::Svg
   is linked by the **application only**; `suspkin_core` stays Core + Gui.
+- **A dock's float and close buttons are ours too** (`themeDockTitleButtons()`,
+  `src/app/DockTitleButtons.*`): the platform's are grey on grey on a dark
+  Windows 11. A proxy style is set on the two buttons alone -- never on the dock
+  and never a `setTitleBarWidget()` -- so the title bar, dragging, re-docking and
+  double-clicking stay Qt's own. It picks the icon by the button's Qt object
+  name, because QDockWidget puts the style's standard icon back on every float.
 - A checkable action sets `setIconVisibleInMenu(false)`: a menu marks it with its
   tick, and the icon is for the ribbon. A checked button that is disabled draws
   its highlight at half strength -- still saying the setting is on, without
@@ -770,9 +801,18 @@ layer they register into and `src/app/features/` is where they come from:
   the window, so what answers "is it in front" is `visibleRegion()`, not
   `isVisible()`. `Ctrl+H` and `Ctrl+K` live on these actions alone: two actions
   sharing a shortcut fire neither.
+- **Letting go of a floating panel is what docks it.** On Windows a floating
+  dock has a native frame, and QDockWidget ends a drag on it only at the next
+  non-client move that reaches the dock -- the move loop swallows the button-up,
+  and the release Qt synthesises after it is ignored everywhere but macOS. If
+  the pointer leaves the title bar first, or the window is moved before, the
+  panel never docks. `endNativeDockDragOnRelease()` (`src/app/DockDragEnd.*`)
+  ends it on that release. `QT_QPA_PLATFORM=offscreen` frames floating docks
+  natively too, which is how `test_dock_redock` takes the Windows path on Linux;
+  X11 and Wayland never do, which is why this never showed there.
 - **The ribbon's own state is project state**, in `WindowState`: which tab (by
   **key**, not index, so a tab added later cannot move an older project) and
-  whether it is collapsed. Restored under `m_loading`, every change ends in
+  whether it is collapsed. Restored under `loading()`, every change ends in
   `markDirty()`.
 - `Ribbon`, `RibbonPage` and `RibbonGroup` are a few hundred lines rather than a
   library: `QTabBar`, `QStackedWidget` and buttons that paint themselves from the
@@ -803,15 +843,19 @@ src/render/   Camera, the move gizmo's geometry, GPU buffers, the OpenGL
               viewport, navigation gizmo, mode selector
 src/app/      MainWindow, AppController, the project launcher, the mirror dialog,
               the hardpoint configuration table -- its model, its delegates and
-              its dock -- and the dialogs for a new point, a generated corner
+              its dock -- the arrows and the X/Y/Z field that move a point in
+              the viewport, and the dialogs for a new point, a generated corner
               and the template's parts
+src/app/session/    the live state an open project is unfolded into, with no
+              widget in it: ProjectSession and its five documents -- chassis,
+              hardpoints, linkage, simulation, wheels
 src/app/framework/  what a feature registers into: the command registry, the
-              ribbon's tabs, the context a feature is given, and the shrinking
-              list of command bodies still on the window
+              ribbon's tabs, the window's chrome, and the context a feature is
+              given
 src/app/features/   one file per area of the application -- the project,
-              geometry, wheels, hardpoints, the linkage, analysis, the view,
-              the panels, help. Each registers its own commands and nothing
-              else names it
+              geometry, wheels, the workbook, the points, generating them, the
+              linkage, the mechanism, analysis, editing, the view, the panels,
+              help. Each registers its own commands and nothing else names it
 ```
 
 `suspkin_core` is a static library with **no OpenGL and no widgets** — geometry,
@@ -819,6 +863,41 @@ IO, the project format and the camera all live there so they can be tested
 headlessly. `Camera` and `DisplayMode` are in `src/render/` but belong to the core
 library for exactly that reason. Keep it that way: if something new is testable
 without a graphics context, it goes in the core.
+
+## The session layer
+
+`MainWindow` is the window: the viewport, the two docks, the ribbon, the status
+line, and `AppContext`. What the project is unfolded into -- everything a
+command reads or changes -- is `src/app/session/`, and holds no widget:
+
+- `ProjectSession` owns the `Project`, the debounced save, the loading flag and
+  the undo history, and runs **the cascade**: `resolveFromTable()` resolves the
+  parts, fills in the configuration, binds the axles, runs the sweep, poses the
+  car and places the wheels, in that order. `resolveMechanism()`,
+  `resolveSimulation()`, `resolvePose()`, `runSweep()` and `placeWheels()` are
+  the tails of it that something smaller needs.
+- It announces each step as it goes -- `partsResolved`, `axlesBound`,
+  `sweepRun`, `posed`, `wheelsPlaced`, `resolved` -- and the window draws each
+  one as it arrives (`MainWindow::connectSession()`). **The axles are announced
+  before the sweep runs**, because the panel's axle box has to follow them before
+  anything asks it which axle is chosen; `test_session` checks the order.
+- What the solve is asked for is a `SimulationRequest`, plain data the window
+  reads off the analysis panel. It is read afresh at every step through
+  `setRequestSource()`, for the same reason.
+- `HardpointDocument` is the baseline, the workbook and the model;
+  `LinkageDocument` the template, the steering note and the parts; `SimulationRunner` the bound
+  axles, the sweep and the pose; `WheelsDocument` the placements; and
+  `ChassisDocument` what the status line says about the chassis and the
+  `MeshQuery` the generator casts rays at. The mesh itself is the viewport's: a
+  million triangles are not worth holding twice.
+- **A document never shows anything.** What it has to tell the user comes back
+  as a `SessionMessage` -- a title and a text, because one call can fail more than
+  one way and only the document knows which -- and the caller hands it to
+  `AppContext::showProblem()`. That is what lets `test_session` compile the whole
+  layer into a test binary with no window.
+- A feature reaches all of it through `AppContext::session()`. `project()`,
+  `markDirty()` and `saveProject()` are kept beside it because they are how a
+  feature says "this is the project's".
 
 `AppController` owns the single `MainWindow` and swaps it out wholesale when the
 user changes project, so nothing survives from one project into the next. Its

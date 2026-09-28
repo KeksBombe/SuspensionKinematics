@@ -6,10 +6,12 @@
 #include "app/framework/CommandRegistry.h"
 #include "app/framework/Feature.h"
 #include "app/framework/FeatureRegistry.h"
-#include "app/framework/WindowActions.h"
+#include "app/HardpointModel.h"
 
 #include <QCoreApplication>
+#include <QDockWidget>
 #include <QKeySequence>
+#include <QMainWindow>
 
 namespace suspkin {
 namespace {
@@ -112,8 +114,6 @@ private:
 
     void registerLayoutCommands(CommandRegistry& commands)
     {
-        auto& actions = *m_context.windowActions();
-
         commands.add({
             .id = QStringLiteral("panels.resetLayout"),
             .text = tr("Reset Panel &Layout"),
@@ -124,7 +124,7 @@ private:
                             "connected."),
             .ribbon = { { QStringLiteral("view"), tr("Panels"), RibbonButton::Small, nullptr,
                           110 } },
-            .run = [&actions] { actions.resetPanelLayout(); },
+            .run = [this] { resetPanelLayout(); },
         });
 
         // Its text and icon say what it will do, and follow the ribbon: see
@@ -137,6 +137,28 @@ private:
             .ribbon = { { ribbonTrailingPage(), {}, RibbonButton::Small, nullptr, 110 } },
             .run = [this] { m_context.ribbon()->setCollapsed(!m_context.ribbon()->collapsed()); },
         });
+    }
+
+    /// Put every panel back where a new project has it, docked, and keep open
+    /// the ones that were open. What rescues a panel floated onto a monitor
+    /// that is not plugged in today.
+    void resetPanelLayout()
+    {
+        QDockWidget* hardpoints = m_context.hardpointDock();
+        QDockWidget* analysis = m_context.analysisDock();
+        const bool hardpointsOpen = !hardpoints->isHidden();
+        const bool analysisOpen = !analysis->isHidden();
+
+        m_context.window()->restoreState(m_context.defaultDockState());
+
+        // The default has every dock closed, because a new project has nothing to
+        // put in them. What was open stays open, docked again; and the table is
+        // open whenever there are points -- the rule a project follows the first
+        // time it is opened.
+        if (hardpointsOpen || m_context.hardpoints()->rowCount() > 0) hardpoints->show();
+        if (analysisOpen) analysis->show();
+        m_context.markDirty();
+        m_context.showStatus(tr("Panels docked where a new project has them."), 4000);
     }
 
     /// Make the chevron say what pressing it will do.
