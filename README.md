@@ -261,9 +261,11 @@ Generating is one-shot. Changing a target moves nothing; the dialog shows what
 which of your own edits would be overwritten. It also says where the fourth chassis
 pivot would have to go to share a plane with the other three and the inner tie
 rod end, which is what takes the bump steer out. That is advice; it is never
-applied for you. With geometry imported, the pivots can be put against it a
-clearance off its surface, which is worth doing when the geometry is the chassis
-on its own. The targets are kept in the project, so reopening the dialog starts
+applied for you. With geometry imported, **Place chassis pivots on the imported
+chassis surface** extends each wishbone leg inboard until it meets the chassis and
+puts the pivot there, *Chassis clearance* off the surface, instead of at the pivot
+distance from the centreline — worth doing when the geometry is the chassis on its
+own. The targets are kept in the project, so reopening the dialog starts
 where you left it.
 
 The **pushrod, rocker, damper and anti-roll bar** are generated too, from a few

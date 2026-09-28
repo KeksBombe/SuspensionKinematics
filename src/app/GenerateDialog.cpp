@@ -72,8 +72,9 @@ GenerateDialog::GenerateDialog(const DesignParameters& seed, const LinkageTempla
     m_buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     m_buttons->button(QDialogButtonBox::Ok)->setText(tr("Generate"));
     QPushButton* defaults = m_buttons->addButton(tr("Restore Defaults"), QDialogButtonBox::ResetRole);
-    defaults->setToolTip(tr("The 2025 car's targets, which are what the generator ships with. "
-                            "Which corners are generated, and on which side, are kept."));
+    defaults->setToolTip(tr("Reset every number to the 2025 car's targets, which the generator "
+                            "ships with. Which axles are generated, into which corners and on "
+                            "which side, is kept."));
     connect(m_buttons, &QDialogButtonBox::accepted, this, &GenerateDialog::accept);
     connect(m_buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(defaults, &QPushButton::clicked, this, [this] {
@@ -135,7 +136,11 @@ QWidget* GenerateDialog::buildTargets()
     grid->addWidget(new QLabel(tr("Front"), host), row, 1, Qt::AlignCenter);
     grid->addWidget(new QLabel(tr("Rear"), host), row, 2, Qt::AlignCenter);
     ++row;
-    grid->addWidget(new QLabel(tr("Generate this axle into corner"), host), row, 0);
+    const QString generateTip = tr("Tick to generate this axle, and pick which corner of the "
+                                   "linkage template its points are named for.");
+    auto* generateLabel = new QLabel(tr("Generate this axle into corner"), host);
+    generateLabel->setToolTip(generateTip);
+    grid->addWidget(generateLabel, row, 0);
     for (int column = 0; column < 2; ++column) {
         auto* cell = new QWidget(host);
         auto* cellLayout = new QHBoxLayout(cell);
@@ -150,6 +155,8 @@ QWidget* GenerateDialog::buildTargets()
                                           : QStringLiteral("%1 (%2)").arg(corner.token, corner.label),
                                       corner.token);
         }
+        m_generate[column]->setToolTip(generateTip);
+        m_corner[column]->setToolTip(generateTip);
         cellLayout->addWidget(m_generate[column]);
         cellLayout->addWidget(m_corner[column], 1);
         connect(m_generate[column], &QCheckBox::toggled, this, &GenerateDialog::schedulePlan);
@@ -162,8 +169,9 @@ QWidget* GenerateDialog::buildTargets()
     m_side = new QComboBox(host);
     m_side->addItem(tr("Left (+y)"), int(DesignSide::Left));
     m_side->addItem(tr("Right (−y)"), int(DesignSide::Right));
-    m_side->setToolTip(tr("The points are generated on this side under the template's own names; "
-                          "the other side comes from the project's mirror rule."));
+    m_side->setToolTip(tr("Which side of the car the linkage template's point names are on. "
+                          "The points are generated on this side under those names; the other "
+                          "side is made from them by the project's mirror rule (Y negated)."));
     connect(m_side, &QComboBox::currentIndexChanged, this, &GenerateDialog::schedulePlan);
     grid->addWidget(m_side, row++, 1, 1, 2);
 
@@ -178,45 +186,69 @@ QWidget* GenerateDialog::buildTargets()
         const char* tip;
     };
     const CarSpec car[] = {
-        { "Wheelbase", &DesignParameters::wheelbase, 300, 6000, 1, "mm", "" },
+        { "Wheelbase", &DesignParameters::wheelbase, 300, 6000, 1, "mm",
+          "Distance along X between the front and the rear wheel centres." },
         { "Centre of gravity, x", &DesignParameters::cogX, -20000, 20000, 1, "mm",
-          "Where the centre of gravity is along the car, in the car's own frame." },
-        { "Centre of gravity, height", &DesignParameters::cogHeight, 0, 3000, 1, "mm", "" },
+          "Position of the centre of gravity along the car (X), in the same frame as the "
+          "hardpoints (ISO 8855: X forward, Y left, Z up). The two axles are placed either side "
+          "of it by the wheelbase and the front weight share." },
+        { "Centre of gravity, height", &DesignParameters::cogHeight, 0, 3000, 1, "mm",
+          "Height of the centre of gravity above the ground (Z). Used for anti-dive and "
+          "anti-lift." },
         { "Weight on the front axle", &DesignParameters::frontWeight, 1, 99, 1, "%",
-          "Of the static load. It is what places the two axles either side of the centre of "
-          "gravity." },
+          "Share of the car's static weight carried by the front axle. Together with the "
+          "wheelbase it places the axles relative to the centre of gravity." },
         { "Front brake bias", &DesignParameters::frontBrakeBias, 0, 100, 1, "%",
-          "The share of the braking the front axle does. Anti-dive and anti-lift are measured "
-          "against each axle's own share." },
+          "Share of the braking force produced by the front axle; the rear does the rest. "
+          "Anti-dive and anti-lift are worked out from each axle's own share." },
         { "Loaded radius", &DesignParameters::loadedRadius, 10, 2000, 1, "mm",
-          "The wheel centre's height above the ground." },
+          "Height of the wheel centre above the ground (Z) with the car at ride height." },
         { "Rim radius", &DesignParameters::rimRadius, 0, 2000, 1, "mm",
-          "A ball joint further from the wheel's axis than this is outside the rim, and is "
-          "warned about." },
+          "Inner radius of the rim, measured from the wheel's axis. A ball joint further from "
+          "the axis than this would sit outside the rim, and is warned about. 0 turns the "
+          "check off." },
     };
     for (const CarSpec& spec : car) {
         const QString unit = QLatin1String(spec.unit) == QLatin1String("%") ? pct : mm;
         QDoubleSpinBox* spin = number(spec.minimum, spec.maximum, spec.decimals, unit, tr(spec.tip));
-        grid->addWidget(new QLabel(tr(spec.label), host), row, 0);
+        auto* label = new QLabel(tr(spec.label), host);
+        label->setToolTip(spin->toolTip());
+        grid->addWidget(label, row, 0);
         grid->addWidget(spin, row++, 1);
         m_carNumbers.push_back(CarNumber{ spec.member, spin });
     }
 
-    m_useChassis = new QCheckBox(tr("Put the chassis pivots against the imported geometry"), host);
+    // --- where the chassis pivots go -----------------------------------------
+    addHeading(grid, &row, tr("Chassis pivots"));
+    m_useChassis = new QCheckBox(tr("Place chassis pivots on the imported chassis surface"), host);
     m_useChassis->setEnabled(m_chassisAvailable);
     m_useChassis->setToolTip(
         m_chassisAvailable
-            ? tr("Each wishbone leg is cast from its ball joint toward the chassis, and its pivot "
-                 "put the clearance below off the surface it meets. Only worth it when the "
-                 "imported geometry is the chassis on its own: an upright in the model is met "
-                 "first.")
-            : tr("Import the chassis geometry first."));
+            ? tr("Instead of using the pivot distances from the centreline, each wishbone leg is "
+                 "extended inboard from its ball joint until it hits the imported chassis; the "
+                 "pivot is placed there, Chassis clearance away from the surface. A leg that "
+                 "misses the chassis falls back to its pivot distance. Only use this when the "
+                 "imported geometry is the bare chassis: an upright or other parts in the model "
+                 "would be hit first.")
+            : tr("Needs chassis geometry: import it with Geometry > Import first."));
     connect(m_useChassis, &QCheckBox::toggled, this, &GenerateDialog::schedulePlan);
     grid->addWidget(m_useChassis, row++, 0, 1, 3);
-    QDoubleSpinBox* clearance = number(0, 500, 1, mm, tr("How far off the chassis surface each "
-                                                           "pivot is put."));
-    grid->addWidget(new QLabel(tr("Chassis clearance"), host), row, 0);
+    QDoubleSpinBox* clearance = number(0, 500, 1, mm,
+                                       tr("Distance between each chassis pivot and the chassis "
+                                          "surface, along the wishbone leg. Only used when the "
+                                          "pivots are placed on the imported chassis surface."));
+    auto* clearanceLabel = new QLabel(tr("Chassis clearance"), host);
+    clearanceLabel->setToolTip(clearance->toolTip());
+    grid->addWidget(clearanceLabel, row, 0);
     grid->addWidget(clearance, row++, 1);
+    // Only means something while the box is ticked.
+    const auto syncClearance = [this, clearance, clearanceLabel] {
+        const bool used = m_useChassis->isEnabled() && m_useChassis->isChecked();
+        clearance->setEnabled(used);
+        clearanceLabel->setEnabled(used);
+    };
+    connect(m_useChassis, &QCheckBox::toggled, this, syncClearance);
+    syncClearance();
     m_carNumbers.push_back(CarNumber{ &DesignParameters::chassisClearance, clearance });
 
     // --- each axle -----------------------------------------------------------
@@ -240,91 +272,152 @@ QWidget* GenerateDialog::buildTargets()
     };
     const AxleSpec axle[] = {
         { "Wheel", "Track", &AxleDesign::track, 100, 5000, 1, Mm,
-          "Between the centres of the two contact patches." },
+          "Distance across the car (Y) between the centres of the left and right contact "
+          "patches." },
         { nullptr, "Static camber", &AxleDesign::camber, -15, 15, 2, Deg,
-          "Negative leans the top of the wheel inboard." },
+          "Lean of the wheel in front view, relative to vertical. Negative leans the top of the "
+          "wheel inboard, toward the centreline." },
         { nullptr, "Static toe", &AxleDesign::toe, -10, 10, 3, Deg,
-          "Positive points the front of the wheel inboard. Stated in the table by the point on "
-          "the wheel's axis, which is the only way a hardpoint table can state it." },
+          "Angle of the wheel in top view, relative to the car's X axis. Positive (toe-in) "
+          "points the front of the wheel inboard. It is stored as the wheel-axis point, the "
+          "only way a hardpoint table can state toe." },
         { "Steering axis", "Caster", &AxleDesign::caster, -45, 45, 2, Deg,
-          "Positive leans the top of the steering axis rearward." },
+          "Lean of the steering axis in side view, relative to vertical. Positive leans the top "
+          "of the axis rearward." },
         { nullptr, "Kingpin inclination", &AxleDesign::kingpinInclination, -45, 45, 2, Deg,
-          "Positive leans the top of the steering axis inboard." },
+          "Lean of the steering axis in front view, relative to vertical. Positive leans the "
+          "top of the axis inboard, toward the centreline." },
         { nullptr, "Scrub radius", &AxleDesign::scrubRadius, -300, 300, 1, Mm,
-          "At the ground. Positive puts the tyre outboard of the steering axis." },
+          "In front view, at the ground: the lateral distance (Y) from where the steering axis "
+          "meets the ground to the centre of the contact patch. Positive puts the contact "
+          "patch outboard of the axis." },
         { nullptr, "Mechanical trail", &AxleDesign::mechanicalTrail, -300, 300, 1, Mm,
-          "Positive puts the contact patch behind the steering axis." },
+          "In side view, at the ground: the distance along X from where the steering axis meets "
+          "the ground back to the centre of the contact patch. Positive puts the contact patch "
+          "behind the axis." },
         { "Instant centres", "Roll centre height", &AxleDesign::rollCentreHeight, -500, 1000, 1,
-          Mm, "The roll centre this axle's front-view instant centre is placed to give." },
+          Mm, "Height above the ground (Z) of this axle's roll centre at design. The front-view "
+          "instant centre is placed on the line from the contact patch through this point." },
         { nullptr, "Front-view swing arm", &AxleDesign::frontViewSwingArm, 1, 1e7, 0, Mm,
-          "How far inboard of the contact patch the front-view instant centre is." },
+          "In front view: the lateral distance (Y) from the contact patch inboard to the "
+          "front-view instant centre, where the two wishbone planes meet. Longer means less "
+          "camber change in bump." },
         { nullptr, "Anti-dive / anti-lift", &AxleDesign::antiPercent, -200, 300, 1, Pct,
           "Percentage of the braking load transfer taken by the suspension geometry instead of "
           "the springs. Front: anti-dive, rear: anti-lift. 0 % = none, 100 % = full." },
         { nullptr, "Side-view swing arm", &AxleDesign::sideViewSwingArm, 1, 1e7, 0, Mm,
-          "How far from the contact patch the side-view instant centre is, toward the other "
-          "axle." },
-        { "Wishbones", "Upper ball joint above centre", &AxleDesign::upperJointHeight, -500, 500,
-          1, Mm, "On the steering axis, this far above the wheel centre." },
-        { nullptr, "Lower ball joint below centre", &AxleDesign::lowerJointDrop, -500, 500, 1,
-          Mm, "On the steering axis, this far below the wheel centre. Also the radius the "
-                 "outer tie rod end is put on." },
-        { nullptr, "Upper pivot line", &AxleDesign::upperPivotY, 0, 3000, 1, Mm,
-          "The upper chassis pivots' distance from the car's centreline, where there is no "
-          "chassis to put them against." },
-        { nullptr, "Lower pivot line", &AxleDesign::lowerPivotY, 0, 3000, 1, Mm,
-          "The lower chassis pivots' distance from the car's centreline." },
-        { nullptr, "Upper leg, forward sweep", &AxleDesign::upperForwardAngle, -79, 79, 1, Deg,
-          "In top view, the angle the leg makes with a line straight across the car." },
-        { nullptr, "Upper leg, rearward sweep", &AxleDesign::upperRearwardAngle, -79, 79, 1, Deg, "" },
-        { nullptr, "Lower leg, forward sweep", &AxleDesign::lowerForwardAngle, -79, 79, 1, Deg, "" },
-        { nullptr, "Lower leg, rearward sweep", &AxleDesign::lowerRearwardAngle, -79, 79, 1, Deg, "" },
-        { "Steering", "Steering arm", &AxleDesign::steeringArm, -500, 500, 1, Mm,
-          "From the wheel centre to the outer tie rod end, along the car. Positive puts the tie "
-          "rod behind the wheel centre." },
-        { nullptr, "Ackermann offset", &AxleDesign::ackermann, -200, 200, 1, Mm,
-          "How far inboard of the steering axis the outer tie rod end sits." },
-        { nullptr, "Inner tie rod end, x offset", &AxleDesign::tieRodInboardOffsetX, -500, 500, 1,
-          Mm, "How far ahead of the outer end the inner end is put. It moves nothing in front "
-                 "view, so it leaves the bump steer alone." },
+          "In side view: the distance from the contact patch to the side-view instant centre, "
+          "measured toward the other axle (rearward for the front axle, forward for the rear). "
+          "Its angle comes from the anti-dive / anti-lift above." },
+        { "Wishbones", "Upper ball joint, height above wheel centre", &AxleDesign::upperJointHeight,
+          -500, 500, 1, Mm,
+          "Vertical distance (Z) from the wheel centre up to the upper ball joint. The joint is "
+          "placed on the steering axis at that height, so caster and kingpin inclination decide "
+          "its X and Y. Positive is above the wheel centre." },
+        { nullptr, "Lower ball joint, depth below wheel centre", &AxleDesign::lowerJointDrop, -500,
+          500, 1, Mm,
+          "Vertical distance (Z) from the wheel centre down to the lower ball joint, placed on "
+          "the steering axis. Positive is below the wheel centre. The outer tie rod end is put "
+          "at this same distance from the wheel centre, in side view." },
+        { nullptr, "Upper chassis pivots, distance from centreline", &AxleDesign::upperPivotY, 0,
+          3000, 1, Mm,
+          "Lateral distance (Y) from the car's centreline to the front and rear chassis pivots "
+          "of the upper wishbone. Each leg runs inboard from the ball joint until it reaches "
+          "this distance. Not used while the pivots are placed on the imported chassis surface, "
+          "except for a leg that misses it." },
+        { nullptr, "Lower chassis pivots, distance from centreline", &AxleDesign::lowerPivotY, 0,
+          3000, 1, Mm,
+          "Lateral distance (Y) from the car's centreline to the front and rear chassis pivots "
+          "of the lower wishbone. Each leg runs inboard from the ball joint until it reaches "
+          "this distance. Not used while the pivots are placed on the imported chassis surface, "
+          "except for a leg that misses it." },
+        { nullptr, "Upper wishbone front leg, angle in top view", &AxleDesign::upperForwardAngle,
+          -79, 79, 1, Deg,
+          "In top view: the angle between the front leg (ball joint to front chassis pivot) and "
+          "a line straight across the car (Y). 0 runs straight across; positive angles the leg "
+          "forward (+X) as it goes inboard, negative rearward." },
+        { nullptr, "Upper wishbone rear leg, angle in top view", &AxleDesign::upperRearwardAngle,
+          -79, 79, 1, Deg,
+          "In top view: the angle between the rear leg (ball joint to rear chassis pivot) and a "
+          "line straight across the car (Y). 0 runs straight across; positive angles the leg "
+          "rearward (-X) as it goes inboard, negative forward." },
+        { nullptr, "Lower wishbone front leg, angle in top view", &AxleDesign::lowerForwardAngle,
+          -79, 79, 1, Deg,
+          "In top view: the angle between the front leg (ball joint to front chassis pivot) and "
+          "a line straight across the car (Y). 0 runs straight across; positive angles the leg "
+          "forward (+X) as it goes inboard, negative rearward." },
+        { nullptr, "Lower wishbone rear leg, angle in top view", &AxleDesign::lowerRearwardAngle,
+          -79, 79, 1, Deg,
+          "In top view: the angle between the rear leg (ball joint to rear chassis pivot) and a "
+          "line straight across the car (Y). 0 runs straight across; positive angles the leg "
+          "rearward (-X) as it goes inboard, negative forward." },
+        { "Steering", "Outer tie rod end, x behind wheel centre", &AxleDesign::steeringArm, -500,
+          500, 1, Mm,
+          "Longitudinal distance (X) from the wheel centre to the outer tie rod end. Positive "
+          "puts the tie rod behind the wheel centre, negative ahead of it. Its height follows "
+          "from the lower ball joint's depth." },
+        { nullptr, "Outer tie rod end, y inboard of steering axis", &AxleDesign::ackermann, -200,
+          200, 1, Mm,
+          "Lateral distance (Y) from the steering axis inboard to the outer tie rod end, at the "
+          "tie rod end's height. Positive is toward the centreline. With the distance behind "
+          "the wheel centre it sets the steering arm's angle in top view, and with it the "
+          "Ackermann." },
+        { nullptr, "Inner tie rod end, x offset from outer end", &AxleDesign::tieRodInboardOffsetX,
+          -500, 500, 1, Mm,
+          "Longitudinal distance (X) from the outer tie rod end to the inner one. Positive puts "
+          "the inner end ahead (+X), negative behind. It moves the inner end along X only, so "
+          "the tie rod's front view -- and with it the bump steer -- stays the same." },
         { "Pushrod and rocker", "Pushrod pickup, along the arm", &AxleDesign::pushrodPickupInboard,
           -500, 1000, 1, Mm,
-          "From the ball joint of the wishbone the linkage template mounts the pushrod on, toward "
-          "that wishbone's chassis pivots. A pushrod on the upright is placed by the lower "
-          "wishbone's numbers." },
+          "Distance from the ball joint of the wishbone the pushrod is mounted on (as the "
+          "linkage template says), along that wishbone toward its chassis pivots. A pushrod on "
+          "the upright is placed by the lower wishbone's numbers." },
         { nullptr, "Pushrod pickup, above the arm", &AxleDesign::pushrodPickupHeight, -500, 500, 1,
-          Mm, "Off the wishbone's plane; negative is below it." },
+          Mm, "Distance of the pushrod pickup from the wishbone's plane. Positive is above the "
+              "plane, negative below it." },
         { nullptr, "Rocker pivot, from centreline", &AxleDesign::rockerPivotY, 0, 3000, 1,
-          Mm, "" },
+          Mm, "Lateral distance (Y) from the car's centreline to the rocker's pivot." },
         { nullptr, "Rocker pivot, height", &AxleDesign::rockerPivotZ, -500, 3000, 1,
-          Mm, "Above the ground." },
+          Mm, "Height of the rocker's pivot above the ground (Z)." },
         { nullptr, "Rocker pivot, ahead of the pickup", &AxleDesign::rockerPivotOffsetX, -1000,
-          1000, 1, Mm, "The rocker's axis runs along the car." },
+          1000, 1, Mm,
+          "Longitudinal distance (X) from the pushrod's outer pickup to the rocker's pivot. "
+          "Positive is ahead (+X). The rocker turns about an axis along X." },
         { nullptr, "Rocker arm to the pushrod", &AxleDesign::rockerPushrodArm, 1, 1000, 1,
-          Mm, "The pushrod meets this arm square at design." },
+          Mm, "Distance on the rocker from its pivot to the pushrod's inner end. The pushrod "
+              "meets this arm at a right angle at design." },
         { nullptr, "Damper arm, turned from the pushrod's", &AxleDesign::rockerDamperAngle, -180,
-          180, 1, Deg, "On the rocker, from the pushrod's arm to the damper's; positive "
-                                 "turns inboard." },
+          180, 1, Deg,
+          "Angle on the rocker, seen along its pivot axis, from the pushrod's arm to the "
+          "damper's arm. Positive turns inboard, toward the centreline." },
         { nullptr, "Installation ratio", &AxleDesign::installationRatio, 0.05, 5, 3, Ratio,
-          "Damper compression per unit of bump at design. The damper's arm on the rocker is sized "
-          "so that this is met exactly." },
+          "Damper compression per unit of wheel bump at design (motion ratio, damper over "
+          "wheel). The damper's arm on the rocker is sized so that this is met exactly." },
         { nullptr, "Damper length", &AxleDesign::damperLength, 1, 2000, 1, Mm,
-          "Eye to eye at design. The damper is laid square to its arm, the way bump closes it." },
+          "Eye-to-eye length of the damper at design. The damper is laid at a right angle to "
+          "its rocker arm, so that bump compresses it." },
         { "Anti-roll bar", "Drop link arm on the rocker", &AxleDesign::antiRollRockerArm, 1, 1000,
-          1, Mm, "When the template hangs the drop link off the rocker." },
+          1, Mm,
+          "Distance on the rocker from its pivot to the drop link's upper end. Used when the "
+          "linkage template mounts the drop link on the rocker." },
         { nullptr, "Drop link arm, turned from the pushrod's", &AxleDesign::antiRollRockerAngle,
-          -180, 180, 1, Deg, "On the rocker; positive turns inboard." },
+          -180, 180, 1, Deg,
+          "Angle on the rocker, seen along its pivot axis, from the pushrod's arm to the drop "
+          "link's arm. Positive turns inboard, toward the centreline. Used when the drop link is "
+          "on the rocker." },
         { nullptr, "Drop link pickup, along the arm", &AxleDesign::antiRollPickupInboard, -500,
           1000, 1, Mm,
-          "When the template hangs the drop link off a wishbone or the upright: from that "
-          "wishbone's ball joint toward its pivots." },
+          "Used when the linkage template mounts the drop link on a wishbone or the upright: "
+          "the distance from that wishbone's ball joint toward its chassis pivots." },
         { nullptr, "Drop link length", &AxleDesign::dropLinkLength, 1, 1000, 1, Mm,
-          "" },
+          "Length of the drop link between its two ball joints. It is laid at a right angle to "
+          "the rocker arm it hangs from." },
         { nullptr, "Bar arm length", &AxleDesign::antiRollArmLength, -1000, 1000, 1,
-          Mm, "From the bar forward to the drop link; negative runs it rearward." },
+          Mm, "Length of the anti-roll bar's arm, from the bar's axis to the drop link. "
+              "Positive runs it forward (+X) from the bar, negative rearward." },
         { nullptr, "Bearing inboard of the arm", &AxleDesign::antiRollBearingInset, 1, 2000, 1,
-          Mm, "The bar's axis runs across the car, through its arm root and this "
-                             "bearing." },
+          Mm, "Lateral distance (Y) from the bar's arm root inboard to its bearing. The bar's "
+              "axis runs through both, across the car." },
     };
 
     // A switch opens some groups: whether the group is generated at all.
@@ -336,13 +429,16 @@ QWidget* GenerateDialog::buildTargets()
     };
     const GroupSwitch switches[] = {
         { "Steering", "Driven by the steering rack", &AxleDesign::steered,
-          "Written into the template's corner, so that an axle generated without a rack is not "
-          "steered by one." },
+          "Tick if this axle has a steering rack: the rack moves the inner tie rod end across "
+          "the car (Y). Unticked, the inner tie rod end is fixed to the chassis, as on a rear "
+          "axle's toe link. Written into the linkage template for this corner." },
         { "Pushrod and rocker", "Generate the pushrod, rocker and damper",
           &AxleDesign::generateRocker,
-          "Untick to keep a rocker placed by hand where it is: none of its points are touched." },
+          "Tick to place the pushrod, rocker and damper points from the numbers below. Untick "
+          "to keep a rocker placed by hand: none of its points are touched." },
         { "Anti-roll bar", "Generate the anti-roll bar", &AxleDesign::generateAntiRollBar,
-          "Its four points, by the definition and the drop link mount in the linkage template." },
+          "Tick to place the anti-roll bar's points from the numbers below, on the mount the "
+          "linkage template names for the drop link. Untick to keep a bar placed by hand." },
     };
 
     for (const AxleSpec& spec : axle) {
@@ -375,7 +471,14 @@ QWidget* GenerateDialog::buildTargets()
         m_axleNumbers.push_back(field);
     }
 
-    grid->addWidget(new QLabel(tr("Pivot left off the tie rod's plane"), host), row, 0);
+    const QString advisedTip =
+        tr("For low bump steer the inner tie rod end should lie in the plane of the wishbones' "
+           "chassis pivots. Four pivots rarely share one plane, so three of them define it and "
+           "the inner tie rod end is placed on it. Pick the fourth here: where it would have to "
+           "move to lie in the same plane is shown as bump-steer advice, never applied.");
+    auto* advisedLabel = new QLabel(tr("Chassis pivot excluded from the tie-rod plane"), host);
+    advisedLabel->setToolTip(advisedTip);
+    grid->addWidget(advisedLabel, row, 0);
     const QPair<DesignPivot, QString> pivots[] = {
         { DesignPivot::LowerFront, tr("Lower front") },
         { DesignPivot::LowerRear, tr("Lower rear") },
@@ -385,9 +488,7 @@ QWidget* GenerateDialog::buildTargets()
     for (int column = 0; column < 2; ++column) {
         m_advised[column] = new QComboBox(host);
         for (const auto& [pivot, text] : pivots) m_advised[column]->addItem(text, int(pivot));
-        m_advised[column]->setToolTip(
-            tr("Three chassis pivots make the plane the inner tie rod end is put on. This is the "
-               "fourth: where it would have to be to share that plane is given as advice."));
+        m_advised[column]->setToolTip(advisedTip);
         connect(m_advised[column], &QComboBox::currentIndexChanged, this,
                 &GenerateDialog::schedulePlan);
         grid->addWidget(m_advised[column], row, 1 + column);
@@ -558,7 +659,7 @@ void GenerateDialog::showPlan()
     for (const GeneratedCorner& corner : m_plan.corners) onChassis += corner.pivotsOnChassis;
     if (onChassis > 0)
         notes += QStringLiteral("<p>%1</p>").arg(
-            tr("%n pivot(s) were put against the imported geometry.", "", onChassis));
+            tr("%n pivot(s) were placed on the imported chassis surface.", "", onChassis));
     m_notes->setText(notes);
 }
 
