@@ -85,6 +85,17 @@ WheelRotations Simulation::designWheelAttitudes() const
     return attitudes;
 }
 
+QSet<QString> Simulation::solvedPoints() const
+{
+    QSet<QString> names;
+    for (const AxleSolver& axle : m_axles)
+        for (const std::optional<CornerSolver>* corner : { &axle.left(), &axle.right() }) {
+            if (!*corner) continue;
+            for (const PosedPoint& point : (*corner)->designPose().points) names.insert(point.name);
+        }
+    return names;
+}
+
 Simulation Simulation::build(const LinkageTemplate& templ, const HardpointTable& table,
                              const MirrorSpec& mirror,
                              const QHash<QString, StaticAlignment>& alignment,

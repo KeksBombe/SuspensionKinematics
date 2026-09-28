@@ -358,6 +358,16 @@ QString sweepValueText(double value);
 bool sweepMeasureValue(const AxleSample& sample, SweepMeasure measure, bool leftSide,
                        double* value);
 
+/// Whether @p result has a number for @p measure anywhere, on either wheel. An
+/// axle with no pushrod and rocker has no damper, so its damper measures are
+/// never there -- and a curve box offering them reads as a curve gone flat.
+bool sweepMeasureAvailable(const SweepResult& result, SweepMeasure measure);
+
+/// What an axle must have for @p measure to be read at all -- "a pushrod, a
+/// rocker and a damper", "an anti-roll bar" -- or nothing for the measures
+/// every double wishbone has.
+QString sweepMeasureRequirement(SweepMeasure measure);
+
 /// The axle at one position, on its own.
 ///
 /// What the travel slider needs: a whole sweep's worth of numbers for one place,

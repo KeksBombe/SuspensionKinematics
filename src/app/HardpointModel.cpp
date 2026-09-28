@@ -150,13 +150,41 @@ HardpointConfig HardpointModel::configAt(int row) const
     return m_config.value(m_table.points[static_cast<std::size_t>(row)].name);
 }
 
+void HardpointModel::setSolvedPoints(std::optional<QSet<QString>> names)
+{
+    if (m_solved == names) return;
+    m_solved = std::move(names);
+    if (rowCount() == 0) return;
+    emit dataChanged(index(0, TypeColumn), index(rowCount() - 1, TypeColumn),
+                     { Qt::DisplayRole, Qt::ToolTipRole, IssueLevelRole, IssueTextRole,
+                       UnsolvedRole });
+    // The status dot sits beside the name.
+    emit dataChanged(index(0, NameColumn), index(rowCount() - 1, NameColumn),
+                     { Qt::ToolTipRole, IssueLevelRole, IssueTextRole });
+}
+
+bool HardpointModel::isUnsolved(int row) const
+{
+    if (!m_solved || row < 0 || row >= rowCount()) return false;
+    return configAt(row).type == PointType::Solved
+           && !m_solved->contains(m_table.points[static_cast<std::size_t>(row)].name);
+}
+
 std::vector<ConfigIssue> HardpointModel::issuesAt(int row) const
 {
     if (row < 0 || row >= rowCount()) return {};
     const HardpointConfig config = configAt(row);
     // A point nobody has touched is not a point with something wrong with it.
     if (config.isEmpty()) return {};
-    return validateHardpointConfig(config, m_catalog);
+    std::vector<ConfigIssue> issues = validateHardpointConfig(config, m_catalog);
+    if (isUnsolved(row)) {
+        issues.push_back(ConfigIssue{
+            ConfigIssueLevel::Warning,
+            tr("Not solved: the solver does not move this point, so while simulating it stays "
+               "where the table has it. The linkage it belongs to is incomplete -- a rocker "
+               "without its pushrod, say -- or its corner does not solve.") });
+    }
+    return issues;
 }
 
 int HardpointModel::configuredCount() const
@@ -185,10 +213,12 @@ int HardpointModel::columnCount(const QModelIndex& parent) const
     return parent.isValid() ? 0 : ColumnCount;
 }
 
-QVariant HardpointModel::configDisplay(const HardpointConfig& config, int column) const
+QVariant HardpointModel::configDisplay(int row, const HardpointConfig& config, int column) const
 {
     switch (column) {
-    case TypeColumn: return pointTypeLabel(config.type);
+    case TypeColumn: return config.type == PointType::Solved && isUnsolved(row)
+                                ? tr("Not solved")
+                                : pointTypeLabel(config.type);
     case Part1Column: return config.part1.isEmpty() ? QString(kEmDash) : config.part1;
     case Part2Column: return config.part2.isEmpty() ? QString(kEmDash) : config.part2;
     case BushingColumn:
@@ -251,7 +281,7 @@ QVariant HardpointModel::data(const QModelIndex& index, int role) const
         case XColumn:
         case YColumn:
         case ZColumn: return QLocale().toString(point.coord[axisOf(column)], 'f', kDisplayDecimals);
-        default: return configDisplay(config, column);
+        default: return configDisplay(row, config, column);
         }
 
     case Qt::EditRole:
@@ -298,6 +328,8 @@ QVariant HardpointModel::data(const QModelIndex& index, int role) const
     }
 
     case IssueTextRole: return issueMessages(issuesAt(row)).join(QLatin1Char('\n'));
+
+    case UnsolvedRole: return isUnsolved(row);
 
     default: return {};
     }

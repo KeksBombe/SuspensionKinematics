@@ -4,7 +4,9 @@
 #include "model/HardpointConfig.h"
 
 #include <QAbstractTableModel>
+#include <QSet>
 
+#include <optional>
 #include <vector>
 
 namespace suspkin {
@@ -62,6 +64,7 @@ public:
         ChoicesRole,                      ///< QStringList this cell may be set to
         IssueLevelRole,                   ///< worst ConfigIssueLevel on the row, or -1
         IssueTextRole,                    ///< every issue on the row, one per line
+        UnsolvedRole,                     ///< bool: typed Solved, but no solve moves it
     };
 
     explicit HardpointModel(QObject* parent = nullptr);
@@ -94,6 +97,14 @@ public:
     /// row naming it wrong.
     void setBodyCatalog(BodyCatalog catalog);
     const BodyCatalog& bodyCatalog() const { return m_catalog; }
+
+    /// The points the bound solve actually moves, by name, or nothing when no
+    /// axle is bound -- then there is no solve to hold a Solved point against,
+    /// and the status line already says why.
+    void setSolvedPoints(std::optional<QSet<QString>> names);
+    /// Whether @p row is typed Solved while the solve leaves it where it is:
+    /// a rocker point with no pushrod, a point of a corner that did not bind.
+    bool isUnsolved(int row) const;
 
     /// What is wrong with @p row, worst first. Recomputed rather than cached:
     /// it is a handful of string comparisons, and a cache is one more thing
@@ -130,12 +141,13 @@ signals:
 private:
     bool setCoordinate(const QModelIndex& index, const QVariant& value);
     bool setConfigField(int row, int column, const QVariant& value);
-    QVariant configDisplay(const HardpointConfig& config, int column) const;
+    QVariant configDisplay(int row, const HardpointConfig& config, int column) const;
     QVariant tooltipFor(int row, int column) const;
 
     HardpointTable m_table;
     HardpointConfigMap m_config;
     BodyCatalog m_catalog;
+    std::optional<QSet<QString>> m_solved;
 };
 
 } // namespace suspkin

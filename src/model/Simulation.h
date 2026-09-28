@@ -5,6 +5,7 @@
 #include "model/Wheels.h"
 
 #include <QHash>
+#include <QSet>
 #include <QString>
 
 #include <optional>
@@ -79,6 +80,12 @@ public:
     /// read off the table, and a wheel model is drawn with it whether or not
     /// anything is being simulated.
     WheelRotations designWheelAttitudes() const;
+
+    /// Every point some bound corner positions as it moves, by name: the ones a
+    /// pose lays over the table. A point the configuration calls Solved and
+    /// that is not in here is one the solve leaves where it is -- a rocker
+    /// without its pushrod, a corner that did not bind.
+    QSet<QString> solvedPoints() const;
 
     /// What to tell the user about the solve: why there is no curve when there
     /// is none, or what was assumed to get one. Empty when there is nothing to

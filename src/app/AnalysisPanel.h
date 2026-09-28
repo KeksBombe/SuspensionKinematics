@@ -175,6 +175,9 @@ private:
     void syncSideToggles();
     /// Hand the plot the sweeps of the axles it is showing.
     void syncPlotSweeps();
+    /// Grey out the curves none of the swept axles can give -- the damper's
+    /// on a car with no pushrod and rocker -- saying what they need.
+    void syncMeasureAvailability();
     /// Whether the current kind of sweep can be run on this axle.
     bool canSweep(const QString& token) const;
     int axleIndex(const QString& token) const;

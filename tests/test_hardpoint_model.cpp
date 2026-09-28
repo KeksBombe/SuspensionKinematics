@@ -53,6 +53,7 @@ private slots:
     void aRigidJointReadsAsADash();
     void aCoordinateIsStillHandedOverUnrounded();
     void clearingTheTableClearsWhatDescribedIt();
+    void aSolvedPointTheSolveDoesNotMoveSaysSo();
 
 private:
     QModelIndex cell(int row, int column) const { return m_model->index(row, column); }
@@ -325,6 +326,42 @@ void TestHardpointModel::clearingTheTableClearsWhatDescribedIt()
 
     QCOMPARE(m_model->rowCount(), 0);
     QVERIFY(m_model->config().isEmpty());
+}
+
+void TestHardpointModel::aSolvedPointTheSolveDoesNotMoveSaysSo()
+{
+    HardpointConfigMap config;
+    HardpointConfig joint;
+    joint.type = PointType::Solved;
+    joint.part1 = kLowerWishbone;
+    joint.part2 = kUpright;
+    config.insert(QStringLiteral("F_LCA_O"), joint);
+    m_model->setConfig(config);
+    const QModelIndex type = cell(1, HardpointModel::TypeColumn);
+
+    // No axle bound: nothing to hold the chip against, so it stays as typed.
+    QVERIFY(!m_model->isUnsolved(1));
+    const std::vector<ConfigIssue> before = m_model->issuesAt(1);
+
+    QSignalSpy changed(m_model, &QAbstractItemModel::dataChanged);
+    m_model->setSolvedPoints(QSet<QString>{ QStringLiteral("F_LCA_O") });
+    QVERIFY(!m_model->isUnsolved(1));
+    QVERIFY(!type.data(HardpointModel::UnsolvedRole).toBool());
+    QCOMPARE(type.data(Qt::DisplayRole).toString(), pointTypeLabel(PointType::Solved));
+
+    m_model->setSolvedPoints(QSet<QString>{ QStringLiteral("F_UCA_O") });
+    QVERIFY(changed.count() > 0);
+    QVERIFY(m_model->isUnsolved(1));
+    QVERIFY(type.data(HardpointModel::UnsolvedRole).toBool());
+    QCOMPARE(type.data(Qt::DisplayRole).toString(), QStringLiteral("Not solved"));
+    QCOMPARE(m_model->issuesAt(1).size(), before.size() + 1);
+    // The type itself is untouched: it is still what the user said it is.
+    QCOMPARE(m_model->configAt(1).type, PointType::Solved);
+    // A chassis point is never "not solved": nothing solves it on purpose.
+    QVERIFY(!m_model->isUnsolved(0));
+
+    m_model->setSolvedPoints(std::nullopt);
+    QVERIFY(!m_model->isUnsolved(1));
 }
 
 QTEST_MAIN(TestHardpointModel)

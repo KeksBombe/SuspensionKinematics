@@ -200,7 +200,10 @@ void PointTypeDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opt
     style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
 
     const auto type = static_cast<PointType>(index.data(HardpointModel::PointTypeRole).toInt());
-    const ChipColors colors = chipColorsFor(type, opt.palette);
+    // Green says the solver works the point out. One it does not move gets no
+    // colour, the same as a point nobody has decided about.
+    const bool unsolved = index.data(HardpointModel::UnsolvedRole).toBool();
+    const ChipColors colors = chipColorsFor(unsolved ? PointType::Unassigned : type, opt.palette);
 
     const QRect content = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, opt.widget);
     const QFontMetrics metrics(opt.font);

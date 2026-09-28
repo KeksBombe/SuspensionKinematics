@@ -137,6 +137,32 @@ SweepSpec SweepSettings::specFor(SweepKind kind) const
     return spec;
 }
 
+namespace {
+
+/// What the template gives this axle that neither of its bound sides has --
+/// the rocker, the bar -- said once for the axle, with the measures it costs.
+/// Nothing when every group is there, or when no side bound at all: that
+/// axle already has its own warning, or none is due.
+QString missingGroupsNote(const AxleSolver& axle, const MechanismTemplate& mechanism)
+{
+    const CornerSolver* bound = axle.left() ? &*axle.left() : axle.right() ? &*axle.right() : nullptr;
+    if (!bound) return QString();
+    QStringList lost;
+    if (mechanism.hasRocker() && !bound->hasDamper())
+        lost << (bound->hasRocker() ? tr("no damper, so damper length, damper travel and the "
+                                         "installation ratio are not available")
+                                    : tr("no complete pushrod and rocker, so damper length, "
+                                         "damper travel and the installation ratio are not "
+                                         "available"));
+    if (mechanism.hasAntiRoll() && !bound->hasAntiRoll())
+        lost << tr("no complete anti-roll bar, so its twist is not available");
+    if (lost.isEmpty()) return QString();
+    return tr("%1: %2. Camber, toe and the rest of the wheel's kinematics do not depend on them.")
+        .arg(axle.label(), lost.join(QStringLiteral("; ")));
+}
+
+} // namespace
+
 AxleSolver AxleSolver::build(const MechanismTemplate& mechanism, const CornerSpec& corner,
                              const HardpointTable& table, const MirrorSpec& mirror,
                              bool steeringDeclared,
@@ -210,6 +236,9 @@ AxleSolver AxleSolver::build(const MechanismTemplate& mechanism, const CornerSpe
         }
         slot = std::move(solver);
     }
+
+    const QString missing = missingGroupsNote(axle, mechanism);
+    if (!missing.isEmpty()) axle.m_warnings << missing;
 
     // A U-bar's axis runs from one arm root to the other, and only an axle knows
     // both. Without the far side it stays the y direction, which is what a
@@ -880,6 +909,27 @@ bool sweepMeasureValue(const AxleSample& sample, SweepMeasure measure, bool left
     default: break;
     }
     return false;
+}
+
+bool sweepMeasureAvailable(const SweepResult& result, SweepMeasure measure)
+{
+    double value = 0.0;
+    return std::any_of(result.samples.begin(), result.samples.end(), [&](const AxleSample& sample) {
+        return sweepMeasureValue(sample, measure, true, &value)
+               || sweepMeasureValue(sample, measure, false, &value);
+    });
+}
+
+QString sweepMeasureRequirement(SweepMeasure measure)
+{
+    switch (measure) {
+    case SweepMeasure::DamperLength:
+    case SweepMeasure::DamperTravel:
+    case SweepMeasure::InstallationRatio: return tr("a pushrod, a rocker and a damper");
+    case SweepMeasure::AntiRollTwist: return tr("an anti-roll bar");
+    default: break;
+    }
+    return QString();
 }
 
 namespace {

@@ -230,6 +230,13 @@ QString PlotWidget::emptyText() const
     if (m_measure == SweepMeasure::Ackermann)
         return tr("Nothing to plot: Ackermann needs both wheels of an axle, and a second axle "
                   "in the table to take the wheelbase to.");
+    const QString needs = sweepMeasureRequirement(m_measure);
+    if (!needs.isEmpty())
+        return tr("Nothing to plot: %1 needs %2, and the hardpoint table does not have all of "
+                  "it for %3. Camber, toe and the rest of the wheel's kinematics do not depend "
+                  "on it.")
+            .arg(sweepMeasureLabel(m_measure), needs,
+                 m_sweeps.size() == 1 ? tr("this axle") : tr("any of the axles shown"));
     return m_sweeps.size() == 1
                ? tr("Nothing to plot: this axle has no %1.")
                      .arg(sweepMeasureLabel(m_measure).toLower())

@@ -395,6 +395,38 @@ void AnalysisPanel::syncPlotSweeps()
         if (swept.contains(result.axleToken))
             sweeps.append(PlotSweep{ result, axleIndex(result.axleToken) });
     m_plot->setSweeps(sweeps);
+    syncMeasureAvailability();
+}
+
+void AnalysisPanel::syncMeasureAvailability()
+{
+    auto* model = qobject_cast<QStandardItemModel*>(m_curveBox->model());
+    if (!model) return;
+    const QStringList swept = sweptAxles();
+    std::vector<const SweepResult*> shown;
+    for (const SweepResult& result : m_results)
+        if (swept.contains(result.axleToken) && !result.isEmpty()) shown.push_back(&result);
+
+    for (int row = 0; row < m_curveBox->count(); ++row) {
+        QStandardItem* item = model->item(row);
+        if (!item) continue;
+        const SweepMeasure measure = sweepMeasureFromKey(m_curveBox->itemData(row).toString());
+        const QString needs = sweepMeasureRequirement(measure);
+        // Only the measures a part of the car stands behind are ever greyed:
+        // a camber curve that is missing is a sweep that did not assemble,
+        // and the plot says so.
+        const bool available = needs.isEmpty() || shown.empty()
+                               || std::any_of(shown.begin(), shown.end(),
+                                              [measure](const SweepResult* result) {
+                                                  return sweepMeasureAvailable(*result, measure);
+                                              });
+        item->setEnabled(available);
+        item->setToolTip(available ? QString()
+                                   : tr("None of the axles shown has %1 in the hardpoint table, "
+                                        "so there is no %2 to plot. The wheel's own kinematics "
+                                        "do not depend on it.")
+                                         .arg(needs, sweepMeasureLabel(measure).toLower()));
+    }
 }
 
 bool AnalysisPanel::canSweep(const QString& token) const
