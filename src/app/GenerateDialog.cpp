@@ -30,7 +30,7 @@ constexpr int kRear = 1;
 
 /// What a number in the axle columns is measured in. Short, because it is
 /// written once per row of the table below.
-enum Unit { Mm, Deg, Ratio };
+enum Unit { Mm, Deg, Pct, Ratio };
 
 AxlePosition positionOf(int column) { return column == kFront ? AxlePosition::Front : AxlePosition::Rear; }
 
@@ -229,6 +229,15 @@ QWidget* GenerateDialog::buildTargets()
         Unit unit;
         const char* tip;
     };
+    const auto suffixOf = [&](Unit unit) {
+        switch (unit) {
+        case Mm: return mm;
+        case Deg: return deg;
+        case Pct: return pct;
+        case Ratio: break;
+        }
+        return QString();
+    };
     const AxleSpec axle[] = {
         { "Wheel", "Track", &AxleDesign::track, 100, 5000, 1, Mm,
           "Between the centres of the two contact patches." },
@@ -249,8 +258,9 @@ QWidget* GenerateDialog::buildTargets()
           Mm, "The roll centre this axle's front-view instant centre is placed to give." },
         { nullptr, "Front-view swing arm", &AxleDesign::frontViewSwingArm, 1, 1e7, 0, Mm,
           "How far inboard of the contact patch the front-view instant centre is." },
-        { nullptr, "Anti-dive / anti-lift", &AxleDesign::antiPercent, -200, 300, 1, Mm,
-          "Under braking: anti-dive on the front axle, anti-lift on the rear." },
+        { nullptr, "Anti-dive / anti-lift", &AxleDesign::antiPercent, -200, 300, 1, Pct,
+          "Percentage of the braking load transfer taken by the suspension geometry instead of "
+          "the springs. Front: anti-dive, rear: anti-lift. 0 % = none, 100 % = full." },
         { nullptr, "Side-view swing arm", &AxleDesign::sideViewSwingArm, 1, 1e7, 0, Mm,
           "How far from the contact patch the side-view instant centre is, toward the other "
           "axle." },
@@ -356,8 +366,7 @@ QWidget* GenerateDialog::buildTargets()
         AxleNumber field{ spec.member, { nullptr, nullptr } };
         for (int column = 0; column < 2; ++column) {
             field.spin[column] = number(spec.minimum, spec.maximum, spec.decimals,
-                                        spec.unit == Deg ? deg : (spec.unit == Mm ? mm : QString()),
-                                        tr(spec.tip));
+                                        suffixOf(spec.unit), tr(spec.tip));
             grid->addWidget(field.spin[column], row, 1 + column);
         }
         auto* label = new QLabel(tr(spec.label), host);
