@@ -60,6 +60,7 @@ MainWindow::MainWindow(Project project, QWidget* parent)
     // Where the native frame is the window manager's -- Windows -- letting go
     // of a floating panel over a dock area has to be what docks it.
     for (QDockWidget* dock : { m_hardpointDock, m_analysisDock }) endNativeDockDragOnRelease(dock);
+    markDirtyWhenDocksMove();
 
     // Closing the window is the usual way out, but not the only one: --screenshot
     // and a session manager both end the run without one. A pending debounced
@@ -498,6 +499,17 @@ void MainWindow::applyViewState()
 // ---------------------------------------------------------------------------
 // Saving the project
 // ---------------------------------------------------------------------------
+
+void MainWindow::markDirtyWhenDocksMove()
+{
+    // The layout is saved whole by collectViewState(); this only says when.
+    // restoreState() floats and docks them too, but under loading(), where
+    // markDirty() does nothing.
+    for (QDockWidget* dock : { m_hardpointDock, m_analysisDock }) {
+        connect(dock, &QDockWidget::topLevelChanged, this, [this] { markDirty(); });
+        connect(dock, &QDockWidget::dockLocationChanged, this, [this] { markDirty(); });
+    }
+}
 
 void MainWindow::collectViewState()
 {
